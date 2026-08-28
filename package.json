@@ -10,15 +10,17 @@
   "scripts": {
     "dev:web": "pnpm --filter @aero/web dev",
     "dev:server": "pnpm --filter @aero/server dev",
-    "build": "pnpm -r build",
-    "typecheck": "pnpm -r typecheck",
+    "build": "pnpm -r --if-present build",
+    "typecheck": "pnpm -r --if-present typecheck",
     "lint": "eslint .",
     "format": "prettier --write .",
-    "test": "pnpm -r test",
+    "test": "pnpm -r --if-present test",
+    "e2e": "playwright test",
     "check:ci": "pnpm lint && pnpm typecheck && pnpm test && pnpm build"
   },
   "devDependencies": {
     "@eslint/js": "^9.22.0",
+    "@playwright/test": "^1.62.1",
     "eslint": "^9.22.0",
     "prettier": "^3.5.3",
     "typescript": "^5.8.2",
