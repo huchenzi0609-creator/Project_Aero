@@ -187,7 +187,10 @@ export interface ServerToClientEvents {
 
 export interface ClientToServerEvents {
   auth: (p: { token?: string; gameId?: string }, ack?: Ack<{ identity?: GuestIdentity }>) => void
-  createRoom: (p: { config: GridConfig }, ack?: Ack<{ roomCode?: string }>) => void
+  createRoom: (
+    p: { config: GridConfig; match?: boolean },
+    ack?: Ack<{ roomCode?: string }>,
+  ) => void
   joinRoom: (p: { code: string }, ack?: Ack<{ room?: RoomSummary }>) => void
   leaveRoom: () => void
   placeFleet: (p: { planes: PlacedPlane[] }, ack?: Ack<{ errors?: string[] }>) => void
