@@ -5,7 +5,18 @@ import { create } from 'zustand'
 import type { GridConfig } from '@aero/shared'
 import { PRESETS } from '@aero/shared'
 
-export type View = 'home' | 'single' | 'custom' | 'settings' | 'rules' | 'online' | 'placement' | 'game'
+export type View =
+  | 'home'
+  | 'single'
+  | 'custom'
+  | 'settings'
+  | 'rules'
+  | 'online'
+  | 'onlineCustom'
+  | 'onlinePlacement'
+  | 'onlineGame'
+  | 'placement'
+  | 'game'
 export type OrientationOverride = 'auto' | 'landscape' | 'portrait'
 
 interface AppState {

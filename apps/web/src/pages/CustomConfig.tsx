@@ -4,6 +4,7 @@ import type { Cell, PlaneShape } from '@aero/shared'
 import { validateShape } from '@aero/game-core'
 import { useAppStore } from '../store/appStore'
 import { useToastStore } from '../store/toastStore'
+import { onlineApi } from '../net/socket'
 import { PaperButton } from '../components/ui/PaperButton'
 import { PaperCard } from '../components/ui/PaperCard'
 import { PaperToggle } from '../components/ui/PaperToggle'
@@ -16,11 +17,14 @@ function cellKey(p: Cell): string {
   return `${p.r},${p.c}`
 }
 
-export function CustomConfig() {
+export function CustomConfig({ mode = 'single' }: { mode?: 'single' | 'online' }) {
   const setView = useAppStore((s) => s.setView)
   const setGridConfig = useAppStore((s) => s.setGridConfig)
   const setPlacementOrigin = useAppStore((s) => s.setPlacementOrigin)
   const toast = useToastStore((s) => s.push)
+
+  const isOnline = mode === 'online'
+  const [busy, setBusy] = useState(false)
 
   const [widthText, setWidthText] = useState('10')
   const [heightText, setHeightText] = useState('10')
@@ -28,7 +32,7 @@ export function CustomConfig() {
   const [useDefault, setUseDefault] = useState(true)
   const [cells, setCells] = useState<Cell[]>([])
   const [head, setHead] = useState<Cell | null>(null)
-  const [mode, setMode] = useState<'paint' | 'erase'>('paint')
+  const [tool, setTool] = useState<'paint' | 'erase'>('paint')
 
   const width = Number(widthText)
   const height = Number(heightText)
@@ -89,7 +93,22 @@ export function CustomConfig() {
   }
 
   function confirm() {
-    setGridConfig({ width, height, planeCount, shape })
+    const config = { width, height, planeCount, shape }
+    if (isOnline) {
+      if (busy) return
+      setBusy(true)
+      void onlineApi.createRoom(config, false).then((res) => {
+        setBusy(false)
+        if (!res.ok) {
+          toast(res.error ?? '创建房间失败', 'error')
+          return
+        }
+        toast(`自定义房间已创建：${res.data}`, 'success')
+        setView('onlinePlacement')
+      })
+      return
+    }
+    setGridConfig(config)
     setPlacementOrigin('custom')
     setView('placement')
   }
@@ -131,13 +150,17 @@ export function CustomConfig() {
 
   return (
     <div className="page custom">
-      <PaperButton size="sm" variant="ghost" className="page__back" onClick={() => setView('single')}>
-        ← 返回单人对局
+      <PaperButton size="sm" variant="ghost" className="page__back" onClick={() => setView(isOnline ? 'online' : 'single')}>
+        ← 返回{isOnline ? '联机菜单' : '单人对局'}
       </PaperButton>
       <header className="page__head">
         <div>
-          <h1 className="page__title">自定义配置</h1>
-          <p className="page__subtitle">自由设定棋盘尺寸与飞机形状，全部校验通过后才能开战。</p>
+          <h1 className="page__title">{isOnline ? '自定义房间' : '自定义配置'}</h1>
+          <p className="page__subtitle">
+            {isOnline
+              ? '房主配置棋盘与飞机形状（双方使用同一形状）；自定义配置不进公网匹配池。'
+              : '自由设定棋盘尺寸与飞机形状，全部校验通过后才能开战。'}
+          </p>
         </div>
       </header>
 
@@ -222,17 +245,17 @@ export function CustomConfig() {
           <div className="editor-tools">
             <PaperButton
               size="sm"
-              variant={mode === 'paint' ? 'primary' : 'ghost'}
-              aria-pressed={mode === 'paint'}
-              onClick={() => setMode('paint')}
+              variant={tool === 'paint' ? 'primary' : 'ghost'}
+              aria-pressed={tool === 'paint'}
+              onClick={() => setTool('paint')}
             >
               绘制
             </PaperButton>
             <PaperButton
               size="sm"
-              variant={mode === 'erase' ? 'primary' : 'ghost'}
-              aria-pressed={mode === 'erase'}
-              onClick={() => setMode('erase')}
+              variant={tool === 'erase' ? 'primary' : 'ghost'}
+              aria-pressed={tool === 'erase'}
+              onClick={() => setTool('erase')}
             >
               橡皮擦
             </PaperButton>
@@ -259,7 +282,7 @@ export function CustomConfig() {
                         .join(' ')}
                       aria-label={`第${r + 1}行第${c + 1}列：${isHead ? '机头' : filled ? '机身' : '空白'}`}
                       aria-pressed={filled}
-                      onClick={() => (mode === 'paint' ? paintAt({ r, c }) : eraseAt({ r, c }))}
+                      onClick={() => (tool === 'paint' ? paintAt({ r, c }) : eraseAt({ r, c }))}
                     />
                   )
                 }),
@@ -314,11 +337,11 @@ export function CustomConfig() {
           </div>
 
           <div className="custom__actions">
-            <PaperButton variant="ghost" onClick={() => setView('single')}>
+            <PaperButton variant="ghost" onClick={() => setView(isOnline ? 'online' : 'single')}>
               取消
             </PaperButton>
-            <PaperButton variant="primary" disabled={!canConfirm} onClick={confirm}>
-              确认 · 进入摆阵
+            <PaperButton variant="primary" disabled={!canConfirm || busy} onClick={confirm}>
+              {isOnline ? '确认 · 创建房间' : '确认 · 进入摆阵'}
             </PaperButton>
           </div>
         </PaperCard>

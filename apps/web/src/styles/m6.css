@@ -1,0 +1,132 @@
+/* ============================================================
+   M6 联机前端：房码 / 双方状态条 / 断线与接管横幅 / 回合计时
+   ============================================================ */
+
+/* ---------- 房码展示（摆阵页头部） ---------- */
+
+.online__roommeta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.online__roomcode {
+  font-family: var(--font-mono);
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: 0.22em;
+  color: var(--ink);
+  background: var(--paper-sheet);
+  border: 1.5px dashed rgba(96, 78, 50, 0.55);
+  border-radius: var(--radius-sm);
+  padding: 5px 14px 5px 16px;
+  box-shadow: inset 0 1px 3px rgba(84, 66, 38, 0.12);
+}
+.online__roomsize {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--ink-faint);
+}
+
+/* ---------- 摆阵页双方状态条 ---------- */
+
+.online__statusrow {
+  display: flex;
+  gap: 18px;
+  flex-wrap: wrap;
+  align-items: center;
+  padding: 4px 2px;
+}
+.online__statusitem {
+  font-size: 14px;
+  color: var(--ink-soft);
+}
+.online__statusitem--me {
+  color: var(--ink);
+  font-weight: 600;
+}
+.online__statusitem--warn {
+  color: var(--danger);
+}
+
+/* ---------- 横幅（断线 / 机器接管） ---------- */
+
+.online__banner {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  top: 10px;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 20px;
+  background: var(--paper-sheet);
+  border: 1.5px solid rgba(96, 78, 50, 0.5);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+  font-size: 14.5px;
+  color: var(--ink);
+  white-space: nowrap;
+  animation: fadeIn 200ms ease-out;
+  max-width: 92vw;
+}
+.online__banner--danger {
+  border-color: var(--danger);
+  color: var(--danger);
+  background: #f8ece6;
+}
+.online__banner--warn {
+  border-color: var(--kill-red);
+  color: var(--kill-red);
+  background: #f9efe8;
+}
+.online__banner--info {
+  border-color: var(--hit-green);
+  color: var(--hit-green);
+  background: #eef3ea;
+}
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -6px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+/* ---------- 回合计时条（联机对局） ---------- */
+
+.game__timerbar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 2px 0 4px;
+}
+.game__timer {
+  font-family: var(--font-mono);
+  font-size: 17px;
+  color: var(--ink);
+  font-weight: 600;
+}
+.game__chances {
+  font-size: 13px;
+  color: var(--ink-soft);
+}
+.game__timerbar--urgent .game__timer {
+  color: var(--danger);
+  animation: pulse 0.9s ease-in-out infinite;
+}
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
