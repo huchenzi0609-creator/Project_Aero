@@ -1,13 +1,14 @@
 import { useMemo, useState } from 'react'
 import { DEFAULT_PLANE_SHAPE, GRID_MAX, GRID_MIN, SHAPE_MAX_CELLS } from '@aero/shared'
 import type { Cell, PlaneShape } from '@aero/shared'
+import { validateShape } from '@aero/game-core'
 import { useAppStore } from '../store/appStore'
 import { useToastStore } from '../store/toastStore'
 import { PaperButton } from '../components/ui/PaperButton'
 import { PaperCard } from '../components/ui/PaperCard'
 import { PaperToggle } from '../components/ui/PaperToggle'
 import { PlaneGlyph } from '../components/grid/PlaneGlyph'
-import { checkShape, normalizeShape, shapeBBox, shapeIsValid } from '../lib/shape'
+import { anchorShape, cellsBBox } from '../lib/shape'
 
 const EDITOR_SIZE = 5
 
@@ -18,6 +19,7 @@ function cellKey(p: Cell): string {
 export function CustomConfig() {
   const setView = useAppStore((s) => s.setView)
   const setGridConfig = useAppStore((s) => s.setGridConfig)
+  const setPlacementOrigin = useAppStore((s) => s.setPlacementOrigin)
   const toast = useToastStore((s) => s.push)
 
   const [widthText, setWidthText] = useState('10')
@@ -37,17 +39,23 @@ export function CustomConfig() {
   const nOk = Number.isInteger(planeCount) && planeCount >= 1 && planeCount <= maxN
 
   const drawnShape: PlaneShape | null =
-    head && cells.length > 0 ? normalizeShape({ cells, head }) : null
+    head && cells.length > 0 ? anchorShape({ cells, head }) : null
   const shape: PlaneShape = useDefault ? DEFAULT_PLANE_SHAPE : (drawnShape ?? { cells: [], head: { r: 0, c: 0 } })
 
+  /** 校验清单数据（改用 game-core validateShape，契约见 docs/game-core-api.md） */
   const checks = useMemo(() => {
-    if (useDefault) return { connected: true, cellCount: DEFAULT_PLANE_SHAPE.cells.length, headCount: 1 }
-    if (!drawnShape) return { connected: false, cellCount: 0, headCount: 0 }
-    return checkShape(drawnShape)
+    if (useDefault) return { ok: true as const, errors: [] as string[] }
+    if (!drawnShape) return { ok: false as const, errors: [] as string[] }
+    const v = validateShape(drawnShape)
+    return { ok: v.ok as boolean, errors: v.ok ? [] : v.errors }
   }, [useDefault, drawnShape])
 
-  const shapeValid = useDefault || (drawnShape !== null && shapeIsValid(checks))
+  const shapeValid = useDefault || (drawnShape !== null && checks.ok)
   const canConfirm = widthOk && heightOk && nOk && shapeValid
+
+  const errs = checks.errors
+  const hasErr = (kws: string[]) => errs.some((e) => kws.some((k) => e.includes(k)))
+  const firstErr = (kws: string[]) => errs.find((e) => kws.some((k) => e.includes(k))) ?? ''
 
   function paintAt(cell: Cell) {
     const key = cellKey(cell)
@@ -82,32 +90,42 @@ export function CustomConfig() {
 
   function confirm() {
     setGridConfig({ width, height, planeCount, shape })
-    setView('game')
+    setPlacementOrigin('custom')
+    setView('placement')
   }
 
   const previewShape = useDefault ? DEFAULT_PLANE_SHAPE : drawnShape
-  const previewB = previewShape ? shapeBBox(previewShape.cells) : null
+  const previewB = previewShape ? cellsBBox(previewShape.cells) : null
   const pCell = 30
 
   const checkItems = [
     {
       key: 'connected',
       label: '四邻连通',
-      pass: checks.connected && checks.cellCount > 0,
-      detail:
-        checks.cellCount === 0 ? '尚未绘制任何格子' : checks.connected ? '所有已填格连成一块' : '存在断开的格子',
+      pass: useDefault || !hasErr(['孤立']),
+      detail: useDefault
+        ? '默认形状已内置'
+        : firstErr(['孤立']) || '所有已填格连成一块',
     },
     {
       key: 'count',
       label: `格数 2 ~ ${SHAPE_MAX_CELLS}`,
-      pass: checks.cellCount >= 2 && checks.cellCount <= SHAPE_MAX_CELLS,
-      detail: `当前 ${checks.cellCount} 格`,
+      pass: useDefault || !hasErr(['方格数']),
+      detail: useDefault
+        ? `${DEFAULT_PLANE_SHAPE.cells.length} 格`
+        : firstErr(['方格数']) || `当前 ${drawnShape ? drawnShape.cells.length : 0} 格`,
     },
     {
       key: 'head',
       label: '机头恰 1 个',
-      pass: checks.headCount === 1,
-      detail: `当前 ${checks.headCount} 个`,
+      pass: useDefault || !hasErr(['机头']),
+      detail: useDefault ? '恰好 1 个' : firstErr(['机头']) || '恰好 1 个',
+    },
+    {
+      key: 'bounds',
+      label: '5×5 内且无重复',
+      pass: useDefault || !hasErr(['超出', '重复']),
+      detail: useDefault ? '全部合法' : firstErr(['超出', '重复']) || '全部合法',
     },
   ]
 
@@ -261,7 +279,7 @@ export function CustomConfig() {
             </span>
           </div>
 
-          {useDefault ? <p className="custom__hint">已锁定默认飞机形状（M4 起可自由绘制）。</p> : null}
+          {useDefault ? <p className="custom__hint">已锁定默认飞机形状，取消勾选后可自由绘制。</p> : null}
 
           {/* 常驻校验清单 */}
           <ul className="checklist" style={{ listStyle: 'none', paddingLeft: 0 }}>
@@ -300,7 +318,7 @@ export function CustomConfig() {
               取消
             </PaperButton>
             <PaperButton variant="primary" disabled={!canConfirm} onClick={confirm}>
-              确认 · 进入对局
+              确认 · 进入摆阵
             </PaperButton>
           </div>
         </PaperCard>

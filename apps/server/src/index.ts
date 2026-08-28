@@ -188,7 +188,8 @@ function wireSocketEvents(io: ServerIO, roomManager: RoomManager, identityServic
 export async function startServer(options: StartOptions = {}): Promise<ServerHandle> {
   const port = options.port ?? Number(process.env.PORT ?? 3001)
   const dataDir = options.dataDir ?? process.env.DATA_DIR ?? './data'
-  const store = options.store ?? new Store(join(dataDir, 'aero.db'))
+  // ':memory:' 作为特殊值直接交给 Store（否则 join 会把它当目录，生成共享文件库）
+  const store = options.store ?? new Store(dataDir === ':memory:' ? ':memory:' : join(dataDir, 'aero.db'))
   const identityService = options.identityService ?? new IdentityService(store)
 
   const app = buildApp(store, identityService)
@@ -197,7 +198,8 @@ export async function startServer(options: StartOptions = {}): Promise<ServerHan
     cors: { origin: true },
     serveClient: false,
   })
-  const roomManager = new RoomManager(io, options.roomManagerOptions ?? {})
+  // 注入 store：RoomManager 落盘/战绩依赖它（调用方也可显式传 store 覆盖）
+  const roomManager = new RoomManager(io, { ...(options.roomManagerOptions ?? {}), store })
   wireSocketEvents(io, roomManager, identityService)
 
   await new Promise<void>((resolve, reject) => {

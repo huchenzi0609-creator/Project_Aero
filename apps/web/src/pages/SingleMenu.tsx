@@ -53,6 +53,18 @@ const PRESET_CARDS = [
 export function SingleMenu() {
   const setView = useAppStore((s) => s.setView)
   const setGridConfig = useAppStore((s) => s.setGridConfig)
+  const setPlacementOrigin = useAppStore((s) => s.setPlacementOrigin)
+
+  const goPreset = (key: 'small' | 'medium' | 'large') => {
+    setGridConfig(PRESETS[key])
+    setPlacementOrigin('single')
+    setView('placement')
+  }
+
+  const goCustom = () => {
+    setPlacementOrigin('custom')
+    setView('custom')
+  }
 
   return (
     <div className="page">
@@ -62,7 +74,7 @@ export function SingleMenu() {
       <header className="page__head">
         <div>
           <h1 className="page__title">单人对局</h1>
-          <p className="page__subtitle">选择棋盘大小，与电脑 AI 开战（对局由 M4 实现）。</p>
+          <p className="page__subtitle">选择棋盘大小，与电脑 AI 开战：先摆阵，再随机先后手。</p>
         </div>
       </header>
       <div className="page__body single__cards">
@@ -71,10 +83,7 @@ export function SingleMenu() {
             key={p.key}
             variant="default"
             className="single__card"
-            onClick={() => {
-              setGridConfig(PRESETS[p.key])
-              setView('game')
-            }}
+            onClick={() => goPreset(p.key)}
           >
             <MiniGridIcon cols={p.cols} rows={p.rows} />
             <span>
@@ -83,7 +92,7 @@ export function SingleMenu() {
             </span>
           </PaperButton>
         ))}
-        <PaperButton variant="primary" className="single__card" onClick={() => setView('custom')}>
+        <PaperButton variant="primary" className="single__card" onClick={goCustom}>
           <svg width="52" height="52" viewBox="0 0 52 52" aria-hidden="true">
             <rect x="1.5" y="1.5" width="49" height="49" rx="3" fill="none" stroke="var(--pencil)" strokeWidth="1.3" />
             <path d="M26 12 V 40 M12 26 H 40" stroke="var(--kill-red)" strokeWidth="2.2" strokeLinecap="round" />

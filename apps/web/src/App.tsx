@@ -7,7 +7,8 @@ import { CustomConfig } from './pages/CustomConfig'
 import { Settings } from './pages/Settings'
 import { Rules } from './pages/Rules'
 import { OnlineMenu } from './pages/OnlineMenu'
-import { GameScreenPlaceholder } from './pages/GameScreenPlaceholder'
+import { Placement } from './pages/Placement'
+import { GameScreen } from './pages/GameScreen'
 
 export default function App() {
   const view = useAppStore((s) => s.view)
@@ -22,7 +23,8 @@ export default function App() {
         {view === 'settings' ? <Settings /> : null}
         {view === 'rules' ? <Rules /> : null}
         {view === 'online' ? <OnlineMenu /> : null}
-        {view === 'game' ? <GameScreenPlaceholder mode="single" /> : null}
+        {view === 'placement' ? <Placement /> : null}
+        {view === 'game' ? <GameScreen mode="single" /> : null}
       </div>
       <ToastRegion />
     </div>

@@ -85,21 +85,48 @@ function huntCandidates(knowledge: ShotKnowledge): Cell[] {
   const out: Cell[] = []
   for (const s of knowledge.shots) {
     if (s.outcome !== 'hit') continue
-    const neighbors = [
-      { r: s.coord.r - 1, c: s.coord.c },
-      { r: s.coord.r + 1, c: s.coord.c },
-      { r: s.coord.r, c: s.coord.c - 1 },
-      { r: s.coord.r, c: s.coord.c + 1 },
-    ]
-    for (const n of neighbors) {
-      const key = cellKey(n.r, n.c)
-      if (n.r >= 0 && n.r < knowledge.height && n.c >= 0 && n.c < knowledge.width && !shot.has(key) && !seen.has(key)) {
-        seen.add(key)
-        out.push(n)
-      }
-    }
+    pushHuntNeighbors(knowledge, s.coord, shot, seen, out)
   }
   return out
+}
+
+/**
+ * hard/hell：未处理 hit 的 4 邻格候选，但排除"残骸多解"中已确认属于已毁飞机的 hit
+ * （避免像 normal 一样在击毁后继续围杀残骸邻域浪费时间）。
+ */
+function huntCandidatesPruned(knowledge: ShotKnowledge, wreckage: Set<string>): Cell[] {
+  const shot = new Set<string>()
+  for (const s of knowledge.shots) shot.add(cellKey(s.coord.r, s.coord.c))
+  const seen = new Set<string>()
+  const out: Cell[] = []
+  for (const s of knowledge.shots) {
+    if (s.outcome !== 'hit') continue
+    if (wreckage.has(cellKey(s.coord.r, s.coord.c))) continue // 该 hit 可能属于已毁飞机
+    pushHuntNeighbors(knowledge, s.coord, shot, seen, out)
+  }
+  return out
+}
+
+function pushHuntNeighbors(
+  knowledge: ShotKnowledge,
+  coord: Cell,
+  shot: Set<string>,
+  seen: Set<string>,
+  out: Cell[],
+): void {
+  const neighbors = [
+    { r: coord.r - 1, c: coord.c },
+    { r: coord.r + 1, c: coord.c },
+    { r: coord.r, c: coord.c - 1 },
+    { r: coord.r, c: coord.c + 1 },
+  ]
+  for (const n of neighbors) {
+    const key = cellKey(n.r, n.c)
+    if (n.r >= 0 && n.r < knowledge.height && n.c >= 0 && n.c < knowledge.width && !shot.has(key) && !seen.has(key)) {
+      seen.add(key)
+      out.push(n)
+    }
+  }
 }
 
 /* ---------------- 热图 ---------------- */
@@ -113,15 +140,26 @@ const PERTURB_PROB = 0.05
 /** 残骸多解格的降权系数 */
 const WRECKAGE_FACTOR = 0.5
 
+interface HeatResult {
+  scores: Map<string, number>
+  /** 残骸多解集合：各 kill 机头在各旋转下可能的残骸格（含已报格），用于围杀剪枝与降权 */
+  wreckage: Set<string>
+}
+
 /**
  * 热图：枚举形状 4 旋转的全部合法摆放位，按历史反馈加权——
  * hit 格应被覆盖（加分）、kill 机头格被覆盖则直接排除、miss 格被覆盖降权（不排除）。
- * hell 额外叠加：残骸多解建模 + 边缘/角落布阵习惯先验。
+ * 残骸多解建模（hard/hell 均启用，见 design.md §7 困难级）：由 kill 机头推断可能的残骸格，
+ * 降低其射击价值，并剪掉属于已毁飞机的 hit 的围杀候选。
+ * hell 额外叠加边缘/角落布阵习惯先验。
  */
-function buildHeatmap(knowledge: ShotKnowledge, hell: boolean): Map<string, number> {
+function buildHeatmap(knowledge: ShotKnowledge, hell: boolean): HeatResult {
   const variants = makeVariants(knowledge.planeShape)
   const shotMap = new Map<string, Shot>()
   for (const s of knowledge.shots) shotMap.set(cellKey(s.coord.r, s.coord.c), s)
+
+  // 残骸多解集合（不依赖热图，先算）：用于 ①死 hit 的围杀剪枝 ②热图加权忽略 ③残骸格降权
+  const wreckage = computeWreckageCells(knowledge, variants)
 
   const scores = new Map<string, number>()
   for (const v of variants) {
@@ -156,23 +194,21 @@ function buildHeatmap(knowledge: ShotKnowledge, hell: boolean): Map<string, numb
     }
   }
 
-  if (hell) {
-    applyWreckageModel(knowledge, variants, shotMap, scores)
-    applyHabitPrior(knowledge, scores)
+  // 残骸多解建模（hard 与 hell 共用）：降低可能残骸格的射击价值
+  for (const key of wreckage) {
+    const cur = scores.get(key)
+    if (cur !== undefined && cur > 0) scores.set(key, cur * WRECKAGE_FACTOR)
   }
-  return scores
+
+  if (hell) applyHabitPrior(knowledge, scores)
+  return { scores, wreckage }
 }
 
 /**
- * 残骸多解建模：由 kill 机头位置 + 各旋转推断该机可能的全部残骸格，
- * 降低这些格的射击价值（避免在已毁飞机上浪费报点）。hit/kill 格已确认不属于该机残骸，跳过。
+ * 残骸多解集合：对每个 kill 机头，取各旋转下"机头落点 == kill 格"时的全部飞机格（界内）。
+ * 这些格可能是已毁飞机的残骸，也可能是其它飞机的格——多解本身不确定，故仅降权而非排除。
  */
-function applyWreckageModel(
-  knowledge: ShotKnowledge,
-  variants: Variant[],
-  shotMap: Map<string, Shot>,
-  scores: Map<string, number>,
-): void {
+function computeWreckageCells(knowledge: ShotKnowledge, variants: Variant[]): Set<string> {
   const wreckage = new Set<string>()
   for (const s of knowledge.shots) {
     if (s.outcome !== 'kill') continue
@@ -183,18 +219,11 @@ function applyWreckageModel(
         const ar = cell.r + dr
         const ac = cell.c + dc
         if (ar < 0 || ar >= knowledge.height || ac < 0 || ac >= knowledge.width) continue
-        const key = cellKey(ar, ac)
-        const st = shotMap.get(key)
-        // hit/kill 格已确认不属于该机残骸（属于存活飞机或另一机头）
-        if (st !== undefined && st.outcome !== 'miss') continue
-        wreckage.add(key)
+        wreckage.add(cellKey(ar, ac))
       }
     }
   }
-  for (const key of wreckage) {
-    const cur = scores.get(key)
-    if (cur !== undefined && cur > 0) scores.set(key, cur * WRECKAGE_FACTOR)
-  }
+  return wreckage
 }
 
 /** 对手布阵习惯先验：边缘/角落小幅加权（只在热图得分相近时起作用） */
@@ -208,6 +237,22 @@ function applyHabitPrior(knowledge: ShotKnowledge, scores: Map<string, number>):
     const bonus = (onEdge ? 0.5 : 0) + (inCorner ? 0.5 : 0)
     if (bonus > 0) scores.set(key, val + bonus)
   }
+}
+
+/** 在候选池中按热图得分取最高分格，同分随机破平 */
+function pickBestByScore(candidates: Cell[], scores: Map<string, number>, rng: Rng): Cell {
+  let bestCells: Cell[] = []
+  let bestScore = -Infinity
+  for (const cell of candidates) {
+    const score = scores.get(cellKey(cell.r, cell.c)) ?? 0
+    if (score > bestScore) {
+      bestScore = score
+      bestCells = [cell]
+    } else if (score === bestScore) {
+      bestCells.push(cell)
+    }
+  }
+  return pickRandom(bestCells, rng)
 }
 
 /* ---------------- chooseShot ---------------- */
@@ -234,22 +279,13 @@ export function chooseShot(knowledge: ShotKnowledge, difficulty: Difficulty, rng
   // 地狱：≤5% 随机扰动（拟人化）
   if (hell && rng() < PERTURB_PROB) return pickRandom(unshot, rng)
 
-  const scores = buildHeatmap(knowledge, hell)
-  let bestCells: Cell[] = []
-  let bestScore = -Infinity
-  for (const cell of unshot) {
-    const score = scores.get(cellKey(cell.r, cell.c)) ?? 0
-    if (score > bestScore) {
-      bestScore = score
-      bestCells = [cell]
-    } else if (score === bestScore) {
-      bestCells.push(cell)
-    }
-  }
-  // 无任何合法摆放（形状异常等）：退回均匀随机
-  if (bestCells.length === 0) return pickRandom(unshot, rng)
-  // 取最高分，同分随机破平
-  return pickRandom(bestCells, rng)
+  const { scores, wreckage } = buildHeatmap(knowledge, hell)
+  // 围杀优先：存在未处理 hit 时，在其 4 邻格（已排除残骸多解）中随机取一
+  // （深度围杀优于热图对邻格的广度打分——热图会在多个 hit 邻域间散射）；
+  // 无 hit 或全部已处理时，在全部未报格中取热图最高分（密度搜索）。
+  const hunt = huntCandidatesPruned(knowledge, wreckage)
+  if (hunt.length > 0) return pickRandom(hunt, rng)
+  return pickBestByScore(unshot, scores, rng)
 }
 
 /* ---------------- generateFleet ---------------- */

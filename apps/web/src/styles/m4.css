@@ -1,0 +1,377 @@
+/* ============================================================
+   M4 单机流程：摆阵页 / 先后手横幅 / 对战增强 / 结算界面
+   ============================================================ */
+
+/* ---------- 摆阵页 Placement ---------- */
+
+.placement {
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px clamp(10px, 2.5vw, 26px) 12px;
+  overflow: hidden;
+  user-select: none;
+}
+.placement__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.placement__hint {
+  color: var(--ink-faint);
+  font-size: 12px;
+}
+.placement__controls {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.placement__confirm--pending {
+  opacity: 0.55;
+}
+.placement__body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  gap: 14px;
+  align-items: stretch;
+}
+/* 横版：托盘在左、棋盘在右 */
+.placement--landscape .placement__body {
+  flex-direction: row;
+}
+/* 竖版：托盘在上、棋盘在下 */
+.placement--portrait .placement__body {
+  flex-direction: column;
+}
+
+.placement__tray {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  padding: 12px;
+  background: var(--paper-deep);
+  border: 1px dashed rgba(96, 78, 50, 0.45);
+  border-radius: var(--radius-card);
+  box-shadow: inset 0 2px 5px rgba(84, 66, 38, 0.14);
+}
+.placement--landscape .placement__tray {
+  flex-direction: column;
+  align-self: center;
+  max-height: 100%;
+  overflow-y: auto;
+}
+.placement--portrait .placement__tray {
+  justify-content: center;
+}
+.placement__slot {
+  position: relative;
+  flex: none;
+  border: 1.5px dashed rgba(96, 78, 50, 0.5);
+  border-radius: 3px;
+  background: rgba(251, 247, 234, 0.75);
+  cursor: grab;
+  touch-action: none;
+  transition: transform 110ms var(--ease-paper), box-shadow 110ms var(--ease-paper);
+}
+.placement__slot:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 3px 6px -2px rgba(84, 66, 38, 0.35);
+}
+.placement__slot--dim {
+  opacity: 0.35;
+}
+.placement__tray-empty {
+  color: var(--ink-faint);
+  font-size: 13px;
+  padding: 4px;
+}
+
+.placement__board-wrap {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: auto;
+  padding: 4px;
+}
+.placement__board {
+  background: rgba(251, 247, 234, 0.6);
+}
+
+.placement__plane {
+  position: absolute;
+  pointer-events: auto;
+  cursor: grab;
+  touch-action: none;
+  z-index: 2;
+  transition: left 90ms linear, top 90ms linear, transform 90ms var(--ease-paper);
+}
+.placement__plane:hover {
+  z-index: 4;
+}
+.placement__plane--dragging {
+  z-index: 6;
+  filter: drop-shadow(0 4px 6px rgba(60, 40, 10, 0.35));
+}
+.placement__plane--hidden {
+  display: none;
+}
+/* 落点预览（托盘来源拖拽） */
+.placement__plane--preview {
+  z-index: 3;
+  opacity: 0.55;
+  outline: 1.5px dashed rgba(96, 78, 50, 0.6);
+  outline-offset: -1px;
+}
+/* 重叠 / 越界红色遮罩 */
+.placement__plane-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(168, 54, 47, 0.3);
+  outline: 1.5px dashed var(--danger);
+  outline-offset: -1px;
+  border-radius: 2px;
+}
+/* 浮游幽灵 */
+.placement__ghost {
+  position: fixed;
+  z-index: 50;
+  pointer-events: none;
+  opacity: 0.75;
+  filter: drop-shadow(0 6px 8px rgba(60, 40, 10, 0.4));
+}
+
+.placement__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding-top: 2px;
+}
+.placement__checklist {
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 18px;
+  margin: 0;
+}
+.placement__status {
+  font-size: 14px;
+  color: var(--ink-soft);
+}
+
+/* ---------- 先后手横幅 ---------- */
+
+.game-banner {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(58, 46, 28, 0.5);
+  animation: fadeIn 220ms ease-out;
+}
+.game-banner__card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 30px 54px;
+  background: var(--paper-sheet);
+  border: 1px solid rgba(96, 78, 50, 0.45);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card-hover);
+  animation: modalIn 200ms var(--ease-paper);
+}
+.game-banner__label {
+  font-size: 13px;
+  letter-spacing: 0.22em;
+  color: var(--ink-faint);
+}
+.game-banner__text {
+  font-size: clamp(30px, 6vw, 46px);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+}
+.game-banner__sub {
+  font-size: 14px;
+  color: var(--ink-soft);
+}
+
+/* ---------- 对战增强 ---------- */
+
+.game__card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.game__names {
+  font-size: 13px;
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+.game__vs {
+  color: var(--ink-faint);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+}
+/* 对方报点 0.8s 高亮动画（我方网格） */
+.paper-grid__aiflash {
+  position: absolute;
+  pointer-events: none;
+  z-index: 4;
+  background: rgba(224, 132, 80, 0.45);
+  outline: 2px solid rgba(168, 54, 47, 0.8);
+  animation: aiFlash 0.8s ease-out both;
+}
+@keyframes aiFlash {
+  0% {
+    opacity: 0;
+    transform: scale(0.35);
+  }
+  30% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0.55;
+    transform: scale(1);
+  }
+}
+/* 被击毁己方飞机：机头 ★ */
+.paper-grid__wreckstar {
+  position: absolute;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 3;
+}
+/* 非法输入抖动 */
+.shake {
+  animation: shakeX 320ms var(--ease-paper);
+}
+@keyframes shakeX {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  20% {
+    transform: translateX(-5px);
+  }
+  40% {
+    transform: translateX(5px);
+  }
+  60% {
+    transform: translateX(-4px);
+  }
+  80% {
+    transform: translateX(4px);
+  }
+}
+
+/* ---------- 结算界面 ---------- */
+
+.result {
+  position: fixed;
+  inset: 0;
+  z-index: 65;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(245, 239, 224, 0.94);
+  overflow: auto;
+  animation: fadeIn 260ms ease-out;
+}
+.result__card {
+  width: min(780px, 100%);
+  padding: 26px 28px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+.result__title {
+  font-size: clamp(26px, 4.6vw, 40px);
+  margin: 0;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+.result__title--win {
+  color: var(--hit-green);
+}
+.result__title--lose {
+  color: var(--ink-soft);
+}
+.result__sub {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 14.5px;
+}
+.result__boards {
+  display: flex;
+  gap: 20px;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: flex-start;
+  margin-top: 10px;
+}
+.result__board {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: center;
+}
+.result__stats {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  justify-content: center;
+  margin: 8px 0 4px;
+}
+.result__stat {
+  min-width: 130px;
+  text-align: center;
+  padding: 10px 16px;
+  background: var(--paper-sheet-2);
+  border: 1px solid rgba(96, 78, 50, 0.3);
+  border-radius: var(--radius-sm);
+}
+.result__stat dt {
+  font-size: 12px;
+  letter-spacing: 0.14em;
+  color: var(--ink-faint);
+  margin-bottom: 4px;
+}
+.result__stat dd {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 600;
+  font-family: var(--font-mono);
+}
+.result__stat-note {
+  font-size: 12px !important;
+  font-weight: 400 !important;
+  color: var(--ink-soft);
+  margin-top: 2px !important;
+}
+.result__actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+  justify-content: center;
+}

@@ -6,7 +6,8 @@
  */
 import { useId } from 'react'
 import type { PlaneShape, Rotation } from '@aero/shared'
-import { rotateShape, shapeBBox } from '../../lib/shape'
+import { rotateShape } from '@aero/game-core'
+import { cellsBBox } from '../../lib/shape'
 
 export interface PlaneGlyphProps {
   shape: PlaneShape
@@ -91,7 +92,7 @@ export function PlaneGlyph({ shape, rotation = 0, wrecked = false, className }: 
   const uid = useId().replace(/[^a-zA-Z0-9]/g, '')
   const fillId = `plane-fill-${uid}`
   const rotated = rotateShape(shape, rotation)
-  const b = shapeBBox(rotated.cells)
+  const b = cellsBBox(rotated.cells)
   if (!b) return null
   const w = b.c1 - b.c0 + 1
   const h = b.r1 - b.r0 + 1
@@ -122,7 +123,7 @@ export function PlaneGlyph({ shape, rotation = 0, wrecked = false, className }: 
   return (
     <svg
       className={className}
-      viewBox={`${-pad} ${-pad} ${w + pad * 2} ${h + pad * 2}`}
+      viewBox={`${b.c0 - pad} ${b.r0 - pad} ${w + pad * 2} ${h + pad * 2}`}
       preserveAspectRatio="none"
       aria-hidden="true"
       style={{ display: 'block', width: '100%', height: '100%' }}

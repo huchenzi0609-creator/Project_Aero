@@ -620,10 +620,10 @@ export class RoomManager {
     }, this.reconnectGraceMs)
   }
 
-  /** 终局统计：回合数/总报点数/命中数（含击毁）/击毁架数 */
+  /** 终局统计：回合数/总报点数/命中数（非 miss 即 hit 或 kill）/击毁架数 */
   private computeStats(room: Room): GameEndPayload['stats'] {
     const shotsFired = room.shotLog.length
-    const hitCount = room.shotLog.filter((e) => e.outcome === 'hit' || e.outcome === 'kill').length
+    const hitCount = room.shotLog.filter((e) => e.outcome !== 'miss').length
     const killCount = room.shotLog.filter((e) => e.outcome === 'kill').length
     return { turnCount: shotsFired, shotsFired, hitCount, killCount }
   }
@@ -776,8 +776,9 @@ export class RoomManager {
   }
 
   /**
-   * 进入公网匹配（约定：客户端对 createRoom 的 payload 附加 match: true 表示匹配意图；
-   * 协议未提供独立 matchmake 事件，此为与 M6 约定的运行时约定，见报告）。
+   * 进入公网匹配（协议事件 createRoom 的 payload.match === true 即表示匹配意图，
+   * 见 shared 的 ClientToServerEvents.createRoom）。
+   * 仅与三档标准配置（PRESETS）完全一致才进匹配池；自定义配置不进池。
    * 配对成功直接建房；30s 未配对广播 matchmakingStatus 'timeout'。
    */
   matchmake(

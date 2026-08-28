@@ -6,7 +6,8 @@
  * - 随机 token（crypto.randomBytes(32).hex），服务端只存 token 的 sha256；
  * - POST /api/auth {token?} → {identity}：旧 token 命中则复用，否则新建。
  *
- * 明示边界：客户端 token 存 localStorage；换浏览器/清缓存即新账号（预期行为）。
+ * 明示边界：客户端 token 存 localStorage（键名契约：shared 导出的 GUEST_TOKEN_KEY，
+ * 即 'aero:guest:token'）；换浏览器/清缓存即新账号（预期行为）。
  */
 import { createHash, randomBytes, randomInt } from 'node:crypto'
 import type { GuestIdentity } from '@aero/shared'
