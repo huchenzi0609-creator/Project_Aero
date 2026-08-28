@@ -129,7 +129,6 @@ export function GameScreen({ mode = 'single' }: { mode?: 'single' | 'online' }) 
       300 + Math.random() * 600,
     )
     return () => window.clearTimeout(t)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state, screen, session?.nonce])
 
   /* ---------- 尺寸 ---------- */
@@ -251,11 +250,11 @@ export function GameScreen({ mode = 'single' }: { mode?: 'single' | 'online' }) 
   let statusText = ''
   let statusThem = false
   if (screen === 'battle') {
-    if (aiMsg) {
+    if (isCounterattackMine) {
+      statusText = '绝地反击！您获得一次额外报点机会'
+    } else if (aiMsg) {
       statusText = aiMsg
       statusThem = true
-    } else if (isCounterattackMine) {
-      statusText = '绝地反击！您获得一次额外报点机会'
     } else if (state.turn === me) {
       statusText = '轮到我方报点'
     } else {
@@ -295,7 +294,7 @@ export function GameScreen({ mode = 'single' }: { mode?: 'single' | 'online' }) 
           <span className="game__status-text">{statusText}</span>
         </div>
         <span className="game__names">
-          您 · {guestName}　<span className="game__vs">VS</span>　电脑
+          您 · {guestName} <span className="game__vs">VS</span> 电脑
         </span>
       </header>
 
@@ -451,7 +450,13 @@ export function GameScreen({ mode = 'single' }: { mode?: 'single' | 'online' }) 
             </dl>
 
             <div className="result__actions">
-              <PaperButton variant="ghost" onClick={() => setView('home')}>
+              <PaperButton
+                variant="ghost"
+                onClick={() => {
+                  resetGame()
+                  setView('home')
+                }}
+              >
                 返回主页
               </PaperButton>
               <PaperButton

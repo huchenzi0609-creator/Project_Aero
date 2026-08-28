@@ -82,7 +82,6 @@ export function Placement() {
   const [grid, setGrid] = useState<PlacedPlane[]>([])
   const [drag, setDrag] = useState<DragState | null>(null)
   const dragRef = useRef<DragState | null>(null)
-  const nextIdRef = useRef(planeCount)
   const boardRef = useRef<HTMLDivElement>(null)
   const trayRef = useRef<HTMLDivElement>(null)
   const [exitOpen, setExitOpen] = useState(false)
@@ -378,7 +377,7 @@ export function Placement() {
           </h1>
           <p className="page__subtitle" style={{ fontSize: 13 }}>
             {width}×{height} · {planeCount} 架飞机 · 难度：{DIFFICULTY_LABEL[difficulty] ?? '正常'}
-            <span className="placement__hint">　点击飞机旋转 · 拖拽摆放 · 拖回托盘回收</span>
+            <span className="placement__hint"> 点击飞机旋转 · 拖拽摆放 · 拖回托盘回收</span>
           </p>
         </div>
         <div className="placement__controls">
@@ -519,8 +518,8 @@ export function Placement() {
         </span>
       </footer>
 
-      {/* 浮游幽灵（指针跟随） */}
-      {drag && dragBox && dragMin ? (
+      {/* 浮游幽灵（指针跟随；网格内拖拽时飞机本体已实时吸附，不重复渲染） */}
+      {drag && dragBox && dragMin && (drag.source === 'tray' || drag.origin === null) ? (
         <div
           className="placement__ghost"
           style={{
