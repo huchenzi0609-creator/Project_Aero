@@ -77,12 +77,19 @@ export function OnlineGame() {
   const [input, setInput] = useState('')
   const [flash, setFlash] = useState<Cell | null>(null)
   const [oppMsg, setOppMsg] = useState<string | null>(null)
+  const [myMsg, setMyMsg] = useState<string | null>(null)
   const [shake, setShake] = useState(false)
   const [resignOpen, setResignOpen] = useState(false)
   const [refRot, setRefRot] = useState<Rotation>(0)
   const shakeTimer = useRef(0)
   const flashTimer = useRef(0)
   const lastShotSeq = useRef(0)
+  const sfxTimers = useRef<number[]>([])
+
+  /** 延时播放音效（报点后的盖章/击毁结果音），卸载时统一清理 */
+  const playSfxAt = (name: Parameters<typeof audioService.playSfx>[0], delayMs: number) => {
+    sfxTimers.current.push(window.setTimeout(() => audioService.playSfx(name), delayMs))
+  }
 
   // 会话错误 → 回菜单
   useEffect(() => {
@@ -102,25 +109,43 @@ export function OnlineGame() {
     }
   }, [room, setView, toast])
 
-  // 对手报点：0.8s 高亮 + 状态条文字
+  // 服务端报点结果：0.8s 高亮（对方） + 状态条文字（双方）+ 结果音
   useEffect(() => {
-    if (!lastShot || lastShot.by !== 'opponent') return
-    if (lastShot.seq === lastShotSeq.current) return
+    if (!lastShot || lastShot.seq === lastShotSeq.current) return
     lastShotSeq.current = lastShot.seq
-    setFlash(lastShot.coord)
-    setOppMsg(`对方报点 ${formatCoord(lastShot.coord)}：${OUTCOME_TEXT[lastShot.outcome] ?? '无效'}！`)
-    window.clearTimeout(flashTimer.current)
-    flashTimer.current = window.setTimeout(() => setFlash(null), 800)
-    audioService.playSfx('stamp')
+    const text = `${lastShot.by === 'you' ? '我方报点' : '对方报点'} ${formatCoord(lastShot.coord)}：${OUTCOME_TEXT[lastShot.outcome] ?? '无效'}！`
+    if (lastShot.by === 'you') {
+      setMyMsg(text)
+      setOppMsg(null)
+      // 我方结果音：击中盖章 / 击毁重章（贴合报点节奏）
+      if (lastShot.outcome === 'kill') playSfxAt('kill', 180)
+      else if (lastShot.outcome === 'hit') playSfxAt('stamp', 140)
+    } else {
+      setFlash(lastShot.coord)
+      setOppMsg(text)
+      setMyMsg(null)
+      window.clearTimeout(flashTimer.current)
+      flashTimer.current = window.setTimeout(() => setFlash(null), 800)
+      audioService.playSfx(lastShot.outcome === 'kill' ? 'kill' : 'stamp')
+    }
   }, [lastShot])
 
   useEffect(
     () => () => {
       window.clearTimeout(shakeTimer.current)
       window.clearTimeout(flashTimer.current)
+      sfxTimers.current.forEach((t) => window.clearTimeout(t))
     },
     [],
   )
+
+  // 终局 → 胜负提示音 + 结算翻页
+  useEffect(() => {
+    if (!gameEnd) return
+    audioService.playSfx(gameEnd.winner === you ? 'win' : 'lose')
+    const t = window.setTimeout(() => audioService.playSfx('page-flip'), 500)
+    return () => window.clearTimeout(t)
+  }, [gameEnd, you])
 
   /* ---------- 尺寸（沿用 M4 布局；hooks 必须在任何提前 return 之前） ---------- */
 
@@ -255,6 +280,8 @@ export function OnlineGame() {
     } else if (oppMsg) {
       statusText = oppMsg
       statusThem = true
+    } else if (myMsg) {
+      statusText = myMsg
     } else if (yourTurn) {
       statusText = `轮到我方报点 · 第 ${turnNo} 回合`
     } else {
@@ -430,7 +457,7 @@ export function OnlineGame() {
       {/* 结算界面（复用 M4 布局） */}
       {gameEnd ? (
         <div className="result">
-          <div className="result__card paper-card">
+          <div className="result__card paper-card" role="status" aria-live="assertive">
             <h1 className={`result__title ${iWin ? 'result__title--win' : 'result__title--lose'}`}>
               {iWin ? '恭喜您，您赢了！' : '您输了，下次一定！'}
             </h1>

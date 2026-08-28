@@ -572,6 +572,18 @@
   justify-content: space-between;
   gap: 10px;
 }
+/* 窄屏（竖版小视口）：状态栏允许换行，避免玩家名撑出横向滚动 */
+@media (max-width: 480px) {
+  .game__statusbar {
+    flex-wrap: wrap;
+    row-gap: 2px;
+  }
+  .game__names {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
 .game__statusbtn {
   display: inline-flex;
   align-items: center;

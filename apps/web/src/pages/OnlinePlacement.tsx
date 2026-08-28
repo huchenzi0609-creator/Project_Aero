@@ -113,7 +113,6 @@ export function OnlinePlacement() {
   // 空席位也含在 players 数组（name 为空串）；以 name 判定是否已有玩家
   const oppEmpty = !oppSeat || oppSeat.name.length === 0
   const myReady = localReady || meSeat?.ready === true
-  const waiting = players.filter((p) => p.name.length > 0).length < 2
   const check = fleetCheckState(grid, config)
   const canConfirm = check.ok
 

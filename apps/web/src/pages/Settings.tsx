@@ -1,6 +1,6 @@
 import { useAppStore } from '../store/appStore'
 import { DIFFICULTY_OPTIONS, useSettingsStore } from '../store/settingsStore'
-import { useToastStore } from '../store/toastStore'
+import { audioService } from '../lib/audioService'
 import { PaperButton } from '../components/ui/PaperButton'
 import { PaperCard } from '../components/ui/PaperCard'
 import { PaperSlider } from '../components/ui/PaperSlider'
@@ -10,7 +10,6 @@ import { StampMark } from '../components/grid/StampMark'
 
 export function Settings() {
   const setView = useAppStore((s) => s.setView)
-  const toast = useToastStore((s) => s.push)
 
   const bgmVolume = useSettingsStore((s) => s.bgmVolume)
   const sfxVolume = useSettingsStore((s) => s.sfxVolume)
@@ -21,7 +20,11 @@ export function Settings() {
   const toggleInvertMarks = useSettingsStore((s) => s.toggleInvertMarks)
   const setDifficulty = useSettingsStore((s) => s.setDifficulty)
 
-  const preview = () => toast('试听占位：铅笔与盖章音效将在 M7 接入', 'info')
+  // 试听：解锁 Web Audio 并播放一组合成音效（翻页+盖章+暖音）
+  const preview = () => {
+    audioService.unlock()
+    audioService.playSfx('preview')
+  }
 
   return (
     <div className="page settings">

@@ -24,5 +24,9 @@ data/
 # test coverage
 coverage/
 
+# Playwright artifacts
+test-results/
+playwright-report/
+
 # AgentTeams plugin state (workspace-level)
 .agent-teams/

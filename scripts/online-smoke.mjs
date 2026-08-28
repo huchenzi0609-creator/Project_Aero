@@ -58,7 +58,7 @@ console.log('进入对局')
 
 for (let i = 0; i < 8; i++) {
   let active = null
-  for (const [name, p] of [['A', A], ['B', B]]) {
+  for (const [, p] of [['A', A], ['B', B]]) {
     const t = await p.evaluate(() => document.body.innerText)
     if (t.includes('轮到我方报点')) { active = p; break }
   }

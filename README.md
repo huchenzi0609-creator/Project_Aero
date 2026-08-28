@@ -27,6 +27,35 @@ pnpm dev:server       # 后端 http://localhost:3001
 pnpm check:ci         # lint + typecheck + test + build
 ```
 
+## 运行说明
+
+### 本地启动
+
+```sh
+pnpm install          # 首次：安装依赖
+pnpm dev:server       # 后端 http://localhost:3001（联机需要；只玩单机可跳过）
+pnpm dev:web          # 前端 http://localhost:5173
+```
+
+浏览器打开 http://localhost:5173 即可游玩。单机对局无需后端；进入联机页面前请先启动 `dev:server`（未启动时前端会显示"未连接"并自动重连，联机按钮禁用）。
+
+### 联机说明
+
+- **局域网对局**：主页 → 联机对战 → 选档位 → 创建房间，得到 6 位房码（可复制）；另一台同一局域网的设备输入房码加入。
+- **公网匹配**：需将后端部署到公网可访问地址，前端以 `VITE_SERVER_URL` 指向该地址；进入匹配队列后按同档位配对，30 秒未匹配可自建房间。
+- **自定义房间**：房主在联机菜单配置棋盘与飞机形状，加入者输入房码自动获得房主配置；自定义配置不进公网匹配池。
+- 联机采用服务端权威裁决（双方阵型只存服务端），60 秒内断线可凭 token 重连恢复；超时由机器接管。
+
+### e2e 测试
+
+```sh
+# 本机若无 playwright headless-shell，需指定完整 Chromium 二进制：
+PLAYWRIGHT_CHROMIUM_EXECUTABLE=/path/to/Google\ Chrome\ for\ Testing.app/Contents/MacOS/Google\ Chrome\ for\ Testing \
+  pnpm e2e
+```
+
+`playwright.config.ts` 的 `webServer` 会自动拉起 vite 与 server（无需手动启动）。单机用例不依赖 server，联机用例需要双服务。全部用例通过即为验收通过。
+
 ## 目录结构
 
 ```

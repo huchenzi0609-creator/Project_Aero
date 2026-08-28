@@ -64,10 +64,17 @@ export function GameScreen({ mode = 'single' }: { mode?: 'single' | 'online' }) 
   const [input, setInput] = useState('')
   const [aiFlash, setAiFlash] = useState<Cell | null>(null)
   const [aiMsg, setAiMsg] = useState<string | null>(null)
+  const [myMsg, setMyMsg] = useState<string | null>(null)
   const [shake, setShake] = useState(false)
   const [exitOpen, setExitOpen] = useState(false)
   const [refRot, setRefRot] = useState<Rotation>(0)
   const shakeTimer = useRef(0)
+  const sfxTimers = useRef<number[]>([])
+
+  /** 延时播放音效（如报点后的盖章/击毁结果音），统一登记便于卸载清理 */
+  const playSfxAt = (name: Parameters<typeof audioService.playSfx>[0], delayMs: number) => {
+    sfxTimers.current.push(window.setTimeout(() => audioService.playSfx(name), delayMs))
+  }
 
   const state: GameState | null = session?.state ?? null
   const config = session?.config
@@ -83,27 +90,35 @@ export function GameScreen({ mode = 'single' }: { mode?: 'single' | 'online' }) 
   useEffect(
     () => () => {
       window.clearTimeout(shakeTimer.current)
+      sfxTimers.current.forEach((t) => window.clearTimeout(t))
     },
     [],
   )
 
-  /* ---------- 横幅 → 对战 ---------- */
+  /* ---------- 横幅 → 对战（切页音 + 状态重置） ---------- */
   useEffect(() => {
     setScreen('banner')
     setHighlight(null)
     setInput('')
     setAiFlash(null)
     setAiMsg(null)
+    setMyMsg(null)
+    audioService.playSfx('page-flip')
     const t = window.setTimeout(() => setScreen('battle'), 1500)
     return () => window.clearTimeout(t)
   }, [session?.nonce])
 
-  /* ---------- 终局 → 结算 ---------- */
+  /* ---------- 终局 → 结算（胜负提示音 + 结算翻页） ---------- */
   useEffect(() => {
     if (!state || state.phase !== 'ended' || screen !== 'battle') return
-    const t = window.setTimeout(() => setScreen('result'), 650)
+    const iWin = state.winner === me
+    audioService.playSfx(iWin ? 'win' : 'lose')
+    const t = window.setTimeout(() => {
+      setScreen('result')
+      audioService.playSfx('page-flip')
+    }, 650)
     return () => window.clearTimeout(t)
-  }, [state, screen])
+  }, [state, screen, me])
 
   /* ---------- AI 回合驱动：300~900ms 后 chooseShot 报点 ---------- */
   useEffect(() => {
@@ -122,9 +137,11 @@ export function GameScreen({ mode = 'single' }: { mode?: 'single' | 'online' }) 
         const res = applyShotAt(cell)
         if (!res || !res.ok || !res.outcome) return
         setAiFlash(cell)
+        setMyMsg(null)
         setAiMsg(`对方报点 ${formatCoord(cell)}：${OUTCOME_TEXT[res.outcome] ?? '无效'}！`)
         window.setTimeout(() => setAiFlash(null), 800)
-        audioService.playSfx('stamp')
+        // 对方报点结果音：击中盖章 / 击毁重章
+        audioService.playSfx(res.outcome === 'kill' ? 'kill' : 'stamp')
       },
       300 + Math.random() * 600,
     )
@@ -209,7 +226,12 @@ export function GameScreen({ mode = 'single' }: { mode?: 'single' | 'online' }) 
     setHighlight(null)
     setInput('')
     setAiMsg(null)
+    const resultLabel = res.outcome ? OUTCOME_TEXT[res.outcome] : '无效'
+    setMyMsg(`我方报点 ${formatCoord(cell)}：${resultLabel}！`)
     audioService.playSfx('shoot')
+    // 结果音：击中盖章 / 击毁重章（稍延时贴合报点节奏）
+    if (res.outcome === 'kill') playSfxAt('kill', 180)
+    else if (res.outcome === 'hit') playSfxAt('stamp', 140)
   }
 
   const onOppCellClick = (cell: Cell) => {
@@ -255,6 +277,8 @@ export function GameScreen({ mode = 'single' }: { mode?: 'single' | 'online' }) 
     } else if (aiMsg) {
       statusText = aiMsg
       statusThem = true
+    } else if (myMsg) {
+      statusText = myMsg
     } else if (state.turn === me) {
       statusText = '轮到我方报点'
     } else {
@@ -394,7 +418,7 @@ export function GameScreen({ mode = 'single' }: { mode?: 'single' | 'online' }) 
       {/* 结算界面 */}
       {screen === 'result' && stats ? (
         <div className="result">
-          <div className="result__card paper-card">
+          <div className="result__card paper-card" role="status" aria-live="assertive">
             <h1 className={`result__title ${iWin ? 'result__title--win' : 'result__title--lose'}`}>
               {iWin ? '恭喜您，您赢了！' : '您输了，下次一定！'}
             </h1>
@@ -463,6 +487,7 @@ export function GameScreen({ mode = 'single' }: { mode?: 'single' | 'online' }) 
                 variant="primary"
                 onClick={() => {
                   resetGame()
+                  audioService.playSfx('page-flip')
                   setView('placement')
                 }}
               >

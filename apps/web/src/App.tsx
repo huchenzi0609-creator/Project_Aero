@@ -4,6 +4,7 @@ import { useOnlineStore } from './store/onlineStore'
 import { StampFilterDefs } from './components/grid/StampFilterDefs'
 import { ToastRegion } from './components/ui/Toast'
 import { connectSocket } from './net/socket'
+import { audioService } from './lib/audioService'
 import { Home } from './pages/Home'
 import { SingleMenu } from './pages/SingleMenu'
 import { CustomConfig } from './pages/CustomConfig'
@@ -22,6 +23,17 @@ export default function App() {
   // 挂载即建立 Socket 连接（幂等；断线由 socket.io 自动重连）
   useEffect(() => {
     connectSocket()
+  }, [])
+
+  // 首次用户交互解锁 Web Audio（规避移动端自动播放限制；BGM 随之按设置启动）
+  useEffect(() => {
+    const unlock = () => audioService.unlock()
+    window.addEventListener('pointerdown', unlock, { capture: true })
+    window.addEventListener('keydown', unlock, { capture: true })
+    return () => {
+      window.removeEventListener('pointerdown', unlock, { capture: true })
+      window.removeEventListener('keydown', unlock, { capture: true })
+    }
   }, [])
 
   // 页面刷新/重连恢复：已身处房间却落在主页时，自动回到联机流程对应页

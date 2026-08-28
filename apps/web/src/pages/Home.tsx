@@ -78,7 +78,7 @@ export function Home() {
         <button type="button" className="link-btn" onClick={() => setView('rules')}>
           规则说明
         </button>
-        <span className="home__version">M3 · 纸面预览</span>
+        <span className="home__version">v0.1.0 · 纸面海战</span>
       </footer>
     </div>
   )

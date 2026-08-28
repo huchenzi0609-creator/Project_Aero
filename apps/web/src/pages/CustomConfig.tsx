@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { DEFAULT_PLANE_SHAPE, GRID_MAX, GRID_MIN, SHAPE_MAX_CELLS } from '@aero/shared'
+import { DEFAULT_PLANE_SHAPE, GRID_MAX, GRID_MIN, SHAPE_MAX_CELLS, SHAPE_MIN_CELLS } from '@aero/shared'
 import type { Cell, PlaneShape } from '@aero/shared'
 import { validateShape } from '@aero/game-core'
 import { useAppStore } from '../store/appStore'
@@ -49,10 +49,17 @@ export function CustomConfig({ mode = 'single' }: { mode?: 'single' | 'online' }
   /** 校验清单数据（改用 game-core validateShape，契约见 docs/game-core-api.md） */
   const checks = useMemo(() => {
     if (useDefault) return { ok: true as const, errors: [] as string[] }
-    if (!drawnShape) return { ok: false as const, errors: [] as string[] }
+    if (!drawnShape) {
+      // 未形成可校验形状时，补人可读错误（保证清单与「确认不可用」一致）
+      const errors: string[] = []
+      if (cells.length > 0 && head === null) errors.push('缺少机头：必须且只能有 1 个机头')
+      if (cells.length > 0 && cells.length < SHAPE_MIN_CELLS)
+        errors.push(`方格数至少为 ${SHAPE_MIN_CELLS} 个（当前 ${cells.length} 个）`)
+      return { ok: false as const, errors }
+    }
     const v = validateShape(drawnShape)
     return { ok: v.ok as boolean, errors: v.ok ? [] : v.errors }
-  }, [useDefault, drawnShape])
+  }, [useDefault, drawnShape, cells.length, head])
 
   const shapeValid = useDefault || (drawnShape !== null && checks.ok)
   const canConfirm = widthOk && heightOk && nOk && shapeValid
