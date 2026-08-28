@@ -10,7 +10,7 @@ test.describe('主页', () => {
     const errs = watchErrors(page)
 
     await page.goto('/')
-    await expect(page.getByRole('heading', { name: '纸面海战' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: '方格空袭' })).toBeVisible()
 
     // 三入口
     await expect(page.getByRole('button', { name: '单人对局' })).toBeVisible()
@@ -19,7 +19,7 @@ test.describe('主页', () => {
     await expect(page.getByRole('button', { name: '规则说明' })).toBeVisible()
 
     // 用户名显示（本地占位「游客……」或服务端身份「游客XXXXX」）
-    await expect(page.locator('.home__guest-label')).toHaveText('今日纸名')
+    await expect(page.locator('.home__guest-label')).toHaveText('你好，')
     await expect(page.locator('.home__guest-name')).toHaveText(/游客/)
 
     // 横竖版切换：1280×800 默认横版 → 强制竖版 → 布局类变化 → 恢复自动

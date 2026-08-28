@@ -371,7 +371,7 @@ export function GameScreen({ mode = 'single' }: { mode?: 'single' | 'online' }) 
             cellSize={mainCell}
             showLabels
             onCellClick={onOppCellClick}
-            shots={aiBoard.shotsFired}
+            shots={myBoard.shotsFired}
             highlight={highlight}
             ariaLabel="对手棋盘"
           />

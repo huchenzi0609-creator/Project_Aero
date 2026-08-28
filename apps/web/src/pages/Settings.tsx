@@ -34,7 +34,6 @@ export function Settings() {
       <header className="page__head">
         <div>
           <h1 className="page__title">设置</h1>
-          <p className="page__subtitle">声音、标记偏好与 AI 难度，自动保存在本机浏览器。</p>
         </div>
       </header>
 
@@ -71,7 +70,7 @@ export function Settings() {
           <PaperCard>
             <PaperToggle
               label="反转 X 和 O"
-              description="交换 ✗ 与 ◯ 的显示含义（仅本地偏好，两棋盘同生效，不影响胜负裁决）。"
+              description="交换 ✗ 与 ◯ 的显示含义"
               checked={invertMarks}
               onChange={toggleInvertMarks}
             />
@@ -100,8 +99,6 @@ export function Settings() {
             />
           </PaperCard>
         </section>
-
-        <p className="settings__note">全部设置将自动保存到本机（localStorage），无需手动保存。</p>
       </div>
     </div>
   )

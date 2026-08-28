@@ -49,7 +49,7 @@ export function Home() {
       <header className="home__top">
         <OrientationToggle />
         <div className="home__guest">
-          <span className="home__guest-label">今日纸名</span>
+          <span className="home__guest-label">你好，</span>
           <span className="home__guest-name">{guestName}</span>
         </div>
       </header>
@@ -57,8 +57,7 @@ export function Home() {
       <main className="home__main">
         <section className="home__title-block">
           <PaperPlaneDoodle />
-          <h1 className="home__title">纸面海战</h1>
-          <p className="home__subtitle">PAPER NAVAL BATTLE · 一张旧图纸上的海战</p>
+          <h1 className="home__title">方格空袭</h1>
           <PencilUnderline />
         </section>
         <nav className="home__menu" aria-label="主菜单">
@@ -78,7 +77,7 @@ export function Home() {
         <button type="button" className="link-btn" onClick={() => setView('rules')}>
           规则说明
         </button>
-        <span className="home__version">v0.1.0 · 纸面海战</span>
+        <span className="home__version">v0.1.1 · 方格空袭</span>
       </footer>
     </div>
   )

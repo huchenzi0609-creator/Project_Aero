@@ -7,7 +7,7 @@
  * 3) 自定义房间：房主配置棋盘+形状（CustomConfig online 模式）→ 建房。
  */
 import { useEffect, useState } from 'react'
-import { PRESETS, PRESET_LABELS } from '@aero/shared'
+import { PRESETS } from '@aero/shared'
 import type { GridConfig } from '@aero/shared'
 import { useAppStore } from '../store/appStore'
 import { useOnlineStore } from '../store/onlineStore'
@@ -200,10 +200,7 @@ export function OnlineMenu() {
         {/* 公网匹配 */}
         <PaperCard pin>
           <h2 className="online__card-title">公网匹配</h2>
-          <p className="online__card-desc">
-            按标准三档同配置配对（{PRESET_LABELS.small} / {PRESET_LABELS.medium} /{' '}
-            {PRESET_LABELS.large}），找到对手即刻开局。
-          </p>
+          <p className="online__card-desc">选择配置，匹配对手</p>
           <div className="online__tiers" role="group" aria-label="匹配档位">
             {TIERS.map((t) => (
               <PaperButton

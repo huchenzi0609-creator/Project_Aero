@@ -19,7 +19,7 @@ test.describe('联机全流程', () => {
 
     // ---- A 建房 ----
     await A.goto('/')
-    await expect(A.getByRole('heading', { name: '纸面海战' })).toBeVisible()
+    await expect(A.getByRole('heading', { name: '方格空袭' })).toBeVisible()
     await A.getByRole('button', { name: '联机对战' }).click()
     await A.getByRole('button', { name: '创建房间' }).click()
     await expect(A.locator('.online__roomcode')).toBeVisible({ timeout: 10000 })

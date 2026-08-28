@@ -1,7 +1,7 @@
 /**
  * 飞机 SVG：由 PlaneShape（cells + head）生成，严格占满所属格位。
  * - 机体：围绕格位并集描出的平滑贝塞尔轮廓（淡纸色填充 + 墨线描边）
- * - 机头：深色圆形座舱 + 沿头尾方向突出的鼻尖
+ * - 机头：深色圆形座舱
  * - rotation 支持四向旋转；wrecked 变体为残骸暗色 + 斜叉
  */
 import { useId } from 'react'
@@ -100,22 +100,9 @@ export function PlaneGlyph({ shape, rotation = 0, wrecked = false, className }: 
 
   const outline = smoothOutline(rotated.cells)
 
-  // 质心 -> 机头方向（鼻尖突出）
-  const cx = rotated.cells.reduce((s, p) => s + p.c + 0.5, 0) / rotated.cells.length
-  const cy = rotated.cells.reduce((s, p) => s + p.r + 0.5, 0) / rotated.cells.length
+  // 座舱（机头）中心
   const hx = rotated.head.c + 0.5
   const hy = rotated.head.r + 0.5
-  let dx = hx - cx
-  let dy = hy - cy
-  const len = Math.hypot(dx, dy) || 1
-  dx /= len
-  dy /= len
-  const px = -dy
-  const py = dx
-  const noseW = 0.32
-  const tipX = hx + dx * 0.62
-  const tipY = hy + dy * 0.62
-  const nose = `M ${tipX.toFixed(3)} ${tipY.toFixed(3)} L ${(hx + px * noseW).toFixed(3)} ${(hy + py * noseW).toFixed(3)} L ${(hx - px * noseW).toFixed(3)} ${(hy - py * noseW).toFixed(3)} Z`
 
   const bodyFill = wrecked ? '#6f6757' : `url(#${fillId})`
   const bodyStroke = wrecked ? '#332d22' : 'var(--ink)'
@@ -142,7 +129,6 @@ export function PlaneGlyph({ shape, rotation = 0, wrecked = false, className }: 
         strokeLinejoin="round"
         fillRule="evenodd"
       />
-      <path d={nose} fill={bodyFill} stroke={bodyStroke} strokeWidth={0.11} strokeLinejoin="round" />
       {/* 座舱（机头） */}
       <circle cx={hx} cy={hy} r={0.26} fill={wrecked ? '#2e2920' : '#332c1f'} />
       <circle cx={hx} cy={hy} r={0.15} fill="none" stroke={wrecked ? '#6f6757' : '#f7f1de'} strokeWidth={0.05} />

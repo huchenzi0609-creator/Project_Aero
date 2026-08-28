@@ -25,7 +25,6 @@ export function Rules() {
       <header className="page__head">
         <div>
           <h1 className="page__title">规则说明</h1>
-          <p className="page__subtitle">纸面海战 · 一页纸讲完的规则（以 docs/design.md §1 为准）。</p>
         </div>
       </header>
 

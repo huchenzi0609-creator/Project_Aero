@@ -74,7 +74,6 @@ export function SingleMenu() {
       <header className="page__head">
         <div>
           <h1 className="page__title">单人对局</h1>
-          <p className="page__subtitle">选择棋盘大小，与电脑 AI 开战：先摆阵，再随机先后手。</p>
         </div>
       </header>
       <div className="page__body single__cards">

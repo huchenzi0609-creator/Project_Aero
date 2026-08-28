@@ -163,11 +163,9 @@ export function CustomConfig({ mode = 'single' }: { mode?: 'single' | 'online' }
       <header className="page__head">
         <div>
           <h1 className="page__title">{isOnline ? '自定义房间' : '自定义配置'}</h1>
-          <p className="page__subtitle">
-            {isOnline
-              ? '房主配置棋盘与飞机形状（双方使用同一形状）；自定义配置不进公网匹配池。'
-              : '自由设定棋盘尺寸与飞机形状，全部校验通过后才能开战。'}
-          </p>
+          {isOnline ? (
+            <p className="page__subtitle">房主配置棋盘与飞机形状（双方使用同一形状）；自定义配置不进公网匹配池。</p>
+          ) : null}
         </div>
       </header>
 
@@ -231,7 +229,6 @@ export function CustomConfig({ mode = 'single' }: { mode?: 'single' | 'online' }
           <div className="custom__toggle-row">
             <PaperToggle
               label="使用默认飞机形状"
-              description="默认 4×5 共 10 格：机头 1、机翼 5、机身 1、机尾 3（左右对称）。"
               checked={useDefault}
               onChange={setUseDefault}
             />
