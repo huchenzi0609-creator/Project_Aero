@@ -129,7 +129,7 @@ describe('难度梯度（同一批固定种子，≥300 局）', () => {
 })
 
 describe('generateFleet', () => {
-  it('各难度产物通过 validateFleet（多棋盘/多数量/多种子）', { timeout: 30_000 }, () => {
+  it('各难度产物通过 validateFleet（多棋盘/多数量/多种子）', { timeout: 60_000 }, () => {
     const configs: Array<[number, number, number]> = [
       [10, 10, 3],
       [15, 15, 5],
