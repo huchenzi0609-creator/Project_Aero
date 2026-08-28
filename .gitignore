@@ -1,0 +1,28 @@
+# dependencies
+node_modules/
+.pnpm-store/
+
+# build output
+dist/
+build/
+
+# logs & cache
+*.log
+.npm-cache/
+.vite/
+
+# env & local data
+.env
+.env.local
+data/
+
+# editor / OS
+.DS_Store
+.idea/
+.vscode/
+
+# test coverage
+coverage/
+
+# AgentTeams plugin state (workspace-level)
+.agent-teams/
