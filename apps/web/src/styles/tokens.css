@@ -1,0 +1,52 @@
+/* ============================================================
+   Project Aero · 纸感设计系统 —— 设计令牌（Design Tokens）
+   旧纸米白底 + 墨线 + 深绿击中 / 深红击毁
+   ============================================================ */
+
+:root {
+  /* 纸张 */
+  --paper-base: #f5efe0; /* 页面旧纸米白 */
+  --paper-sheet: #fbf7ea; /* 纸卡（浅一层的纸） */
+  --paper-sheet-2: #efe6cf; /* 内嵌 / 表头纸 */
+  --paper-deep: #e4d9ba; /* 凹槽 / 槽位纸 */
+
+  /* 墨水与铅笔 */
+  --ink: #3b3122; /* 主墨 */
+  --ink-soft: #71644c; /* 次墨 */
+  --ink-faint: #a7977c; /* 淡墨 */
+  --pencil: rgba(96, 78, 50, 0.5); /* 铅笔线 */
+  --pencil-faint: rgba(96, 78, 50, 0.26); /* 淡铅笔线 */
+  --graph-line: rgba(94, 112, 150, 0.1); /* 图纸网格线 */
+
+  /* 标记（盖章） */
+  --miss-ink: #3b3122; /* ✗ 击空 · 黑 */
+  --hit-green: #2f6b4f; /* ◯ 击中 · 深绿 */
+  --kill-red: #a8362f; /* ★ 击毁 · 深红 */
+
+  /* 纸桌小物 */
+  --tape: rgba(222, 196, 130, 0.55); /* 胶带 */
+  --pin: #b83a2c; /* 图钉 */
+
+  /* 交互 */
+  --focus-ring: #3f6f8f; /* 铅笔虚线焦点环 */
+  --danger: #a8362f;
+
+  /* 形状 */
+  --radius-card: 4px;
+  --radius-sm: 2px;
+  --shadow-card:
+    0 1px 1px rgba(84, 66, 38, 0.12),
+    0 3px 8px -2px rgba(84, 66, 38, 0.2),
+    0 16px 28px -14px rgba(84, 66, 38, 0.3);
+  --shadow-card-hover:
+    0 2px 3px rgba(84, 66, 38, 0.16),
+    0 8px 16px -4px rgba(84, 66, 38, 0.26),
+    0 22px 36px -16px rgba(84, 66, 38, 0.34);
+
+  /* 字体 */
+  --font-body: 'LXGW WenKai', 'KaiTi', 'STKaiti', 'Kai', system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', 'Menlo', 'Consolas', 'Cascadia Mono', 'Liberation Mono', monospace;
+
+  /* 动效 */
+  --ease-paper: cubic-bezier(0.22, 0.8, 0.3, 1);
+}

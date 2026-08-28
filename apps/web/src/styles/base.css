@@ -1,0 +1,116 @@
+/* ============================================================
+   基础层：纸张纹理（feTurbulence 噪点 + 脏污渐变 + 纤维 + 图纸线）
+   ============================================================ */
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  height: 100%;
+}
+
+body {
+  min-height: 100%;
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 16px;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  background-color: var(--paper-base);
+  background-image:
+    /* 极淡径向脏污渐变（两处旧渍） */
+    radial-gradient(1100px 760px at 16% 10%, rgba(150, 120, 70, 0.07), transparent 62%),
+    radial-gradient(900px 720px at 86% 92%, rgba(140, 108, 60, 0.06), transparent 55%),
+    radial-gradient(520px 420px at 68% 24%, rgba(150, 122, 66, 0.04), transparent 70%),
+    /* 图纸网格线（海战坐标气质，极淡） */
+    linear-gradient(var(--graph-line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--graph-line) 1px, transparent 1px),
+    /* 细纤维纹（data URI，不依赖外部图片） */
+    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='140' height='140'><g stroke='%23907850' stroke-opacity='0.055' stroke-width='0.7'><path d='M-10 100 L50 40'/><path d='M30 150 L110 70'/><path d='M80 -10 L150 60'/><path d='M110 150 L170 90'/><path d='M-20 30 L40 90'/><path d='M0 10 L30 -20'/></g></svg>"),
+    /* feTurbulence 噪点（最上层，制造纸面颗粒） */
+    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix type='saturate' values='0'/><feComponentTransfer><feFuncA type='linear' slope='0.07' intercept='0'/></feComponentTransfer></filter><rect width='180' height='180' filter='url(%23n)'/></svg>");
+  background-size:
+    auto,
+    auto,
+    auto,
+    26px 26px,
+    26px 26px,
+    140px 140px,
+    180px 180px;
+  background-attachment: fixed;
+}
+
+#root,
+.app {
+  min-height: 100dvh;
+}
+
+::selection {
+  background: rgba(214, 178, 96, 0.4);
+}
+
+/* 铅笔虚线焦点环 —— 全局可访问性 */
+:focus-visible {
+  outline: 2px dashed var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* 细滚动条 */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(96, 78, 50, 0.3);
+  border-radius: 5px;
+  border: 2px solid var(--paper-base);
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* 无障碍：仅屏幕阅读器可见 */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  clip-path: inset(50%);
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+/* 文字链接（手写虚线） */
+.link-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: var(--ink-soft);
+  text-decoration: underline dashed 1px;
+  text-underline-offset: 3px;
+  cursor: pointer;
+  border-radius: 2px;
+}
+.link-btn:hover {
+  color: var(--ink);
+}
+
+/* 减少动效偏好：全局禁用动画/过渡 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

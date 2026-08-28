@@ -124,6 +124,12 @@ export interface GuestIdentity {
   token: string
 }
 
+/** 前端 localStorage 中保存游客 token 的键名（web 与 server 契约） */
+export const GUEST_TOKEN_KEY = 'aero:guest:token'
+
+/** 房间码长度（6 位大写字母数字） */
+export const ROOM_CODE_LENGTH = 6
+
 /* ---------- Socket.IO 事件协议 ---------- */
 
 export type Ack<T = { ok: boolean; error?: string }> = (res: T) => void
@@ -154,7 +160,15 @@ export interface GameEndPayload {
   winner: 0 | 1
   reason: 'all-destroyed' | 'counterattack' | 'resign' | 'disconnect' | 'timeout-takeover'
   layouts: { player0: PlacedPlane[]; player1: PlacedPlane[] }
-  stats: { turnCount: number }
+  stats: {
+    turnCount: number
+    /** 本局双方总报点数 */
+    shotsFired: number
+    /** 命中（hit+kill）总数 */
+    hitCount: number
+    /** 击毁飞机架数 */
+    killCount: number
+  }
 }
 
 export interface ServerToClientEvents {
