@@ -13,6 +13,7 @@
 - docs/handoff-m4-m6-m7.md：M4/M6/M7 交接规格
 - packages/shared：协议类型、zod schema、默认飞机形状、计时常量、游客 token 键、房码长度、gameEnd 统计契约
 - M3 纸感设计系统：纸纹理/组件库/PlaneGlyph/StampMark/PaperGrid + 主页/单机菜单/自定义编辑器/设置/规则/联机菜单/对局占位页 + 横竖版响应式
+- M5 联机后端：游客身份+SQLite 落盘、房间/匹配状态机、服务端权威裁决（残骸绝不泄露）、围棋读秒制+机器接管、断线重连回放（29/29 测试通过）
 - ESLint / Prettier / CI / Playwright e2e 基建
 
 ### Changed
