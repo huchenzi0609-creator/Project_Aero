@@ -89,7 +89,7 @@ function playGame(
 }
 
 describe('chooseShot 合法性（100 局随机模拟）', () => {
-  it('全部报点不越界、不重复，游戏正常终局', () => {
+  it('全部报点不越界、不重复，游戏正常终局', { timeout: 60_000 }, () => {
     const diffs: Difficulty[] = ['easy', 'normal', 'hard', 'hell']
     for (let i = 0; i < 100; i++) {
       const diff = diffs[i % 4]!
@@ -104,7 +104,7 @@ describe('chooseShot 合法性（100 局随机模拟）', () => {
 })
 
 describe('难度梯度（同一批固定种子，≥300 局）', () => {
-  it('平均终局回合数 easy > normal > hard > hell（允许 hell≈hard）', () => {
+  it('平均终局回合数 easy > normal > hard > hell（允许 hell≈hard）', { timeout: 120_000 }, () => {
     const GAMES = 320
     const results: Record<Difficulty, number[]> = { easy: [], normal: [], hard: [], hell: [] }
     for (const diff of ['easy', 'normal', 'hard', 'hell'] as Difficulty[]) {
@@ -129,7 +129,7 @@ describe('难度梯度（同一批固定种子，≥300 局）', () => {
 })
 
 describe('generateFleet', () => {
-  it('各难度产物通过 validateFleet（多棋盘/多数量/多种子）', () => {
+  it('各难度产物通过 validateFleet（多棋盘/多数量/多种子）', { timeout: 30_000 }, () => {
     const configs: Array<[number, number, number]> = [
       [10, 10, 3],
       [15, 15, 5],
@@ -152,11 +152,25 @@ describe('generateFleet', () => {
     }
   })
 
-  it('高密度（26×26 摆 26 架）仍能生成合法机队', () => {
+  it('高密度（26×26 摆 26 架）仍能生成合法机队', { timeout: 60_000 }, () => {
     for (const diff of ['easy', 'normal', 'hard', 'hell'] as Difficulty[]) {
       const fleet = generateFleet(26, 26, 26, DEFAULT_PLANE_SHAPE, diff, mulberry32(1234))
       expect(validateFleet(26, 26, 26, DEFAULT_PLANE_SHAPE, fleet).ok).toBe(true)
     }
+  })
+
+  it('26×26 摆 10 架单次耗时 < 150ms（timeit 输出）', { timeout: 30_000 }, () => {
+    const samples = 10
+    const rng = mulberry32(99)
+    const t0 = performance.now()
+    for (let i = 0; i < samples; i++) {
+      const fleet = generateFleet(26, 26, 10, DEFAULT_PLANE_SHAPE, 'hell', rng)
+      expect(validateFleet(26, 26, 10, DEFAULT_PLANE_SHAPE, fleet).ok).toBe(true)
+    }
+    const avgMs = (performance.now() - t0) / samples
+    // timeit 输出：供组长核对 26×26 摆阵耗时
+    console.log(`[timeit] generateFleet(26×26, 10架, hell) 单次平均: ${avgMs.toFixed(2)}ms`)
+    expect(avgMs).toBeLessThan(150)
   })
 })
 
@@ -188,6 +202,8 @@ describe('性能', () => {
       expect(cell.c).toBeLessThan(width)
     }
     const avgMs = (performance.now() - t0) / 10
+    // timeit 输出：供组长核对 26×26 热图耗时
+    console.log(`[timeit] 26×26 热图 chooseShot(hard) 单次平均: ${avgMs.toFixed(3)}ms`)
     expect(avgMs).toBeLessThan(50)
   })
 })

@@ -7,8 +7,6 @@
  */
 import type {
   Cell,
-  Difficulty,
-  GridConfig,
   PlaneShape,
   PlacedPlane,
   Rotation,

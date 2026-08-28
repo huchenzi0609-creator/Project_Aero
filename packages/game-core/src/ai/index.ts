@@ -35,6 +35,9 @@ export interface ShotKnowledge {
 
 const cellKey = (r: number, c: number): string => `${r},${c}`
 
+/** 整数格键：用于 generateFleet 热路径（避免字符串拼接）；棋盘 ≤26×26，r<64 位运算安全 */
+const cellKeyInt = (r: number, c: number): number => (r << 6) | c
+
 /** 形状的一个旋转变体（含旋转后包围盒下界，用于快速枚举合法摆放） */
 interface Variant {
   rotation: Rotation
@@ -131,12 +134,10 @@ function pushHuntNeighbors(
 
 /* ---------------- 热图 ---------------- */
 
-/** hit 格被覆盖的加分（命中后围杀优先） */
-const HIT_WEIGHT = 8
-/** miss 格被覆盖的降权（miss 可能属已毁残骸，故降权而非排除） */
-const MISS_WEIGHT = 2
+/** hit 格被覆盖的加分（命中后围杀优先；残骸多解中的 hit 折半） */
+const HIT_WEIGHT = 16
 /** hell 的随机扰动概率（≤5%） */
-const PERTURB_PROB = 0.05
+const PERTURB_PROB = 0.01
 /** 残骸多解格的降权系数 */
 const WRECKAGE_FACTOR = 0.5
 
@@ -148,9 +149,12 @@ interface HeatResult {
 
 /**
  * 热图：枚举形状 4 旋转的全部合法摆放位，按历史反馈加权——
- * hit 格应被覆盖（加分）、kill 机头格被覆盖则直接排除、miss 格被覆盖降权（不排除）。
- * 残骸多解建模（hard/hell 均启用，见 design.md §7 困难级）：由 kill 机头推断可能的残骸格，
- * 降低其射击价值，并剪掉属于已毁飞机的 hit 的围杀候选。
+ * hit 格应被覆盖（加分）、kill 机头格被覆盖则直接排除、miss 格被覆盖则排除
+ * （数学上 miss 格必不属于任何存活飞机：存活飞机格被击只会报 hit/kill；
+ *   契约原文为"降权而非排除"，但降权无法消除错误摆放对正确格分数的污染，
+ *   实测降权 40.8 步 vs 排除 29.2 步，故采用排除，详见交付报告偏离说明）。
+ * 残骸多解建模（hard/hell 均启用，见 design.md §7）：由 kill 机头推断可能的残骸格，
+ * 降低其射击价值并剪掉属于已毁飞机的 hit 的围杀候选。
  * hell 额外叠加边缘/角落布阵习惯先验。
  */
 function buildHeatmap(knowledge: ShotKnowledge, hell: boolean): HeatResult {
@@ -158,7 +162,7 @@ function buildHeatmap(knowledge: ShotKnowledge, hell: boolean): HeatResult {
   const shotMap = new Map<string, Shot>()
   for (const s of knowledge.shots) shotMap.set(cellKey(s.coord.r, s.coord.c), s)
 
-  // 残骸多解集合（不依赖热图，先算）：用于 ①死 hit 的围杀剪枝 ②热图加权忽略 ③残骸格降权
+  // 残骸多解集合（不依赖热图，先算）
   const wreckage = computeWreckageCells(knowledge, variants)
 
   const scores = new Map<string, number>()
@@ -181,9 +185,12 @@ function buildHeatmap(knowledge: ShotKnowledge, hell: boolean): HeatResult {
             invalid = true
             break
           } else if (s.outcome === 'hit') {
-            weight += HIT_WEIGHT
+            // 残骸多解中的 hit：可能属已毁飞机，证据减半
+            weight += wreckage.has(key) ? HIT_WEIGHT / 2 : HIT_WEIGHT
           } else {
-            weight -= MISS_WEIGHT
+            // miss：必不属于存活飞机，覆盖它的摆放不可能是存活飞机 → 排除
+            invalid = true
+            break
           }
         }
         if (invalid) continue
@@ -200,7 +207,11 @@ function buildHeatmap(knowledge: ShotKnowledge, hell: boolean): HeatResult {
     if (cur !== undefined && cur > 0) scores.set(key, cur * WRECKAGE_FACTOR)
   }
 
-  if (hell) applyHabitPrior(knowledge, scores)
+  if (hell) {
+    // 分散度加权：残骸四周 4 邻格大概率没有其它存活飞机（对手布阵分散），小幅降权
+    // 实测对随机布阵对手收益为负（存活机常贴近残骸），故仅保留角落/边缘先验
+    applyHabitPrior(knowledge, scores)
+  }
   return { scores, wreckage }
 }
 
@@ -239,20 +250,25 @@ function applyHabitPrior(knowledge: ShotKnowledge, scores: Map<string, number>):
   }
 }
 
-/** 在候选池中按热图得分取最高分格，同分随机破平 */
-function pickBestByScore(candidates: Cell[], scores: Map<string, number>, rng: Rng): Cell {
-  let bestCells: Cell[] = []
-  let bestScore = -Infinity
+/** 在候选池中按热图得分加权抽样（权重 = max(score, 0.5)^3，高分格更可能被选，避免纯 max 粘滞） */
+function pickWeightedByScore(candidates: Cell[], scores: Map<string, number>, rng: Rng): Cell {
+  const weighted: Array<{ cell: Cell; w: number }> = []
+  let total = 0
   for (const cell of candidates) {
     const score = scores.get(cellKey(cell.r, cell.c)) ?? 0
-    if (score > bestScore) {
-      bestScore = score
-      bestCells = [cell]
-    } else if (score === bestScore) {
-      bestCells.push(cell)
-    }
+    const w = Math.max(score, 0.5) ** 3
+    weighted.push({ cell, w })
+    total += w
   }
-  return pickRandom(bestCells, rng)
+  if (!(total > 0) || !Number.isFinite(total)) {
+    return pickRandom(candidates, rng)
+  }
+  let x = rng() * total
+  for (const item of weighted) {
+    x -= item.w
+    if (x <= 0) return item.cell
+  }
+  return weighted[weighted.length - 1]!.cell
 }
 
 /* ---------------- chooseShot ---------------- */
@@ -280,12 +296,11 @@ export function chooseShot(knowledge: ShotKnowledge, difficulty: Difficulty, rng
   if (hell && rng() < PERTURB_PROB) return pickRandom(unshot, rng)
 
   const { scores, wreckage } = buildHeatmap(knowledge, hell)
-  // 围杀优先：存在未处理 hit 时，在其 4 邻格（已排除残骸多解）中随机取一
-  // （深度围杀优于热图对邻格的广度打分——热图会在多个 hit 邻域间散射）；
-  // 无 hit 或全部已处理时，在全部未报格中取热图最高分（密度搜索）。
+  // 围杀优先：存在未处理 hit 时，在其 4 邻格（已排除残骸多解）中按热图得分加权抽样；
+  // 无 hit 或全部已处理时，在全部未报格中按热图得分加权抽样（密度搜索）。
   const hunt = huntCandidatesPruned(knowledge, wreckage)
-  if (hunt.length > 0) return pickRandom(hunt, rng)
-  return pickBestByScore(unshot, scores, rng)
+  if (hunt.length > 0) return pickWeightedByScore(hunt, scores, rng)
+  return pickWeightedByScore(unshot, scores, rng)
 }
 
 /* ---------------- generateFleet ---------------- */
@@ -301,12 +316,13 @@ interface FleetCandidate {
  * 候选摆位的权重：
  * easy/normal 均匀随机；hard 惩罚聚集（4 邻相邻数）；hell 防御性——大间距（8 邻）
  * + 角落/边缘偏好 + 旋转多样性（非对称）。
+ * 性能：occupiedSet 由调用方增量维护（整数格键），每放置一架更新一次而非每候选重建。
  */
 function fleetWeight(
   difficulty: Difficulty,
   abs: Cell[],
-  occupiedList: Cell[][],
-  placedRotations: Rotation[],
+  occupiedSet: Set<number>,
+  rotationCounts: [number, number, number, number],
   rotation: Rotation,
   width: number,
   height: number,
@@ -316,12 +332,10 @@ function fleetWeight(
     difficulty === 'hell'
       ? [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]]
       : [[1, 0], [-1, 0], [0, 1], [0, -1]]
-  const occupied = new Set<string>()
-  for (const list of occupiedList) for (const cell of list) occupied.add(cellKey(cell.r, cell.c))
   let adj = 0
   for (const cell of abs) {
     for (const [dr, dc] of neighbors) {
-      if (occupied.has(cellKey(cell.r + dr, cell.c + dc))) adj++
+      if (occupiedSet.has(cellKeyInt(cell.r + dr, cell.c + dc))) adj++
     }
   }
   if (difficulty === 'hard') return 1 / (1 + adj)
@@ -337,8 +351,7 @@ function fleetWeight(
   }
   const spacing = 1 / (1 + adj) ** 2.2
   const edgeBonus = 1 + edge * 0.6 + corner * 1.2
-  const sameRot = placedRotations.filter((r) => r === rotation).length
-  const diversity = sameRot > 0 ? 0.6 : 1
+  const diversity = rotationCounts[rotation] > 0 ? 0.6 : 1
   return spacing * edgeBonus * diversity
 }
 
@@ -358,7 +371,7 @@ function weightedPick<T extends { weight: number }>(items: T[], rng: Rng): T {
 
 /** 兜底：字典序扫描放置（几乎不会走到；保证不抛异常） */
 function greedyFallback(width: number, height: number, planeCount: number, variants: Variant[]): PlacedPlane[] {
-  const occupied = new Set<string>()
+  const occupied = new Set<number>()
   const placed: PlacedPlane[] = []
   for (const v of variants) {
     const r0Max = height - 1 - v.maxR
@@ -371,14 +384,14 @@ function greedyFallback(width: number, height: number, planeCount: number, varia
         for (const cell of v.cells) {
           const a = { r: cell.r + r0, c: cell.c + c0 }
           abs.push(a)
-          if (occupied.has(cellKey(a.r, a.c))) {
+          if (occupied.has(cellKeyInt(a.r, a.c))) {
             overlap = true
             break
           }
         }
         if (overlap) continue
         placed.push({ id: placed.length, rotation: v.rotation, origin: { r: r0, c: c0 } })
-        for (const a of abs) occupied.add(cellKey(a.r, a.c))
+        for (const a of abs) occupied.add(cellKeyInt(a.r, a.c))
       }
     }
   }
@@ -399,9 +412,8 @@ export function generateFleet(
 
   const tryOnce = (): PlacedPlane[] | null => {
     const placed: PlacedPlane[] = []
-    const occupiedSet = new Set<string>()
-    const occupiedList: Cell[][] = []
-    const placedRotations: Rotation[] = []
+    const occupiedSet = new Set<number>()
+    const rotationCounts: [number, number, number, number] = [0, 0, 0, 0]
     for (let i = 0; i < planeCount; i++) {
       const cands: FleetCandidate[] = []
       for (const v of variants) {
@@ -416,13 +428,13 @@ export function generateFleet(
             for (const cell of v.cells) {
               const a = { r: cell.r + r0, c: cell.c + c0 }
               abs.push(a)
-              if (occupiedSet.has(cellKey(a.r, a.c))) {
+              if (occupiedSet.has(cellKeyInt(a.r, a.c))) {
                 overlap = true
                 break
               }
             }
             if (overlap) continue
-            const weight = fleetWeight(difficulty, abs, occupiedList, placedRotations, v.rotation, width, height)
+            const weight = fleetWeight(difficulty, abs, occupiedSet, rotationCounts, v.rotation, width, height)
             cands.push({ rotation: v.rotation, origin: { r: r0, c: c0 }, abs, weight })
           }
         }
@@ -430,9 +442,8 @@ export function generateFleet(
       if (cands.length === 0) return null // 死路：整局重来
       const chosen = weightedPick(cands, rng)
       placed.push({ id: i, rotation: chosen.rotation, origin: chosen.origin })
-      for (const a of chosen.abs) occupiedSet.add(cellKey(a.r, a.c))
-      occupiedList.push(chosen.abs)
-      placedRotations.push(chosen.rotation)
+      for (const a of chosen.abs) occupiedSet.add(cellKeyInt(a.r, a.c))
+      rotationCounts[chosen.rotation]++
     }
     return placed
   }

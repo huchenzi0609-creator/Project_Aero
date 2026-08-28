@@ -121,7 +121,10 @@ describe('applyShot 基础语义', () => {
     const r3 = applyShot(r2.state!, { r: 1, c: 1 }) // 已毁 0 号机的残骸格 (1,1)
     expect(r3.outcome).toBe('miss')
     expect(r3.killedPlaneId).toBeUndefined()
-    expect(r3.state!.players[1].receivedShots).toHaveLength(3)
+    // 后手 receivedShots：r1 的 kill + r3 的 miss（r2 是后手打先手，记在先手 receivedShots）
+    expect(r3.state!.players[1].receivedShots).toHaveLength(2)
+    expect(r3.state!.players[1].receivedShots.map((s) => s.outcome)).toEqual(['kill', 'miss'])
+    expect(r3.state!.players[0].receivedShots).toHaveLength(1)
   })
 
   it('重复报点 → already-shot（按射击方 shotsFired 判定）', () => {
@@ -138,11 +141,19 @@ describe('applyShot 基础语义', () => {
 
   it('回合轮换与 turnNo 递增（连续 4 步）', () => {
     const g = state({ players: [board([onePlane()]), board([onePlane()])] })
+    // 各回合打不同空位，避免 already-shot；四角/下角均不在 (0,0) 飞机格内
+    const cells = [
+      { r: 9, c: 9 },
+      { r: 8, c: 9 },
+      { r: 9, c: 8 },
+      { r: 8, c: 8 },
+    ]
     let cur = g
     for (let i = 0; i < 4; i++) {
       const shooter = cur.turn
-      const r = applyShot(cur, { r: 9, c: 9 })
+      const r = applyShot(cur, cells[i]!)
       expect(r.ok).toBe(true)
+      expect(r.outcome).toBe('miss')
       expect(r.state!.turn).toBe((1 - shooter) as 0 | 1)
       expect(r.state!.turnNo).toBe(cur.turnNo + 1)
       cur = r.state!
