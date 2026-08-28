@@ -235,10 +235,8 @@ export async function startServer(options: StartOptions = {}): Promise<ServerHan
 /** 独立启动（tsx src/index.ts / dev 脚本） */
 export async function main(): Promise<void> {
   const handle = await startServer()
-  // eslint-disable-next-line no-console
   console.log(`[aero-server] 已启动：${handle.url}（健康检查 GET /health，Socket.IO 同端口）`)
   const shutdown = async (): Promise<void> => {
-    // eslint-disable-next-line no-console
     console.log('[aero-server] 正在关闭…')
     await handle.close()
     process.exit(0)

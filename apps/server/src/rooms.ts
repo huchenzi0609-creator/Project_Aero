@@ -40,7 +40,6 @@ import type { GameState } from '@aero/game-core'
 import {
   createTimingState,
   DEFAULT_TIMING_CONFIG,
-  freeze,
   handleTimeout,
   remainingMs,
   resume,

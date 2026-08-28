@@ -98,7 +98,7 @@ describe('围棋读秒（timing.ts）', () => {
   })
 
   it('断线宽限：冻结剩余时间、重连恢复 deadline（读秒暂停）', () => {
-    let s = startTurn(createTimingState(T), NOW, T)
+    const s = startTurn(createTimingState(T), NOW, T)
     // 断线发生在回合开始 5s 后 → 冻结剩余 15s
     const f = freeze(s, NOW + 5_000)
     expect(f.frozenRemainingMs).toBe(15_000)
@@ -112,7 +112,7 @@ describe('围棋读秒（timing.ts）', () => {
   })
 
   it('机器席位冻结/恢复不改变机器状态', () => {
-    let s = startTurn({ ...createTimingState(T), machine: true }, NOW, T)
+    const s = startTurn({ ...createTimingState(T), machine: true }, NOW, T)
     expect(s.deadline).toBeNull()
     const f = freeze(s, NOW + 5_000)
     expect(f.frozenRemainingMs).toBeNull()

@@ -217,7 +217,6 @@ describe('联机全流程（真实服务器 × 双客户端）', () => {
     const resolved = resolveGameCore()
     core = resolved.core
     server = await startServer({ port: 0, dataDir: ':memory:', roomManagerOptions: { core } })
-    // eslint-disable-next-line no-console
     console.log(`[integration] game-core 实现：${resolved.used}`)
   })
   afterAll(async () => {
@@ -339,7 +338,7 @@ describe('联机全流程（真实服务器 × 双客户端）', () => {
 
       // 先手判定
       const tsA = await a.waitFor<{ yourTurn: boolean }>('turnStart')
-      const tsB = await b.waitFor<{ yourTurn: boolean }>('turnStart')
+      await b.waitFor<{ yourTurn: boolean }>('turnStart')
       const first = tsA.yourTurn ? a : b
       const second = tsA.yourTurn ? b : a
       const firstYou = tsA.yourTurn ? youA : youB
@@ -414,7 +413,7 @@ describe('断线重连与超时判负（reconnectGraceMs=400ms）', () => {
       const b = new TestClient(server.url)
       let b2: TestClient | null = null
       try {
-        const idA = await authClient(a)
+        await authClient(a)
       const idB = await authClient(b)
       const config = PRESETS.small
       const fleetA = core.generateFleet(config.width, config.height, config.planeCount, config.shape, 'normal', core.mulberry32(21))
@@ -423,7 +422,7 @@ describe('断线重连与超时判负（reconnectGraceMs=400ms）', () => {
       await readyBoth(a, b)
 
       const tsA = await a.waitFor<{ yourTurn: boolean }>('turnStart')
-      const tsB = await b.waitFor<{ yourTurn: boolean }>('turnStart')
+      await b.waitFor<{ yourTurn: boolean }>('turnStart')
       const firstIsA = tsA.yourTurn
 
       // 若先手是 A：A 走一步（空格，保证 miss），把回合推进到 B

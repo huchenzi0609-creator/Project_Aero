@@ -1,6 +1,9 @@
 /**
  * SQLite 存储（db.ts）与游客身份（identity.ts）单测 + HTTP 端点测试。
  */
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { Store } from '../src/db'
 import { generateGuestName, IdentityService, sha256Hex } from '../src/identity'
@@ -62,9 +65,6 @@ describe('SQLite 存储（db.ts）', () => {
   })
 
   it('持久化到文件后重新打开仍可读（DATA_DIR 落盘）', () => {
-    const { mkdtempSync } = require('node:fs') as typeof import('node:fs')
-    const { tmpdir } = require('node:os') as typeof import('node:os')
-    const { join } = require('node:path') as typeof import('node:path')
     const dir = mkdtempSync(join(tmpdir(), 'aero-db-'))
     const path = join(dir, 'test.db')
     const s1 = new Store(path)
