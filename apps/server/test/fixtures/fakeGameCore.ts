@@ -82,9 +82,10 @@ export function validateShape(shape: PlaneShape): { ok: true } | { ok: false; er
   }
   // 四邻连通（BFS）
   if (cells.length > 0) {
+    const start = cells[0] as Cell
     const set = new Set(cells.map((c) => `${c.r},${c.c}`))
-    const queue = [cells[0]]
-    const visited = new Set([`${cells[0].r},${cells[0].c}`])
+    const queue = [start]
+    const visited = new Set([`${start.r},${start.c}`])
     while (queue.length > 0) {
       const cur = queue.shift() as Cell
       for (const [dr, dc] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
@@ -122,7 +123,7 @@ export function parseCoord(input: string): Cell | null {
   const s = input.trim()
   const m = /^([A-Za-z])(\d{1,2})$/.exec(s)
   if (!m) return null
-  const c = m[1].toUpperCase().charCodeAt(0) - 65
+  const c = (m[1] as string).toUpperCase().charCodeAt(0) - 65
   const r = Number(m[2]) - 1
   if (r < 0) return null
   return { r, c }

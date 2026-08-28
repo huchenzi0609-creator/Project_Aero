@@ -88,6 +88,8 @@ function smoothOutline(cells: { r: number; c: number }[]): string {
 }
 
 export function PlaneGlyph({ shape, rotation = 0, wrecked = false, className }: PlaneGlyphProps) {
+  const uid = useId().replace(/[^a-zA-Z0-9]/g, '')
+  const fillId = `plane-fill-${uid}`
   const rotated = rotateShape(shape, rotation)
   const b = shapeBBox(rotated.cells)
   if (!b) return null
@@ -95,8 +97,6 @@ export function PlaneGlyph({ shape, rotation = 0, wrecked = false, className }: 
   const h = b.r1 - b.r0 + 1
   const pad = 0.26
 
-  const uid = useId().replace(/[^a-zA-Z0-9]/g, '')
-  const fillId = `plane-fill-${uid}`
   const outline = smoothOutline(rotated.cells)
 
   // 质心 -> 机头方向（鼻尖突出）

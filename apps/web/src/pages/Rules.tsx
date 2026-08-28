@@ -7,6 +7,7 @@ import { PaperGrid } from '../components/grid/PaperGrid'
 import { StampMark } from '../components/grid/StampMark'
 
 const DEMO_PLANES: PlacedPlane[] = [{ id: 0, rotation: 0, origin: { r: 0, c: 0 } }]
+const DEMO_PLANES_ROT: PlacedPlane[] = [{ id: 1, rotation: 1, origin: { r: 0, c: 0 } }]
 const DEMO_SHOTS: Shot[] = [
   { coord: { r: 0, c: 0 }, outcome: 'miss' },
   { coord: { r: 1, c: 4 }, outcome: 'hit' },
@@ -57,7 +58,16 @@ export function Rules() {
                 <figcaption className="rules__fig-caption">默认飞机形状（机头为深色座舱）</figcaption>
               </figure>
               <figure className="rules__fig">
-                <PaperGrid width={5} height={5} cellSize={26} showLabels invertMarks={false} ariaLabel="飞机放置示意" />
+                <PaperGrid
+                  width={5}
+                  height={5}
+                  cellSize={26}
+                  showLabels
+                  planes={DEMO_PLANES_ROT}
+                  shape={DEFAULT_PLANE_SHAPE}
+                  invertMarks={false}
+                  ariaLabel="飞机旋转示意"
+                />
                 <figcaption className="rules__fig-caption">飞机严格占满所属格位，可四向旋转</figcaption>
               </figure>
             </div>

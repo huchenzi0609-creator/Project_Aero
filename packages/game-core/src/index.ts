@@ -376,7 +376,7 @@ export function applyShot(state: GameState, coord: Cell): ShotResult {
     shooter === 0 ? [newShooter, newTarget] : [newTarget, newShooter]
 
   // 6) 胜负与绝地反击
-  let phase = state.phase
+  let phase: GamePhase = state.phase
   let turn = state.turn
   let turnNo = state.turnNo
   let winner: 0 | 1 | null = state.winner

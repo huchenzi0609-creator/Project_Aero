@@ -24,6 +24,7 @@ import {
   placedPlaneSchema,
   PRESETS,
   RECONNECT_GRACE_MS,
+  ROOM_CODE_LENGTH,
   type Cell,
   type ClientToServerEvents,
   type GameEndPayload,
@@ -195,7 +196,7 @@ export class RoomManager {
   private uniqueCode(): string {
     for (;;) {
       let code = ''
-      for (let i = 0; i < 6; i++) {
+      for (let i = 0; i < ROOM_CODE_LENGTH; i++) {
         code += ROOM_CODE_ALPHABET[randomInt(ROOM_CODE_ALPHABET.length)]
       }
       if (!this.rooms.has(code)) return code
@@ -474,6 +475,8 @@ export class RoomManager {
       }
       game = res.state ?? game
     }
+    // createGame 返回的阶段为 placing，双方就绪后显式进入 playing（applyShot 仅允许 playing/counterattack）
+    game = { ...game, phase: 'playing' }
     room.game = game
     room.phase = 'playing'
     room.gameStartedAt = Date.now()
@@ -606,7 +609,7 @@ export class RoomManager {
         player0: room.seats[0].fleet ?? [],
         player1: room.seats[1].fleet ?? [],
       },
-      stats: { turnCount: room.shotLog.length },
+      stats: this.computeStats(room),
     }
     room.endPayload = payload
     for (const s of room.seats) this.emitToSeat(s, 'gameEnd', payload)
@@ -615,6 +618,14 @@ export class RoomManager {
     room.destroyTimer = setTimeout(() => {
       this.rooms.delete(room.code)
     }, this.reconnectGraceMs)
+  }
+
+  /** 终局统计：回合数/总报点数/命中数（含击毁）/击毁架数 */
+  private computeStats(room: Room): GameEndPayload['stats'] {
+    const shotsFired = room.shotLog.length
+    const hitCount = room.shotLog.filter((e) => e.outcome === 'hit' || e.outcome === 'kill').length
+    const killCount = room.shotLog.filter((e) => e.outcome === 'kill').length
+    return { turnCount: shotsFired, shotsFired, hitCount, killCount }
   }
 
   private persistGame(room: Room, winner: 0 | 1, reason: string): void {
@@ -681,7 +692,7 @@ export class RoomManager {
       room.turnDeadline = null
     }
     this.broadcastRoomUpdate(room)
-    const opp = room.seats[1 - seat.index]
+    const opp = room.seats[(1 - seat.index) as 0 | 1]
     this.emitToSeat(opp, 'opponentDisconnected', { reconnectGraceMs: this.reconnectGraceMs })
     // 机器接管席位不再因断线判负（机器继续代打）
     if (seat.machine) return
@@ -709,7 +720,7 @@ export class RoomManager {
       seat.disconnectTimer = null
     }
     this.broadcastRoomUpdate(room)
-    const opp = room.seats[1 - seat.index]
+    const opp = room.seats[(1 - seat.index) as 0 | 1]
     if (room.phase === 'playing' || room.phase === 'counterattack') {
       this.emitToSeat(opp, 'opponentReconnected')
     }

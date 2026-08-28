@@ -9,7 +9,7 @@ export interface PaperToggleProps
   description?: string
 }
 
-/** 纸材开关（role="switch"）：纸槽 + 纸片滑块 */
+/** 纸材开关（role="switch"）：纸槽 + 纸片滑块；轨道与文字均可点击 */
 export function PaperToggle({
   label,
   checked,
@@ -23,18 +23,20 @@ export function PaperToggle({
   const inputId = id ?? uid
   return (
     <div className={['paper-toggle', className].filter(Boolean).join(' ')}>
-      <input
-        id={inputId}
-        type="checkbox"
-        role="switch"
-        className="paper-toggle__input"
-        checked={checked}
-        onChange={(e) => onChange(e.target.checked)}
-        {...rest}
-      />
-      <span className="paper-toggle__track" aria-hidden="true">
-        <span className="paper-toggle__knob" />
-      </span>
+      <label className="paper-toggle__switch" htmlFor={inputId}>
+        <input
+          id={inputId}
+          type="checkbox"
+          role="switch"
+          className="paper-toggle__input"
+          checked={checked}
+          onChange={(e) => onChange(e.target.checked)}
+          {...rest}
+        />
+        <span className="paper-toggle__track" aria-hidden="true">
+          <span className="paper-toggle__knob" />
+        </span>
+      </label>
       <span className="paper-toggle__body">
         <label className="paper-toggle__label" htmlFor={inputId}>
           {label}

@@ -116,7 +116,7 @@ export class Store {
 
   /** 全部用户（测试用） */
   allUsers(): UserRow[] {
-    return this.db.prepare('SELECT * FROM users ORDER BY id').all() as UserRow[]
+    return this.db.prepare('SELECT * FROM users ORDER BY id').all() as unknown as UserRow[]
   }
 
   /** 写入一盘对局 */
@@ -144,7 +144,7 @@ export class Store {
 
   /** 对局（测试用） */
   allGames(): GameRow[] {
-    return this.db.prepare('SELECT * FROM games ORDER BY id').all() as GameRow[]
+    return this.db.prepare('SELECT * FROM games ORDER BY id').all() as unknown as GameRow[]
   }
 
   /** 更新用户战绩（wins/losses/games 增量） */

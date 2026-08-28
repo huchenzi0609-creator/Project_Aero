@@ -197,7 +197,7 @@ export function CustomConfig() {
               飞机形状编辑器
             </h2>
             <span className="editor-count">
-              已填格数：{cells.length} / {SHAPE_MAX_CELLS}
+              已填格数：{useDefault ? DEFAULT_PLANE_SHAPE.cells.length : cells.length} / {SHAPE_MAX_CELLS}
             </span>
           </div>
 

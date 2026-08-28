@@ -76,7 +76,11 @@ export function GameScreenPlaceholder({ mode = 'single' }: { mode?: 'single' | '
     return clamp(Math.floor((availW - 20) / config.width), 10, 30)
   }, [orientation, viewport, config])
 
-  const miniCell = Math.max(8, Math.floor(mainCell / 2))
+  const miniCell = clamp(
+    Math.min(Math.floor(mainCell / 2), Math.floor((viewport.width / 2 - 44) / config.width)),
+    6,
+    20,
+  )
   const refCell = Math.min(24, Math.max(13, Math.floor(mainCell * 0.8)))
 
   // 我方阵型（演示桩：确定性随机摆阵）

@@ -1,11 +1,17 @@
 /**
- * @aero/game-core/ai —— WIP 占位（M2 核心 Agent 将按 docs/game-core-api.md 契约实现本文件）。
+ * @aero/game-core/ai —— M2 四级难度 AI
+ *
+ * 按 docs/game-core-api.md 契约实现。
+ * 硬性约束：chooseShot 只消费 ShotKnowledge（棋盘尺寸 + 历次报点 + 飞机形状），
+ * 绝不访问对方阵型；永不越界、永不重复报点。generateFleet 产物保证通过 validateFleet。
+ * 性能：26×26 下单次 chooseShot 纯枚举即可 < 50ms，零第三方依赖。
  */
-/* eslint-disable @typescript-eslint/no-unused-vars */
-import type { Cell, Difficulty, PlaneShape, PlacedPlane, Shot } from '@aero/shared'
+import type { Cell, Difficulty, PlaneShape, PlacedPlane, Rotation, Shot } from '@aero/shared'
+import { normalizeShape, rotateShape, validateFleet } from '../index.js'
 
 export type Rng = () => number
 
+/** mulberry32 伪随机数生成器（确定性：同种子同序列） */
 export function mulberry32(seed: number): Rng {
   let a = seed >>> 0
   return () => {
@@ -17,17 +23,333 @@ export function mulberry32(seed: number): Rng {
   }
 }
 
+/** 射击方的全部知识：棋盘尺寸 + 历次报点结果（绝不包含对方阵型） */
 export interface ShotKnowledge {
   width: number
   height: number
-  shots: Shot[]
-  planeShape: PlaneShape
+  shots: Shot[] // { coord, outcome }，outcome 'kill' 的 coord 即机头位置
+  planeShape: PlaneShape // 本局飞机形状（用于热图）
 }
 
+/* ---------------- 内部工具 ---------------- */
+
+const cellKey = (r: number, c: number): string => `${r},${c}`
+
+/** 形状的一个旋转变体（含旋转后包围盒下界，用于快速枚举合法摆放） */
+interface Variant {
+  rotation: Rotation
+  cells: Cell[]
+  head: Cell
+  maxR: number
+  maxC: number
+}
+
+function makeVariants(shape: PlaneShape): Variant[] {
+  const norm = normalizeShape(shape)
+  const variants: Variant[] = []
+  for (let rot = 0; rot < 4; rot++) {
+    const rotated = rotateShape(norm, rot as Rotation)
+    let maxR = -Infinity
+    let maxC = -Infinity
+    for (const cell of rotated.cells) {
+      if (cell.r > maxR) maxR = cell.r
+      if (cell.c > maxC) maxC = cell.c
+    }
+    variants.push({ rotation: rot as Rotation, cells: rotated.cells, head: rotated.head, maxR, maxC })
+  }
+  return variants
+}
+
+/** 全部未报点格 */
+function allUnshotCells(knowledge: ShotKnowledge): Cell[] {
+  const shot = new Set<string>()
+  for (const s of knowledge.shots) shot.add(cellKey(s.coord.r, s.coord.c))
+  const out: Cell[] = []
+  for (let r = 0; r < knowledge.height; r++) {
+    for (let c = 0; c < knowledge.width; c++) {
+      if (!shot.has(cellKey(r, c))) out.push({ r, c })
+    }
+  }
+  return out
+}
+
+function pickRandom<T>(arr: T[], rng: Rng): T {
+  return arr[Math.floor(rng() * arr.length)]!
+}
+
+/** normal：未处理 hit 的 4 邻格候选（已报/越界格自动排除） */
+function huntCandidates(knowledge: ShotKnowledge): Cell[] {
+  const shot = new Set<string>()
+  for (const s of knowledge.shots) shot.add(cellKey(s.coord.r, s.coord.c))
+  const seen = new Set<string>()
+  const out: Cell[] = []
+  for (const s of knowledge.shots) {
+    if (s.outcome !== 'hit') continue
+    const neighbors = [
+      { r: s.coord.r - 1, c: s.coord.c },
+      { r: s.coord.r + 1, c: s.coord.c },
+      { r: s.coord.r, c: s.coord.c - 1 },
+      { r: s.coord.r, c: s.coord.c + 1 },
+    ]
+    for (const n of neighbors) {
+      const key = cellKey(n.r, n.c)
+      if (n.r >= 0 && n.r < knowledge.height && n.c >= 0 && n.c < knowledge.width && !shot.has(key) && !seen.has(key)) {
+        seen.add(key)
+        out.push(n)
+      }
+    }
+  }
+  return out
+}
+
+/* ---------------- 热图 ---------------- */
+
+/** hit 格被覆盖的加分（命中后围杀优先） */
+const HIT_WEIGHT = 8
+/** miss 格被覆盖的降权（miss 可能属已毁残骸，故降权而非排除） */
+const MISS_WEIGHT = 2
+/** hell 的随机扰动概率（≤5%） */
+const PERTURB_PROB = 0.05
+/** 残骸多解格的降权系数 */
+const WRECKAGE_FACTOR = 0.5
+
+/**
+ * 热图：枚举形状 4 旋转的全部合法摆放位，按历史反馈加权——
+ * hit 格应被覆盖（加分）、kill 机头格被覆盖则直接排除、miss 格被覆盖降权（不排除）。
+ * hell 额外叠加：残骸多解建模 + 边缘/角落布阵习惯先验。
+ */
+function buildHeatmap(knowledge: ShotKnowledge, hell: boolean): Map<string, number> {
+  const variants = makeVariants(knowledge.planeShape)
+  const shotMap = new Map<string, Shot>()
+  for (const s of knowledge.shots) shotMap.set(cellKey(s.coord.r, s.coord.c), s)
+
+  const scores = new Map<string, number>()
+  for (const v of variants) {
+    if (v.cells.length === 0) continue
+    const r0Max = knowledge.height - 1 - v.maxR
+    const c0Max = knowledge.width - 1 - v.maxC
+    if (r0Max < 0 || c0Max < 0) continue
+    for (let r0 = 0; r0 <= r0Max; r0++) {
+      for (let c0 = 0; c0 <= c0Max; c0++) {
+        let weight = 1
+        let invalid = false
+        const covered: string[] = []
+        for (const cell of v.cells) {
+          const key = cellKey(cell.r + r0, cell.c + c0)
+          covered.push(key)
+          const s = shotMap.get(key)
+          if (!s) continue
+          if (s.outcome === 'kill') {
+            invalid = true
+            break
+          } else if (s.outcome === 'hit') {
+            weight += HIT_WEIGHT
+          } else {
+            weight -= MISS_WEIGHT
+          }
+        }
+        if (invalid) continue
+        for (const key of covered) {
+          scores.set(key, (scores.get(key) ?? 0) + weight)
+        }
+      }
+    }
+  }
+
+  if (hell) {
+    applyWreckageModel(knowledge, variants, shotMap, scores)
+    applyHabitPrior(knowledge, scores)
+  }
+  return scores
+}
+
+/**
+ * 残骸多解建模：由 kill 机头位置 + 各旋转推断该机可能的全部残骸格，
+ * 降低这些格的射击价值（避免在已毁飞机上浪费报点）。hit/kill 格已确认不属于该机残骸，跳过。
+ */
+function applyWreckageModel(
+  knowledge: ShotKnowledge,
+  variants: Variant[],
+  shotMap: Map<string, Shot>,
+  scores: Map<string, number>,
+): void {
+  const wreckage = new Set<string>()
+  for (const s of knowledge.shots) {
+    if (s.outcome !== 'kill') continue
+    for (const v of variants) {
+      const dr = s.coord.r - v.head.r
+      const dc = s.coord.c - v.head.c
+      for (const cell of v.cells) {
+        const ar = cell.r + dr
+        const ac = cell.c + dc
+        if (ar < 0 || ar >= knowledge.height || ac < 0 || ac >= knowledge.width) continue
+        const key = cellKey(ar, ac)
+        const st = shotMap.get(key)
+        // hit/kill 格已确认不属于该机残骸（属于存活飞机或另一机头）
+        if (st !== undefined && st.outcome !== 'miss') continue
+        wreckage.add(key)
+      }
+    }
+  }
+  for (const key of wreckage) {
+    const cur = scores.get(key)
+    if (cur !== undefined && cur > 0) scores.set(key, cur * WRECKAGE_FACTOR)
+  }
+}
+
+/** 对手布阵习惯先验：边缘/角落小幅加权（只在热图得分相近时起作用） */
+function applyHabitPrior(knowledge: ShotKnowledge, scores: Map<string, number>): void {
+  for (const [key, val] of scores) {
+    const comma = key.indexOf(',')
+    const r = Number(key.slice(0, comma))
+    const c = Number(key.slice(comma + 1))
+    const onEdge = r === 0 || r === knowledge.height - 1 || c === 0 || c === knowledge.width - 1
+    const inCorner = (r === 0 || r === knowledge.height - 1) && (c === 0 || c === knowledge.width - 1)
+    const bonus = (onEdge ? 0.5 : 0) + (inCorner ? 0.5 : 0)
+    if (bonus > 0) scores.set(key, val + bonus)
+  }
+}
+
+/* ---------------- chooseShot ---------------- */
+
+/** 返回下一个报点坐标。硬性约束：不得越界、不得重复、只使用 knowledge。 */
 export function chooseShot(knowledge: ShotKnowledge, difficulty: Difficulty, rng: Rng): Cell {
-  throw new Error('WIP: game-core AI 尚未实现（M2）')
+  const unshot = allUnshotCells(knowledge)
+  // 防御：全部格已报（正常对局不会出现），返回原点
+  if (unshot.length === 0) return { r: 0, c: 0 }
+
+  if (difficulty === 'easy') {
+    // 简单：未报格均匀随机（不利用任何反馈信息）
+    return pickRandom(unshot, rng)
+  }
+
+  if (difficulty === 'normal') {
+    // 正常：有未处理 hit 时围杀其 4 邻格（随机取一），否则均匀随机
+    const hunt = huntCandidates(knowledge)
+    if (hunt.length > 0) return pickRandom(hunt, rng)
+    return pickRandom(unshot, rng)
+  }
+
+  const hell = difficulty === 'hell'
+  // 地狱：≤5% 随机扰动（拟人化）
+  if (hell && rng() < PERTURB_PROB) return pickRandom(unshot, rng)
+
+  const scores = buildHeatmap(knowledge, hell)
+  let bestCells: Cell[] = []
+  let bestScore = -Infinity
+  for (const cell of unshot) {
+    const score = scores.get(cellKey(cell.r, cell.c)) ?? 0
+    if (score > bestScore) {
+      bestScore = score
+      bestCells = [cell]
+    } else if (score === bestScore) {
+      bestCells.push(cell)
+    }
+  }
+  // 无任何合法摆放（形状异常等）：退回均匀随机
+  if (bestCells.length === 0) return pickRandom(unshot, rng)
+  // 取最高分，同分随机破平
+  return pickRandom(bestCells, rng)
 }
 
+/* ---------------- generateFleet ---------------- */
+
+interface FleetCandidate {
+  rotation: Rotation
+  origin: Cell
+  abs: Cell[]
+  weight: number
+}
+
+/**
+ * 候选摆位的权重：
+ * easy/normal 均匀随机；hard 惩罚聚集（4 邻相邻数）；hell 防御性——大间距（8 邻）
+ * + 角落/边缘偏好 + 旋转多样性（非对称）。
+ */
+function fleetWeight(
+  difficulty: Difficulty,
+  abs: Cell[],
+  occupiedList: Cell[][],
+  placedRotations: Rotation[],
+  rotation: Rotation,
+  width: number,
+  height: number,
+): number {
+  if (difficulty === 'easy' || difficulty === 'normal') return 1
+  const neighbors: Array<[number, number]> =
+    difficulty === 'hell'
+      ? [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]]
+      : [[1, 0], [-1, 0], [0, 1], [0, -1]]
+  const occupied = new Set<string>()
+  for (const list of occupiedList) for (const cell of list) occupied.add(cellKey(cell.r, cell.c))
+  let adj = 0
+  for (const cell of abs) {
+    for (const [dr, dc] of neighbors) {
+      if (occupied.has(cellKey(cell.r + dr, cell.c + dc))) adj++
+    }
+  }
+  if (difficulty === 'hard') return 1 / (1 + adj)
+
+  // hell：防御性摆位
+  let edge = 0
+  let corner = 0
+  for (const cell of abs) {
+    const onEdge = cell.r === 0 || cell.r === height - 1 || cell.c === 0 || cell.c === width - 1
+    const inCorner = (cell.r === 0 || cell.r === height - 1) && (cell.c === 0 || cell.c === width - 1)
+    if (onEdge) edge++
+    if (inCorner) corner++
+  }
+  const spacing = 1 / (1 + adj) ** 2.2
+  const edgeBonus = 1 + edge * 0.6 + corner * 1.2
+  const sameRot = placedRotations.filter((r) => r === rotation).length
+  const diversity = sameRot > 0 ? 0.6 : 1
+  return spacing * edgeBonus * diversity
+}
+
+function weightedPick<T extends { weight: number }>(items: T[], rng: Rng): T {
+  let total = 0
+  for (const item of items) total += item.weight
+  if (total <= 0 || !Number.isFinite(total)) {
+    return items[Math.floor(rng() * items.length)]!
+  }
+  let x = rng() * total
+  for (const item of items) {
+    x -= item.weight
+    if (x <= 0) return item
+  }
+  return items[items.length - 1]!
+}
+
+/** 兜底：字典序扫描放置（几乎不会走到；保证不抛异常） */
+function greedyFallback(width: number, height: number, planeCount: number, variants: Variant[]): PlacedPlane[] {
+  const occupied = new Set<string>()
+  const placed: PlacedPlane[] = []
+  for (const v of variants) {
+    const r0Max = height - 1 - v.maxR
+    const c0Max = width - 1 - v.maxC
+    for (let r0 = 0; r0 <= r0Max; r0++) {
+      for (let c0 = 0; c0 <= c0Max; c0++) {
+        if (placed.length >= planeCount) return placed
+        const abs: Cell[] = []
+        let overlap = false
+        for (const cell of v.cells) {
+          const a = { r: cell.r + r0, c: cell.c + c0 }
+          abs.push(a)
+          if (occupied.has(cellKey(a.r, a.c))) {
+            overlap = true
+            break
+          }
+        }
+        if (overlap) continue
+        placed.push({ id: placed.length, rotation: v.rotation, origin: { r: r0, c: c0 } })
+        for (const a of abs) occupied.add(cellKey(a.r, a.c))
+      }
+    }
+  }
+  return placed
+}
+
+/** 生成合法机队（产物保证通过 validateFleet）。 */
 export function generateFleet(
   width: number,
   height: number,
@@ -36,5 +358,61 @@ export function generateFleet(
   difficulty: Difficulty,
   rng: Rng,
 ): PlacedPlane[] {
-  throw new Error('WIP: game-core AI 尚未实现（M2）')
+  const norm = normalizeShape(shape)
+  const variants = makeVariants(norm)
+
+  const tryOnce = (): PlacedPlane[] | null => {
+    const placed: PlacedPlane[] = []
+    const occupiedSet = new Set<string>()
+    const occupiedList: Cell[][] = []
+    const placedRotations: Rotation[] = []
+    for (let i = 0; i < planeCount; i++) {
+      const cands: FleetCandidate[] = []
+      for (const v of variants) {
+        if (v.cells.length === 0) continue
+        const r0Max = height - 1 - v.maxR
+        const c0Max = width - 1 - v.maxC
+        if (r0Max < 0 || c0Max < 0) continue
+        for (let r0 = 0; r0 <= r0Max; r0++) {
+          for (let c0 = 0; c0 <= c0Max; c0++) {
+            const abs: Cell[] = []
+            let overlap = false
+            for (const cell of v.cells) {
+              const a = { r: cell.r + r0, c: cell.c + c0 }
+              abs.push(a)
+              if (occupiedSet.has(cellKey(a.r, a.c))) {
+                overlap = true
+                break
+              }
+            }
+            if (overlap) continue
+            const weight = fleetWeight(difficulty, abs, occupiedList, placedRotations, v.rotation, width, height)
+            cands.push({ rotation: v.rotation, origin: { r: r0, c: c0 }, abs, weight })
+          }
+        }
+      }
+      if (cands.length === 0) return null // 死路：整局重来
+      const chosen = weightedPick(cands, rng)
+      placed.push({ id: i, rotation: chosen.rotation, origin: chosen.origin })
+      for (const a of chosen.abs) occupiedSet.add(cellKey(a.r, a.c))
+      occupiedList.push(chosen.abs)
+      placedRotations.push(chosen.rotation)
+    }
+    return placed
+  }
+
+  for (let attempt = 0; attempt < 2000; attempt++) {
+    const fleet = tryOnce()
+    if (fleet !== null) {
+      const check = validateFleet(width, height, planeCount, norm, fleet)
+      if (check.ok) return fleet
+    }
+  }
+  // 兜底：字典序放置；若仍不合法（密度过高等极端场景）则抛错
+  const fallback = greedyFallback(width, height, planeCount, variants)
+  const check = validateFleet(width, height, planeCount, norm, fallback)
+  if (!check.ok) {
+    throw new Error(`无法在 ${width}×${height} 棋盘上生成 ${planeCount} 架合法机队`)
+  }
+  return fallback
 }

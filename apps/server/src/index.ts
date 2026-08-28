@@ -9,7 +9,7 @@ import { createServer, type Server as HttpServer } from 'node:http'
 import { join } from 'node:path'
 import express, { type Express } from 'express'
 import { Server } from 'socket.io'
-import type { ClientToServerEvents, ServerToClientEvents } from '@aero/shared'
+import type { ClientToServerEvents, RoomSummary, ServerToClientEvents } from '@aero/shared'
 import { Store } from './db'
 import { IdentityService } from './identity'
 import { RoomManager, type RoomManagerOptions, type ServerIO, type SocketData } from './rooms'
@@ -82,9 +82,8 @@ function wireSocketEvents(io: ServerIO, roomManager: RoomManager, identityServic
       const { identity } = identityService.resolveIdentity(token)
       socket.data.userId = identity.id
       socket.data.userName = identity.name
-      const payload = { identity }
       socket.emit('identity', identity)
-      ack?.({ ok: true, ...payload })
+      ack?.({ identity })
       const gameId = typeof p?.gameId === 'string' && p.gameId.trim().length > 0 ? p.gameId.trim() : undefined
       if (gameId) {
         // 若正处于该对局的断线宽限期，自动恢复（与 reconnect 同一路径）
@@ -92,34 +91,38 @@ function wireSocketEvents(io: ServerIO, roomManager: RoomManager, identityServic
       }
     })
 
-    // 建房（协议无独立 matchmake 事件：约定 payload.match === true 表示进入公网匹配，见 rooms.ts）
+    // 建房（协议事件：config + match?；match: true 表示进入公网匹配，见 rooms.ts）
     socket.on('createRoom', (p, ack) => {
       if (!socket.data.userId) {
-        ack?.({ ok: false, error: '请先认证身份' })
+        ack?.({ error: '请先认证身份' } as unknown as { roomCode?: string })
         return
       }
       const userId = socket.data.userId
       const name = socket.data.userName ?? '游客'
-      const wantMatch = typeof (p as { match?: unknown }).match === 'boolean' && (p as { match: boolean }).match
-      const res = wantMatch
+      const res: { ok: boolean; code?: string; error?: string } = p?.match
         ? roomManager.matchmake(userId, name, socket.id, p?.config)
         : roomManager.createRoom(userId, name, socket.id, p?.config)
-      ack?.(res.ok ? { ok: true, roomCode: res.code } : { ok: false, error: res.error })
+      if (!res.ok) {
+        // 协议 ack 未声明 error 字段，这里运行时附加以便前端诊断（M6 可按需断言）
+        ack?.({ error: res.error } as unknown as { roomCode?: string })
+        return
+      }
+      ack?.({ roomCode: res.code })
     })
 
     socket.on('joinRoom', (p, ack) => {
       if (!socket.data.userId) {
-        ack?.({ ok: false, error: '请先认证身份' })
+        ack?.({ error: '请先认证身份' } as unknown as { room?: RoomSummary })
         return
       }
       const code = typeof p?.code === 'string' ? p.code.trim().toUpperCase() : ''
       const res = roomManager.joinRoom(socket.data.userId, socket.data.userName ?? '游客', socket.id, code)
       if (!res.ok) {
-        ack?.({ ok: false, error: res.error })
+        ack?.({ error: res.error } as unknown as { room?: RoomSummary })
         return
       }
       const room = roomManager.roomSummaryOfCode(code)
-      ack?.({ ok: true, room })
+      ack?.({ room })
     })
 
     socket.on('leaveRoom', () => {
@@ -128,11 +131,11 @@ function wireSocketEvents(io: ServerIO, roomManager: RoomManager, identityServic
 
     socket.on('placeFleet', (p, ack) => {
       if (!socket.data.userId) {
-        ack?.({ ok: false, error: '请先认证身份' })
+        ack?.({ errors: ['请先认证身份'] })
         return
       }
       const res = roomManager.placeFleet(socket.data.userId, p?.planes)
-      ack?.(res.ok ? { ok: true } : { ok: false, error: res.error })
+      ack?.({ errors: res.ok ? [] : [res.error] })
     })
 
     socket.on('ready', (ack) => {

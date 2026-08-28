@@ -228,6 +228,10 @@
   display: flex;
   align-items: flex-start;
   gap: 12px;
+}
+.paper-toggle__switch {
+  display: inline-flex;
+  flex: none;
   cursor: pointer;
 }
 .paper-toggle__input {
@@ -278,6 +282,7 @@
 }
 .paper-toggle__label {
   font-size: 17px;
+  cursor: pointer;
 }
 .paper-toggle__desc {
   font-size: 13px;
@@ -474,6 +479,8 @@
   border-right: 1px solid var(--pencil-faint);
   border-bottom: 1px solid var(--pencil-faint);
   background: transparent;
+  font: inherit;
+  color: inherit;
   cursor: default;
 }
 .paper-grid__cell--clickable {

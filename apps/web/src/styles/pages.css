@@ -663,6 +663,7 @@
   width: 130px;
   text-align: center;
   letter-spacing: 0.08em;
+  padding: 9px 12px;
 }
 .game__hint {
   font-size: 12.5px;
