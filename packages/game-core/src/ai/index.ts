@@ -1,6 +1,7 @@
 /**
  * @aero/game-core/ai —— WIP 占位（M2 核心 Agent 将按 docs/game-core-api.md 契约实现本文件）。
  */
+/* eslint-disable @typescript-eslint/no-unused-vars */
 import type { Cell, Difficulty, PlaneShape, PlacedPlane, Shot } from '@aero/shared'
 
 export type Rng = () => number

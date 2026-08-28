@@ -2,6 +2,7 @@
  * @aero/game-core —— WIP 占位（M1 核心 Agent 将按 docs/game-core-api.md 契约实现本文件）。
  * 占位目的：让 apps/server、apps/web 在 M1 完成前即可按契约通过类型检查。
  */
+/* eslint-disable @typescript-eslint/no-unused-vars */
 import type {
   Cell,
   Difficulty,
