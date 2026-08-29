@@ -8,7 +8,10 @@
  * - flash：对方报点 0.8s 高亮动画格（我方网格）
  * - coloredCells：着色图层（可选，渲染在盖章标记下层；缺省不渲染，零开销）
  * - coloring：着色交互（可选，默认关闭不影响现有调用方）：开启后接管棋盘指针事件，
- *   点按染色 / 按住拖拽按路径染色 / 同色擦除，并屏蔽 onCellClick（不触发报点）
+ *   点按染色 / 按住拖拽按路径染色 / 同色擦除，并屏蔽 onCellClick（不触发报点）。
+ *   v0.2.1：点击（纯点按松手）走三态（染/擦/覆写），拖拽经过（起点与路径）走两态
+ *   （染/覆写，同色保持不变）——手势判定在本组件完成：手势中的染色一律以 drag 触发，
+ *   纯点击在松手时若按下前即当前色则补发 click 擦除。
  */
 import { useRef } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
@@ -17,7 +20,7 @@ import { formatCoord, occupiedCells, rotateShape } from '@aero/game-core'
 import { colLetter } from '../../lib/coord'
 import { cellsBBox } from '../../lib/shape'
 import { useSettingsStore } from '../../store/settingsStore'
-import type { ColoredCell, ColoringColor } from './ColoringTool'
+import type { ColoredCell, ColoringColor, PaintKind } from './ColoringTool'
 import { PlaneGlyph } from './PlaneGlyph'
 import { StampMark } from './StampMark'
 
@@ -37,11 +40,12 @@ export interface PaperGridProps {
   flash?: Cell | null
   /** 着色图层：渲染为半透明色块，位于盖章标记下层（缺省不渲染） */
   coloredCells?: ColoredCell[]
-  /** 着色交互（可选）：active 时接管棋盘指针（点按/拖拽染色），并屏蔽 onCellClick */
+  /** 着色交互（可选）：active 时接管棋盘指针（点按/拖拽染色），并屏蔽 onCellClick。
+   *  onPaint 的 kind：'drag'=手势中的染色（起点与路径，两态）；'click'=纯点击的擦除修正 */
   coloring?: {
     active: boolean
     color: ColoringColor
-    onPaint: (cell: Cell) => void
+    onPaint: (cell: Cell, kind: PaintKind) => void
   }
   /** 自定义已报点格渲染；缺省时使用 StampMark */
   renderShot?: (shot: Shot, cellSize: number) => ReactNode
@@ -102,7 +106,15 @@ export function PaperGrid({
 
   const coloringActive = coloring?.active ?? false
   const boardRef = useRef<HTMLDivElement>(null)
-  const paintRef = useRef<{ down: boolean; last: Cell | null }>({ down: false, last: null })
+  const paintRef = useRef<{
+    down: boolean
+    last: Cell | null
+    /** 手势中是否发生过路径染色（有位移 = 拖拽，区别于纯点击） */
+    moved: boolean
+    start: Cell | null
+    /** 按下前起点格的颜色（供纯点击的同色擦除判定） */
+    startColor: ColoringColor | null
+  }>({ down: false, last: null, moved: false, start: null, startColor: null })
 
   const labelW = showLabels ? 20 : 0
   const labelH = showLabels ? 15 : 0
@@ -121,7 +133,7 @@ export function PaperGrid({
     }
   }
 
-  /* ---------- 着色交互（点按 / 长按拖拽路径染色） ---------- */
+  /* ---------- 着色交互（点按 / 长按拖拽路径染色；v0.2.1 区分点击与拖拽） ---------- */
 
   const cellFromEvent = (clientX: number, clientY: number): Cell | null => {
     const rect = boardRef.current?.getBoundingClientRect()
@@ -132,13 +144,26 @@ export function PaperGrid({
     return { r, c }
   }
 
+  /** 某格当前颜色（无 → null） */
+  const colorAt = (cell: Cell): ColoringColor | null => {
+    const found = coloredCells?.find((c) => c.coord.r === cell.r && c.coord.c === cell.c)
+    return found ? found.color : null
+  }
+
   const onBoardPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (!coloringActive) return
     e.preventDefault()
     boardRef.current?.setPointerCapture(e.pointerId)
     const cell = cellFromEvent(e.clientX, e.clientY)
-    paintRef.current = { down: true, last: cell }
-    if (cell) coloring?.onPaint(cell)
+    paintRef.current = {
+      down: true,
+      last: cell,
+      moved: false,
+      start: cell,
+      startColor: cell ? colorAt(cell) : null,
+    }
+    // 按下即按"拖拽经过"两态处理（同色保持不变，不误擦）；纯点击的擦除在松手时补发
+    if (cell) coloring?.onPaint(cell, 'drag')
   }
 
   const onBoardPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -151,15 +176,23 @@ export function PaperGrid({
       return
     }
     if (cell.r === last.r && cell.c === last.c) return
-    // 路径插值：快速拖拽也不留缝；每格应用着色/擦除
+    // 路径插值：快速拖拽也不留缝；每格按"拖拽经过"两态处理（同色保持，异色更新，无色填充）
     for (const p of lineCells(last, cell)) {
-      if (p.r !== last.r || p.c !== last.c) coloring?.onPaint(p)
+      if (p.r !== last.r || p.c !== last.c) {
+        paintRef.current.moved = true
+        coloring?.onPaint(p, 'drag')
+      }
     }
     paintRef.current.last = cell
   }
 
   const endPaint = () => {
-    paintRef.current = { down: false, last: null }
+    const p = paintRef.current
+    // 纯点击（无位移）：起点按下前即当前色 → 补发 click 擦除（三态中的"擦"）
+    if (p.down && !p.moved && p.start && p.startColor === coloring?.color) {
+      coloring?.onPaint(p.start, 'click')
+    }
+    paintRef.current = { down: false, last: null, moved: false, start: null, startColor: null }
   }
 
   return (
@@ -236,6 +269,7 @@ export function PaperGrid({
           {coloredCells?.map((cc) => (
             <div
               key={`colored-${cc.coord.r}-${cc.coord.c}`}
+              data-coord={formatCoord(cc.coord)}
               className={['paper-grid__colored', `paper-grid__colored--${cc.color}`].join(' ')}
               style={{
                 left: cc.coord.c * cellSize,

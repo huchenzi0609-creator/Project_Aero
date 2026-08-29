@@ -8,11 +8,20 @@
  *   选色后自动进入着色模式；
  * - 棋盘着色交互（点按染色 / 长按拖动画线 / 同色擦除）由 PaperGrid 的 coloring 属性承载，
  *   本组件只负责工具按钮与调色板。
+ *
+ * v0.2.1 微调：染色按触发类型区分——
+ * - 点击（click）：三态——无色→染色；同色→擦除；异色→更新为当前色；
+ * - 拖拽经过（drag）：两态——无色→染色；同色→保持不变（不再擦除）；异色→更新为当前色。
+ *   手势判定在 PaperGrid 指针处理中完成（拖拽路径一律走 drag，纯点击在松手时补发 click 擦除）。
  */
 import { useEffect, useRef, useState } from 'react'
 import type { Cell } from '@aero/shared'
 import '../../styles/coloring.css'
+
 export type ColoringColor = 'yellow' | 'blue' | 'green'
+
+/** 染色触发类型：click=点击（三态：染/擦/覆写）；drag=拖拽经过（两态：染/覆写，同色保持） */
+export type PaintKind = 'click' | 'drag'
 
 export interface ColoredCell {
   coord: Cell
@@ -35,8 +44,12 @@ export interface ColoringState {
   /** 选择颜色：设定当前色、进入着色模式并关闭调色板 */
   selectColor: (color: ColoringColor) => void
   toggleMode: () => void
-  /** 点按 / 拖拽路径上的每一格：同色擦除、异色更新为当前色、无色填充当前色 */
-  paintCell: (coord: Cell) => void
+  /**
+   * 按触发类型染色：
+   * - click：三态——无色→染色；同色→擦除；异色→更新为当前色；
+   * - drag：两态——无色→染色；同色→保持不变；异色→更新为当前色。
+   */
+  paintCell: (coord: Cell, kind?: PaintKind) => void
   /** 新对局清空（每局独立） */
   reset: () => void
 }
@@ -47,14 +60,14 @@ export function useColoring(): ColoringState {
   const [currentColor, setCurrentColor] = useState<ColoringColor>('yellow')
   const [paletteOpen, setPaletteOpen] = useState(false)
 
-  const paintCell = (coord: Cell) => {
+  const paintCell = (coord: Cell, kind: PaintKind = 'click') => {
     setColoredCells((prev) => {
       const idx = prev.findIndex((c) => c.coord.r === coord.r && c.coord.c === coord.c)
       if (idx === -1) return [...prev, { coord, color: currentColor }]
       const existing = prev[idx]!
       if (existing.color === currentColor) {
-        // 同色 → 擦除
-        return prev.filter((_, i) => i !== idx)
+        // 同色：点击=擦除；拖拽经过=保持不变
+        return kind === 'click' ? prev.filter((_, i) => i !== idx) : prev
       }
       // 异色 → 更新为当前色
       const next = prev.slice()
