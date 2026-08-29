@@ -150,3 +150,33 @@
 .paper-grid__colored--green {
   background: rgba(95, 143, 90, 0.35);
 }
+
+/* ---------- 样式参考飞机：交互 / 放置副本（v0.2.2） ---------- */
+
+/* 启用飞机层指针交互（覆盖 components.css 的 pointer-events:none；双类提升优先级） */
+.paper-grid__plane.paper-grid__plane--interactive {
+  pointer-events: auto;
+  cursor: grab;
+  touch-action: none;
+}
+/* 放置副本/拖拽预览：置于棋盘格层与印章之上 */
+.paper-grid__plane--ontop {
+  z-index: 5;
+}
+/* 重叠红遮罩（与摆放页一致） */
+.paper-grid__plane-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(168, 54, 47, 0.3);
+  outline: 1.5px dashed var(--danger);
+  outline-offset: -1px;
+  border-radius: 2px;
+}
+/* 拖拽浮游幽灵（固定定位，跟随指针） */
+.coloring-ref-ghost {
+  position: fixed;
+  z-index: 50;
+  pointer-events: none;
+  filter: drop-shadow(0 6px 8px rgba(60, 40, 10, 0.4));
+}
+

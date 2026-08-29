@@ -108,4 +108,35 @@ test.describe('自定义模式', () => {
 
     expect(errs()).toEqual([])
   })
+
+  test('自定义页存在「允许移动参考飞机」开关（默认开）；联机自定义房间为「允许对战双方移动参考飞机」（默认开）', async ({
+    page,
+  }) => {
+    const errs = watchErrors(page)
+
+    // 单机自定义配置页
+    await page.goto('/')
+    await page.getByRole('button', { name: '单人对局' }).click()
+    await page.getByRole('button', { name: /自定义/ }).click()
+    await expect(page.getByRole('heading', { name: '自定义配置' })).toBeVisible()
+    const singleToggle = page
+      .locator('.paper-toggle')
+      .filter({ hasText: '允许移动参考飞机' })
+      .locator('input')
+    await expect(singleToggle).toBeChecked()
+
+    // 联机自定义房间页
+    await page.getByRole('button', { name: '← 返回单人对局' }).click()
+    await page.getByRole('button', { name: '← 返回主页' }).click()
+    await page.getByRole('button', { name: '联机对战' }).click()
+    await page.getByRole('button', { name: '自定义…' }).click()
+    await expect(page.getByRole('heading', { name: '自定义房间' })).toBeVisible()
+    const onlineToggle = page
+      .locator('.paper-toggle')
+      .filter({ hasText: '允许对战双方移动参考飞机' })
+      .locator('input')
+    await expect(onlineToggle).toBeChecked()
+
+    expect(errs()).toEqual([])
+  })
 })

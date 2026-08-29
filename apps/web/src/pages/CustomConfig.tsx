@@ -30,6 +30,7 @@ export function CustomConfig({ mode = 'single' }: { mode?: 'single' | 'online' }
   const [heightText, setHeightText] = useState('10')
   const [planeText, setPlaneText] = useState('3')
   const [useDefault, setUseDefault] = useState(true)
+  const [allowMoveRefPlane, setAllowMoveRefPlane] = useState(true)
   const [cells, setCells] = useState<Cell[]>([])
   const [head, setHead] = useState<Cell | null>(null)
   const [tool, setTool] = useState<'paint' | 'erase'>('paint')
@@ -100,7 +101,7 @@ export function CustomConfig({ mode = 'single' }: { mode?: 'single' | 'online' }
   }
 
   function confirm() {
-    const config = { width, height, planeCount, shape }
+    const config = { width, height, planeCount, shape, allowMoveRefPlane }
     if (isOnline) {
       if (busy) return
       setBusy(true)
@@ -231,6 +232,14 @@ export function CustomConfig({ mode = 'single' }: { mode?: 'single' | 'online' }
               label="使用默认飞机形状"
               checked={useDefault}
               onChange={setUseDefault}
+            />
+          </div>
+
+          <div className="custom__toggle-row">
+            <PaperToggle
+              label={isOnline ? '允许对战双方移动参考飞机' : '允许移动参考飞机'}
+              checked={allowMoveRefPlane}
+              onChange={setAllowMoveRefPlane}
             />
           </div>
         </PaperCard>

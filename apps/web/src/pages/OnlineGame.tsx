@@ -8,11 +8,13 @@
  * - 投降按钮（二次确认）；gameEnd 结算页复用 M4 布局（胜负+双方真实阵型+stats）。
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { Cell, Rotation, Shot } from '@aero/shared'
-import { formatCoord, inBounds, parseCoord, rotateShape } from '@aero/game-core'
+import type { Cell } from '@aero/shared'
+import { DEFAULT_PLANE_SHAPE } from '@aero/shared'
+import { boundingBox, formatCoord, inBounds, parseCoord, rotateShape } from '@aero/game-core'
 import { useAppStore } from '../store/appStore'
 import { useOnlineStore } from '../store/onlineStore'
 import { useGuestStore } from '../store/guestStore'
+import { useSettingsStore } from '../store/settingsStore'
 import { useToastStore } from '../store/toastStore'
 import { onlineApi } from '../net/socket'
 import { useEffectiveOrientation, useViewport } from '../hooks/useOrientation'
@@ -21,13 +23,13 @@ import { PaperButton } from '../components/ui/PaperButton'
 import { PaperCard } from '../components/ui/PaperCard'
 import { PaperModal } from '../components/ui/PaperModal'
 import { PaperGrid } from '../components/grid/PaperGrid'
-import { ColoringToolButton, useColoring } from '../components/grid/ColoringTool'
-
-const REF_SHOTS: Shot[] = [
-  { coord: { r: 0, c: 0 }, outcome: 'miss' },
-  { coord: { r: 1, c: 4 }, outcome: 'hit' },
-  { coord: { r: 0, c: 2 }, outcome: 'kill' },
-]
+import { PlaneGlyph } from '../components/grid/PlaneGlyph'
+import {
+  ColoringToolButton,
+  refShotsFor,
+  useColoring,
+  useRefPlanes,
+} from '../components/grid/ColoringTool'
 
 const OUTCOME_TEXT: Record<string, string> = {
   miss: '击空',
@@ -81,11 +83,12 @@ export function OnlineGame() {
   const [myMsg, setMyMsg] = useState<string | null>(null)
   const [shake, setShake] = useState(false)
   const [resignOpen, setResignOpen] = useState(false)
-  const [refRot, setRefRot] = useState<Rotation>(0)
   const shakeTimer = useRef(0)
   const flashTimer = useRef(0)
   const lastShotSeq = useRef(0)
   const sfxTimers = useRef<number[]>([])
+  const oppBoardRef = useRef<HTMLDivElement | null>(null)
+  const refAreaRef = useRef<HTMLElement | null>(null)
 
   /* ---------- 着色工具（每局独立：新房间 / 终局时清空） ---------- */
   const coloring = useColoring()
@@ -93,7 +96,6 @@ export function OnlineGame() {
   const roomCode = room?.code ?? ''
   useEffect(() => {
     coloring.reset()
-    // eslint 无需 exhaustive-deps：reset 为稳定引用，仅需在房间变化时触发
   }, [roomCode])
   useEffect(() => {
     if (gameEnd) coloring.reset()
@@ -182,6 +184,33 @@ export function OnlineGame() {
     : 10
   const refCell = Math.min(24, Math.max(13, Math.floor(mainCell * 0.8)))
   const resCell = config ? clamp(Math.floor(200 / Math.max(config.width, config.height)), 4, 16) : 8
+
+  /* ---------- 样式参考飞机拖拽（config 开关优先，回退设置，默认 true；每局独立） ---------- */
+  const settingsAllowMove = useSettingsStore((s) => s.allowMoveRefPlane)
+  const allowMoveRefPlane = config?.allowMoveRefPlane ?? settingsAllowMove ?? true
+  const refPlanes = useRefPlanes({
+    width: config?.width ?? 10,
+    height: config?.height ?? 10,
+    shape: config?.shape ?? DEFAULT_PLANE_SHAPE,
+    cellSize: mainCell,
+    oppBoardRef,
+    refAreaRef,
+    allowMove: allowMoveRefPlane,
+    coloring: {
+      isColoring,
+      currentColor: coloring.currentColor,
+      coloredCells: coloring.coloredCells,
+      paintPlane: coloring.paintPlane,
+    },
+  })
+
+  // 新房间 / 终局：清空参考飞机放置副本
+  useEffect(() => {
+    refPlanes.reset()
+  }, [roomCode])
+  useEffect(() => {
+    if (gameEnd) refPlanes.reset()
+  }, [gameEnd])
 
   const myKilledIds = useMemo(() => {
     if (!myFleet || !config) return []
@@ -368,23 +397,23 @@ export function OnlineGame() {
       ) : null}
 
       <main className="game__main">
-        {/* 样式参考图 */}
-        <section className="game__ref">
+        {/* 样式参考图（点击旋转 / 可拖到对手棋盘） */}
+        <section className="game__ref" ref={refAreaRef}>
           <PaperCard className="game__card">
             <div className="game__card-head">
               <h2 className="game__card-title">样式参考</h2>
-              <PaperButton size="sm" variant="ghost" onClick={() => setRefRot(((r) => ((r + 1) % 4) as Rotation))}>
-                旋转
-              </PaperButton>
             </div>
             <PaperGrid
               width={5}
               height={5}
               cellSize={refCell}
               showLabels
-              planes={[{ id: 0, rotation: refRot, origin: { r: 0, c: 0 } }]}
+              planes={[{ id: 0, rotation: refPlanes.refRotation, origin: { r: 0, c: 0 } }]}
               shape={config.shape}
-              shots={REF_SHOTS}
+              shots={refShotsFor(config.shape, refPlanes.refRotation)}
+              planesLayer={{
+                onPlanePointerDown: (_plane, e) => refPlanes.startRefDrag(e),
+              }}
               ariaLabel="样式参考图"
             />
           </PaperCard>
@@ -408,7 +437,7 @@ export function OnlineGame() {
           </PaperCard>
         </section>
 
-        {/* 对手网格（居中）：只渲染我方报点标记，绝不显示对方阵型 */}
+        {/* 对手网格（居中）：只渲染我方报点标记，绝不显示对方阵型；可放置参考飞机副本 */}
         <section className="game__opp">
           <div className="coloring-stage">
             <PaperGrid
@@ -425,6 +454,17 @@ export function OnlineGame() {
                   ? { active: true, color: coloring.currentColor, onPaint: coloring.paintCell }
                   : undefined
               }
+              planes={refPlanes.shownPlanes}
+              shape={config.shape}
+              planesLayer={{
+                ghost: true,
+                onTop: true,
+                overlayIds: refPlanes.overlappedIds,
+                onPlanePointerDown: (plane, e) => refPlanes.startPlacedDrag(e, plane),
+              }}
+              onBoardRef={(el) => {
+                oppBoardRef.current = el
+              }}
               ariaLabel="对手棋盘"
             />
             <ColoringToolButton
@@ -582,6 +622,28 @@ export function OnlineGame() {
             </div>
           </div>
         </div>
+      ) : null}
+
+      {/* 参考飞机拖拽浮游幽灵（半透明虚线；拖离棋盘或自参考本体拖出时显示） */}
+      {refPlanes.drag && (refPlanes.drag.source === 'ref' || !refPlanes.drag.origin) ? (
+        (() => {
+          const d = refPlanes.drag
+          const box = boundingBox(config.shape, d.rotation)
+          return (
+            <div
+              className="coloring-ref-ghost"
+              style={{
+                left: d.pointer.x - d.grabOffset.c * mainCell,
+                top: d.pointer.y - d.grabOffset.r * mainCell,
+                width: box.w * mainCell,
+                height: box.h * mainCell,
+              }}
+              aria-hidden="true"
+            >
+              <PlaneGlyph shape={config.shape} rotation={d.rotation} ghost />
+            </div>
+          )
+        })()
       ) : null}
 
       {/* 投降二次确认 */}

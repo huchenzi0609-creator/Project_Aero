@@ -3,6 +3,8 @@
  * - 机体：围绕格位并集描出的平滑贝塞尔轮廓（淡纸色填充 + 墨线描边）
  * - 机头：深色圆形座舱
  * - rotation 支持四向旋转；wrecked 变体为残骸暗色 + 斜叉
+ * - ghost 变体（v0.2.2）：半透明 + 虚线描边，用于样式参考飞机拖拽预览与放置副本；
+ *   缺省 false，不影响现有调用方
  */
 import { useId } from 'react'
 import type { PlaneShape, Rotation } from '@aero/shared'
@@ -13,6 +15,8 @@ export interface PlaneGlyphProps {
   shape: PlaneShape
   rotation?: Rotation
   wrecked?: boolean
+  /** 幽灵变体：半透明 + 虚线描边（参考飞机拖拽中 / 放置副本） */
+  ghost?: boolean
   className?: string
 }
 
@@ -88,7 +92,7 @@ function smoothOutline(cells: { r: number; c: number }[]): string {
   return parts.join(' ')
 }
 
-export function PlaneGlyph({ shape, rotation = 0, wrecked = false, className }: PlaneGlyphProps) {
+export function PlaneGlyph({ shape, rotation = 0, wrecked = false, ghost = false, className }: PlaneGlyphProps) {
   const uid = useId().replace(/[^a-zA-Z0-9]/g, '')
   const fillId = `plane-fill-${uid}`
   const rotated = rotateShape(shape, rotation)
@@ -106,6 +110,7 @@ export function PlaneGlyph({ shape, rotation = 0, wrecked = false, className }: 
 
   const bodyFill = wrecked ? '#6f6757' : `url(#${fillId})`
   const bodyStroke = wrecked ? '#332d22' : 'var(--ink)'
+  const dash = ghost ? '0.24 0.18' : undefined
 
   return (
     <svg
@@ -113,7 +118,7 @@ export function PlaneGlyph({ shape, rotation = 0, wrecked = false, className }: 
       viewBox={`${b.c0 - pad} ${b.r0 - pad} ${w + pad * 2} ${h + pad * 2}`}
       preserveAspectRatio="none"
       aria-hidden="true"
-      style={{ display: 'block', width: '100%', height: '100%' }}
+      style={{ display: 'block', width: '100%', height: '100%', opacity: ghost ? 0.5 : undefined }}
     >
       <defs>
         <linearGradient id={fillId} x1="0" y1="0" x2="0" y2="1">
@@ -128,6 +133,7 @@ export function PlaneGlyph({ shape, rotation = 0, wrecked = false, className }: 
         strokeWidth={0.13}
         strokeLinejoin="round"
         fillRule="evenodd"
+        strokeDasharray={dash}
       />
       {/* 座舱（机头） */}
       <circle cx={hx} cy={hy} r={0.26} fill={wrecked ? '#2e2920' : '#332c1f'} />

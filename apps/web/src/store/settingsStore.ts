@@ -17,10 +17,13 @@ interface SettingsState {
   sfxVolume: number // 0..1
   invertMarks: boolean
   difficulty: Difficulty
+  /** 是否允许在对局中拖拽移动样式参考飞机；旧存档缺省时视为 true */
+  allowMoveRefPlane: boolean
   setBgmVolume: (v: number) => void
   setSfxVolume: (v: number) => void
   toggleInvertMarks: () => void
   setDifficulty: (d: Difficulty) => void
+  toggleAllowMoveRefPlane: () => void
 }
 
 export const useSettingsStore = create<SettingsState>()(
@@ -30,14 +33,22 @@ export const useSettingsStore = create<SettingsState>()(
       sfxVolume: 0.7,
       invertMarks: false,
       difficulty: 'normal',
+      allowMoveRefPlane: true,
       setBgmVolume: (bgmVolume) => set({ bgmVolume }),
       setSfxVolume: (sfxVolume) => set({ sfxVolume }),
       toggleInvertMarks: () => set((s) => ({ invertMarks: !s.invertMarks })),
       setDifficulty: (difficulty) => set({ difficulty }),
+      toggleAllowMoveRefPlane: () => set((s) => ({ allowMoveRefPlane: !s.allowMoveRefPlane })),
     }),
     {
       name: 'aero-settings',
       storage: createJSONStorage(() => localStorage),
+      // 旧存档（无 allowMoveRefPlane 字段）合并后取默认 true，保证新增开关默认开
+      merge: (persisted, current) => ({
+        ...current,
+        ...(persisted as Partial<SettingsState>),
+        allowMoveRefPlane: (persisted as Partial<SettingsState> | null)?.allowMoveRefPlane ?? true,
+      }),
     },
   ),
 )

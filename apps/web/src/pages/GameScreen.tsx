@@ -12,8 +12,9 @@
  * - 绝地反击：状态条提示并获得一次额外报点机会；终局 → 结算（胜负文案+双方真实阵型+统计）。
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { Cell, Rotation, Shot } from '@aero/shared'
-import { formatCoord, inBounds, parseCoord } from '@aero/game-core'
+import type { Cell } from '@aero/shared'
+import { DEFAULT_PLANE_SHAPE } from '@aero/shared'
+import { boundingBox, formatCoord, inBounds, parseCoord } from '@aero/game-core'
 import type { GameState, ShotResult } from '@aero/game-core'
 import { chooseShot } from '@aero/game-core/ai'
 import type { ShotKnowledge } from '@aero/game-core/ai'
@@ -28,13 +29,13 @@ import { PaperButton } from '../components/ui/PaperButton'
 import { PaperCard } from '../components/ui/PaperCard'
 import { PaperModal } from '../components/ui/PaperModal'
 import { PaperGrid } from '../components/grid/PaperGrid'
-import { ColoringToolButton, useColoring } from '../components/grid/ColoringTool'
-
-const REF_SHOTS: Shot[] = [
-  { coord: { r: 0, c: 0 }, outcome: 'miss' },
-  { coord: { r: 1, c: 4 }, outcome: 'hit' },
-  { coord: { r: 0, c: 2 }, outcome: 'kill' },
-]
+import { PlaneGlyph } from '../components/grid/PlaneGlyph'
+import {
+  ColoringToolButton,
+  refShotsFor,
+  useColoring,
+  useRefPlanes,
+} from '../components/grid/ColoringTool'
 
 const OUTCOME_TEXT: Record<string, string> = {
   miss: '击空',
@@ -56,6 +57,7 @@ export function GameScreen({ mode = 'single' }: { mode?: 'single' | 'online' }) 
   const difficulty = useSettingsStore((s) => s.difficulty)
   const bgmVolume = useSettingsStore((s) => s.bgmVolume)
   const sfxVolume = useSettingsStore((s) => s.sfxVolume)
+  const settingsAllowMove = useSettingsStore((s) => s.allowMoveRefPlane)
 
   const orientation = useEffectiveOrientation()
   const viewport = useViewport()
@@ -68,9 +70,10 @@ export function GameScreen({ mode = 'single' }: { mode?: 'single' | 'online' }) 
   const [myMsg, setMyMsg] = useState<string | null>(null)
   const [shake, setShake] = useState(false)
   const [exitOpen, setExitOpen] = useState(false)
-  const [refRot, setRefRot] = useState<Rotation>(0)
   const shakeTimer = useRef(0)
   const sfxTimers = useRef<number[]>([])
+  const oppBoardRef = useRef<HTMLDivElement | null>(null)
+  const refAreaRef = useRef<HTMLElement | null>(null)
 
   /** 延时播放音效（如报点后的盖章/击毁结果音），统一登记便于卸载清理 */
   const playSfxAt = (name: Parameters<typeof audioService.playSfx>[0], delayMs: number) => {
@@ -85,6 +88,9 @@ export function GameScreen({ mode = 'single' }: { mode?: 'single' | 'online' }) 
   /* ---------- 着色工具（每局独立，新对局清空） ---------- */
   const coloring = useColoring()
   const isColoring = coloring.coloringMode
+
+  /* ---------- 样式参考飞机：允许拖拽开关（config 优先，回退设置，默认 true） ---------- */
+  const allowMoveRefPlane = config?.allowMoveRefPlane ?? settingsAllowMove ?? true
 
   /* ---------- 音量占位接线（M7 实现真实音效） ---------- */
   useEffect(() => {
@@ -109,6 +115,7 @@ export function GameScreen({ mode = 'single' }: { mode?: 'single' | 'online' }) 
     setAiMsg(null)
     setMyMsg(null)
     coloring.reset()
+    refPlanes.reset()
     audioService.playSfx('page-flip')
     const t = window.setTimeout(() => setScreen('battle'), 1500)
     return () => window.clearTimeout(t)
@@ -176,6 +183,23 @@ export function GameScreen({ mode = 'single' }: { mode?: 'single' | 'online' }) 
     : 10
   const refCell = Math.min(24, Math.max(13, Math.floor(mainCell * 0.8)))
   const resCell = config ? clamp(Math.floor(200 / Math.max(config.width, config.height)), 4, 16) : 8
+
+  /* ---------- 样式参考飞机拖拽（对手棋盘 cellSize 依赖上方尺寸；每局独立） ---------- */
+  const refPlanes = useRefPlanes({
+    width: config?.width ?? 10,
+    height: config?.height ?? 10,
+    shape: config?.shape ?? DEFAULT_PLANE_SHAPE,
+    cellSize: mainCell,
+    oppBoardRef,
+    refAreaRef,
+    allowMove: allowMoveRefPlane,
+    coloring: {
+      isColoring,
+      currentColor: coloring.currentColor,
+      coloredCells: coloring.coloredCells,
+      paintPlane: coloring.paintPlane,
+    },
+  })
 
   if (!session || !state || !config) {
     return (
@@ -330,23 +354,23 @@ export function GameScreen({ mode = 'single' }: { mode?: 'single' | 'online' }) 
       </header>
 
       <main className="game__main">
-        {/* 样式参考图：5×5 + 本局形状 + 旋转演示 */}
-        <section className="game__ref">
+        {/* 样式参考图：5×5 + 本局形状（点击旋转 / 可拖到对手棋盘） */}
+        <section className="game__ref" ref={refAreaRef}>
           <PaperCard className="game__card">
             <div className="game__card-head">
               <h2 className="game__card-title">样式参考</h2>
-              <PaperButton size="sm" variant="ghost" onClick={() => setRefRot(((r) => ((r + 1) % 4) as Rotation))}>
-                旋转
-              </PaperButton>
             </div>
             <PaperGrid
               width={5}
               height={5}
               cellSize={refCell}
               showLabels
-              planes={[{ id: 0, rotation: refRot, origin: { r: 0, c: 0 } }]}
+              planes={[{ id: 0, rotation: refPlanes.refRotation, origin: { r: 0, c: 0 } }]}
               shape={config.shape}
-              shots={REF_SHOTS}
+              shots={refShotsFor(config.shape, refPlanes.refRotation)}
+              planesLayer={{
+                onPlanePointerDown: (_plane, e) => refPlanes.startRefDrag(e),
+              }}
               ariaLabel="样式参考图"
             />
           </PaperCard>
@@ -370,7 +394,7 @@ export function GameScreen({ mode = 'single' }: { mode?: 'single' | 'online' }) 
           </PaperCard>
         </section>
 
-        {/* 对手网格（居中）：只渲染我方报点标记，绝不显示对方阵型 */}
+        {/* 对手网格（居中）：只渲染我方报点标记，绝不显示对方阵型；可放置参考飞机副本 */}
         <section className="game__opp">
           <div className="coloring-stage">
             <PaperGrid
@@ -387,6 +411,17 @@ export function GameScreen({ mode = 'single' }: { mode?: 'single' | 'online' }) 
                   ? { active: true, color: coloring.currentColor, onPaint: coloring.paintCell }
                   : undefined
               }
+              planes={refPlanes.shownPlanes}
+              shape={config.shape}
+              planesLayer={{
+                ghost: true,
+                onTop: true,
+                overlayIds: refPlanes.overlappedIds,
+                onPlanePointerDown: (plane, e) => refPlanes.startPlacedDrag(e, plane),
+              }}
+              onBoardRef={(el) => {
+                oppBoardRef.current = el
+              }}
               ariaLabel="对手棋盘"
             />
             <ColoringToolButton
@@ -532,6 +567,28 @@ export function GameScreen({ mode = 'single' }: { mode?: 'single' | 'online' }) 
             </div>
           </div>
         </div>
+      ) : null}
+
+      {/* 参考飞机拖拽浮游幽灵（半透明虚线；拖离棋盘或自参考本体拖出时显示） */}
+      {refPlanes.drag && (refPlanes.drag.source === 'ref' || !refPlanes.drag.origin) ? (
+        (() => {
+          const d = refPlanes.drag
+          const box = boundingBox(config.shape, d.rotation)
+          return (
+            <div
+              className="coloring-ref-ghost"
+              style={{
+                left: d.pointer.x - d.grabOffset.c * mainCell,
+                top: d.pointer.y - d.grabOffset.r * mainCell,
+                width: box.w * mainCell,
+                height: box.h * mainCell,
+              }}
+              aria-hidden="true"
+            >
+              <PlaneGlyph shape={config.shape} rotation={d.rotation} ghost />
+            </div>
+          )
+        })()
       ) : null}
 
       <PaperModal

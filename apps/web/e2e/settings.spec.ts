@@ -56,4 +56,38 @@ test.describe('设置', () => {
 
     expect(errs()).toEqual([])
   })
+
+  test('「允许移动参考飞机」开关：默认开，关闭/再开均持久化（刷新保持）', async ({ page }) => {
+    const errs = watchErrors(page)
+
+    await page.goto('/')
+    await page.getByRole('button', { name: '设置' }).click()
+
+    const section = page.locator('.settings__section').filter({ hasText: '对局' })
+    const toggle = () =>
+      section
+        .locator('.paper-toggle')
+        .filter({ hasText: '允许移动参考飞机' })
+        .locator('input[type="checkbox"]')
+
+    // 默认开
+    await expect(section).toBeVisible()
+    await expect(toggle()).toBeChecked()
+
+    // 关闭 → 刷新后仍关闭
+    await toggle().uncheck()
+    await expect(toggle()).not.toBeChecked()
+    await page.reload()
+    await page.getByRole('button', { name: '设置' }).click()
+    await expect(toggle()).not.toBeChecked()
+
+    // 再开回 → 刷新后仍开启
+    await toggle().check()
+    await expect(toggle()).toBeChecked()
+    await page.reload()
+    await page.getByRole('button', { name: '设置' }).click()
+    await expect(toggle()).toBeChecked()
+
+    expect(errs()).toEqual([])
+  })
 })
