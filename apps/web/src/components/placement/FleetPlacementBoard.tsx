@@ -115,8 +115,9 @@ export function FleetPlacementBoard({ config, planes, onPlanesChange }: FleetBoa
       const availH = viewport.height - 170
       return clamp(Math.floor(Math.min(availW / width, availH / height)), 10, 34)
     }
+    // 竖版 9:16 无滚动：头部 + 待选牌组 + 棋盘 + 校验清单全部收进舞台
     const availW = viewport.width - 24
-    const availH = viewport.height - 330
+    const availH = viewport.height - 250
     return clamp(Math.floor(Math.min(availW / width, availH / height)), 8, 26)
   }, [orientation, viewport, width, height])
 
@@ -330,9 +331,6 @@ export function FleetPlacementBoard({ config, planes, onPlanesChange }: FleetBoa
       aria-label={`托盘中的第 ${item.id + 1} 架飞机，点击旋转，拖拽摆放`}
     >
       <PlaneGlyph shape={shape} rotation={item.rotation} />
-      <span className="placement__deck-no" aria-hidden="true">
-        {item.id + 1}
-      </span>
     </div>
   )
 

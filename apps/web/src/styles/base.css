@@ -61,6 +61,13 @@ body {
   justify-content: center;
 }
 
+/* 竖版 9:16 舞台内无滚动（内容由 .page 收容，舞台本身 overflow:hidden） */
+@media (orientation: portrait) {
+  .app {
+    overflow: hidden;
+  }
+}
+
 ::selection {
   background: rgba(214, 178, 96, 0.4);
 }

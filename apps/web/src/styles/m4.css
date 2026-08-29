@@ -77,7 +77,7 @@
   position: absolute;
   border: 1.5px dashed rgba(96, 78, 50, 0.5);
   border-radius: 3px;
-  background: rgba(251, 247, 234, 0.75);
+  background: var(--paper-sheet);
   cursor: grab;
   touch-action: none;
   transition: transform 110ms var(--ease-paper), box-shadow 110ms var(--ease-paper);
@@ -88,26 +88,6 @@
 }
 .placement__deck-card--dim {
   opacity: 0.35;
-}
-.placement__deck-no {
-  position: absolute;
-  top: 2px;
-  left: 3px;
-  z-index: 1;
-  min-width: 15px;
-  height: 15px;
-  padding: 0 3px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  line-height: 1;
-  color: var(--ink);
-  background: var(--paper-sheet-2);
-  border: 1px solid rgba(96, 78, 50, 0.45);
-  border-radius: 2px;
-  pointer-events: none;
 }
 .placement__tray-empty {
   color: var(--ink-faint);
@@ -237,33 +217,38 @@
   height: 100cqh;
 }
 
-/* 竖版 9:16 舞台：状态条 / 样式参考 / 我方小网格 / 中央棋盘 / 输入栏 自上而下、互不重叠；
-   页面容器随内容滚动（26×26 等高棋盘时），横向不溢出 */
+/* 竖版 9:16 舞台：无滚动收容——状态条 / [参考 | 我方] 行 / 中央棋盘 / 输入栏 全部收进舞台；
+   参考与我的网格水平并排（左=参考、右=我方），平分中央棋盘上方的空间
+   （格宽由页面按舞台预算计算，参考 pages.css 的 grid 区域定义） */
 .game--portrait {
-  overflow-y: auto;
-  overflow-x: hidden;
+  overflow: hidden;
 }
 .game--portrait .game__main {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 10px;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: auto 1fr;
+  grid-template-areas: 'ref mine' 'opp opp';
+  align-items: start;
+  gap: 8px;
   padding: 2px;
-  flex: none;
-  min-height: auto;
+  min-height: 0;
 }
-.game--portrait .game__ref,
+.game--portrait .game__ref {
+  grid-area: ref;
+  width: 100%;
+  display: flex;
+  justify-content: center;
+}
 .game--portrait .game__mine {
+  grid-area: mine;
   width: 100%;
   display: flex;
   justify-content: center;
 }
 .game--portrait .game__opp {
-  width: 100%;
-  display: flex;
-  justify-content: center;
-  margin-top: 2px;
-  padding-bottom: 4px;
+  grid-area: opp;
+  justify-self: center;
+  margin-top: 0;
+  padding-bottom: 0;
 }
 
 .game__card-head {

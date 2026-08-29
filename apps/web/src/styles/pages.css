@@ -174,32 +174,6 @@
   margin-top: 2px;
 }
 
-/* 竖版（portrait）：单机菜单卡片改为纵向堆叠的全宽大卡片（图标在上居中、文案居中、触控面积与间距加大） */
-@media (orientation: portrait) {
-  .single__cards {
-    grid-template-columns: 1fr;
-    gap: 20px;
-    max-width: 100%;
-  }
-  .single__card {
-    flex-direction: column;
-    justify-content: center;
-    align-items: center;
-    text-align: center;
-    gap: 12px;
-    padding: 26px 18px;
-    min-height: 132px;
-  }
-  .single__card-label {
-    font-size: 21px;
-    line-height: 1.3;
-  }
-  .single__card-sub {
-    font-size: 14px;
-    margin-top: 4px;
-  }
-}
-
 /* ---------- 自定义配置 CustomConfig ---------- */
 
 .custom {
@@ -712,3 +686,318 @@
   font-size: 12.5px;
   color: var(--ink-faint);
 }
+
+/* ============ 竖版（portrait）9:16 舞台内"无滚动"收容（v0.2.4） ============
+   竖版下内容必须恰好装进 9:16 舞台：页面容器不允许内部滚动（舞台 overflow:hidden），
+   各页按 cqh 收缩字号/间距/卡片尺寸；横版不受影响（横版 .page 仍可内部滚动）。 */
+@media (orientation: portrait) {
+  /* 页面容器：无滚动 */
+  .page {
+    overflow: hidden;
+    padding: 12px 16px 16px;
+  }
+  .page__back {
+    margin-bottom: 6px;
+  }
+  .page__head {
+    gap: 10px;
+  }
+  .page__title {
+    font-size: 22px;
+  }
+  .page__body {
+    margin-top: 10px;
+  }
+
+  /* ---- Home：标题与按钮紧凑 ---- */
+  .home--portrait .home__main {
+    gap: 26px;
+    padding: 12px 0;
+  }
+  .home--portrait .home__menu {
+    gap: 12px;
+  }
+  .home__title {
+    font-size: clamp(40px, 12cqh, 52px);
+  }
+  .home__foot {
+    margin-top: 6px;
+  }
+
+  /* ---- SingleMenu：纵向堆叠紧凑全宽卡（图标居中） ---- */
+  .single__cards {
+    grid-template-columns: 1fr;
+    gap: 10px;
+    max-width: 100%;
+  }
+  .single__card {
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    text-align: center;
+    gap: 8px;
+    padding: 11px 16px;
+    min-height: 0;
+  }
+  .single__card svg {
+    width: 38px;
+    height: 38px;
+  }
+  .single__card-label {
+    font-size: 19px;
+    line-height: 1.25;
+  }
+  .single__card-sub {
+    font-size: 13px;
+    margin-top: 2px;
+  }
+
+  /* ---- CustomConfig：左右双栏紧凑（参数栏 + 编辑器栏并排） ---- */
+  .custom__cols {
+    grid-template-columns: 0.85fr 1.15fr;
+    gap: 10px;
+  }
+  .custom__field {
+    margin-bottom: 5px;
+    gap: 2px;
+  }
+  .custom__label {
+    font-size: 12.5px;
+  }
+  .custom__num {
+    font-size: 11px;
+  }
+  .custom__inputrow {
+    gap: 8px;
+  }
+  .custom__input {
+    width: 100%;
+    font-size: 13.5px;
+    padding: 5px 8px;
+  }
+  .custom__err {
+    font-size: 11px;
+    min-height: 1.2em;
+  }
+  .custom__toggle-row {
+    margin-top: 3px;
+  }
+  .custom .paper-toggle {
+    flex-direction: column;
+    gap: 3px;
+  }
+  .custom .paper-toggle__label {
+    font-size: 13.5px;
+  }
+  .shape-editor {
+    --cell: 18px;
+  }
+  .shape-editor__board {
+    padding: 8px;
+    gap: 2px;
+  }
+  .editor-head {
+    flex-wrap: wrap;
+    row-gap: 2px;
+    margin-bottom: 3px;
+  }
+  .editor-head .page__subtitle {
+    font-size: 11px;
+    white-space: nowrap;
+  }
+  .editor-count {
+    font-size: 8.5px;
+    white-space: nowrap;
+  }
+  .editor-tools {
+    margin-bottom: 5px;
+    gap: 6px;
+  }
+  .editor-tools .paper-btn {
+    font-size: 11.5px;
+    padding: 4px 8px;
+  }
+  .editor-legend {
+    margin-top: 3px;
+    gap: 8px;
+    font-size: 10px;
+  }
+  .checklist {
+    gap: 2px;
+    margin: 4px 0;
+  }
+  .checklist__item {
+    font-size: 11.5px;
+    gap: 4px;
+  }
+  .checklist__detail {
+    font-size: 9.5px;
+  }
+  .plane-preview {
+    min-height: 56px;
+  }
+  .custom__actions {
+    flex-direction: column;
+    align-items: stretch;
+    margin-top: 4px;
+    gap: 6px;
+  }
+  .custom__actions .paper-btn {
+    width: 100%;
+    font-size: 13px;
+    padding: 6px 10px;
+  }
+  .custom .custom__hint {
+    font-size: 10px;
+  }
+  .custom .paper-card {
+    padding: 10px;
+  }
+
+  /* ---- Settings：分区与行距紧凑 ---- */
+  .settings__section {
+    margin-bottom: 7px;
+  }
+  .settings__section-title {
+    font-size: 12px;
+    margin-bottom: 4px;
+  }
+  .settings__row {
+    padding: 2px 0;
+  }
+  .settings__markdemo {
+    gap: 12px;
+    padding: 4px 2px 0;
+    font-size: 13px;
+  }
+  .settings .paper-slider__label {
+    font-size: 15px;
+  }
+  .settings .paper-slider__input {
+    height: 20px;
+  }
+  .settings .paper-slider__hint {
+    font-size: 12px;
+    margin-top: 2px;
+  }
+  .settings .paper-card {
+    padding: 12px;
+  }
+
+  /* ---- Rules：双栏紧凑（保留全部规则要点，示意图缩小） ---- */
+  .rules .paper-card {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 6px 12px;
+    align-items: start;
+    padding: 8px;
+  }
+  .rules__section {
+    margin-bottom: 0;
+  }
+  .rules__h {
+    font-size: 11.5px;
+    margin-bottom: 1px;
+    gap: 4px;
+  }
+  .rules__no {
+    font-size: 10px;
+  }
+  .rules__p {
+    font-size: 9.5px;
+    margin-bottom: 2px;
+    line-height: 1.22;
+  }
+  .rules__ul {
+    font-size: 9.5px;
+    margin-bottom: 2px;
+    padding-left: 12px;
+  }
+  .rules__li {
+    margin-bottom: 1px;
+    line-height: 1.22;
+  }
+  .rules__table {
+    font-size: 8.5px;
+    margin-top: 3px;
+  }
+  .rules__table th,
+  .rules__table td {
+    padding: 2px 3px;
+  }
+  .rules__diagram-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 6px;
+    margin-top: 3px;
+  }
+  .rules__fig {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    width: 100%;
+    overflow-wrap: anywhere;
+  }
+  .rules__fig-caption {
+    font-size: 8.5px;
+    line-height: 1.2;
+  }
+  .rules__legend {
+    gap: 8px;
+    padding: 3px 2px 0;
+  }
+  .rules__legend-item {
+    font-size: 9.5px;
+    gap: 4px;
+  }
+
+  /* ---- OnlineMenu：双栏紧凑（局域网 + 公网并排，自定义房横跨） ---- */
+  .online__grid {
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+  .online__span2 {
+    grid-column: 1 / -1;
+  }
+  .online__card-title {
+    font-size: 13px;
+    margin-bottom: 2px;
+  }
+  .online__card-desc {
+    font-size: 11px;
+    margin-bottom: 5px;
+    line-height: 1.35;
+  }
+  .online__tiers {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 5px;
+  }
+  .online__tiers .paper-btn {
+    width: 100%;
+    font-size: 11.5px;
+    padding: 3px 4px;
+    line-height: 1.25;
+  }
+  .online__form {
+    gap: 5px;
+  }
+  .online__form .paper-btn {
+    font-size: 12px;
+    padding: 4px 8px;
+  }
+  .online__codeinput {
+    width: 120px;
+    font-size: 14px;
+    padding: 6px 8px;
+  }
+  .online__matching {
+    padding: 6px 2px;
+    gap: 6px;
+  }
+  .online .paper-card {
+    padding: 10px 12px;
+  }
+}
+

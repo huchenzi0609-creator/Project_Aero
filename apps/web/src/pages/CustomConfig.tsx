@@ -4,6 +4,7 @@ import type { Cell, PlaneShape } from '@aero/shared'
 import { validateShape } from '@aero/game-core'
 import { useAppStore } from '../store/appStore'
 import { useToastStore } from '../store/toastStore'
+import { useEffectiveOrientation } from '../hooks/useOrientation'
 import { onlineApi } from '../net/socket'
 import { PaperButton } from '../components/ui/PaperButton'
 import { PaperCard } from '../components/ui/PaperCard'
@@ -123,7 +124,8 @@ export function CustomConfig({ mode = 'single' }: { mode?: 'single' | 'online' }
 
   const previewShape = useDefault ? DEFAULT_PLANE_SHAPE : drawnShape
   const previewB = previewShape ? cellsBBox(previewShape.cells) : null
-  const pCell = 30
+  // 竖版 9:16 舞台内缩小预览格位（紧凑双栏），横版保持原尺寸
+  const pCell = useEffectiveOrientation() === 'portrait' ? 16 : 30
 
   const checkItems = [
     {

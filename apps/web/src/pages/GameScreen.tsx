@@ -162,32 +162,58 @@ export function GameScreen({ mode = 'single' }: { mode?: 'single' | 'online' }) 
   }, [state, screen, session?.nonce])
 
   /* ---------- 尺寸 ---------- */
+  // 竖版 9:16 无滚动：状态条 + 参考/我方行 + 中央棋盘 + 输入栏 全部收进舞台
+  // （常量由 390×667 实测校准：主区高度基准 172、行预算 170、各卡固定开销）
+  const PORTRAIT_MAIN_BASE = 172
+  const PORTRAIT_ROW_BUDGET = 170
+  const REF_CARD_CHROME = 81 // 参考卡：标题+列标+内边距
+  const MINE_CARD_CHROME = 53 // 我方卡：标题+内边距
+  const OPP_CARD_CHROME = 27 // 中央棋盘：列标+边框
 
-  const mainCell = useMemo(() => {
+  const landscapeMainCell = useMemo(() => {
     if (!config) return 20
-    if (orientation === 'landscape') {
-      const availW = viewport.width * 0.4
-      const availH = viewport.height - 170
-      return clamp(Math.floor(Math.min(availW / config.width, availH / config.height)), 12, 34)
-    }
-    const availW = viewport.width - 30
-    return clamp(Math.floor((availW - 20) / config.width), 10, 30)
-  }, [orientation, viewport, config])
+    const availW = viewport.width * 0.4
+    const availH = viewport.height - 170
+    return clamp(Math.floor(Math.min(availW / config.width, availH / config.height)), 12, 34)
+  }, [viewport, config])
 
-  const miniCell = config
-    ? clamp(
-        Math.min(
-          Math.floor(mainCell / 2),
-          Math.floor(
-            (orientation === 'portrait' ? viewport.width - 60 : viewport.width / 2 - 44) /
-              config.width,
-          ),
-        ),
-        6,
-        20,
-      )
-    : 10
-  const refCell = Math.min(24, Math.max(13, Math.floor(mainCell * 0.8)))
+  const portraitSizes = useMemo(() => {
+    if (!config) return null
+    const availW = viewport.width - 16
+    const mainAvailH = viewport.height - PORTRAIT_MAIN_BASE
+    let mainCell = clamp(Math.floor(availW / config.width), 8, 30)
+    // 中央棋盘高度 + 行预算不超主区；宽度优先，必要时缩格
+    const oppMaxH = mainAvailH - PORTRAIT_ROW_BUDGET
+    if (mainCell * config.height + OPP_CARD_CHROME > oppMaxH) {
+      mainCell = Math.max(8, Math.floor((oppMaxH - OPP_CARD_CHROME) / config.height))
+    }
+    const oppH = mainCell * config.height + OPP_CARD_CHROME
+    const rowH = mainAvailH - oppH - 8
+    const halfW = Math.floor((availW - 8) / 2)
+    const refCell = clamp(Math.floor((rowH - REF_CARD_CHROME) / 5), 8, 24)
+    const miniCell = clamp(
+      Math.min(Math.floor((rowH - MINE_CARD_CHROME) / config.height), Math.floor((halfW - 18) / config.width)),
+      4,
+      18,
+    )
+    return { mainCell, refCell, miniCell }
+  }, [viewport, config])
+
+  const mainCell = orientation === 'portrait' ? (portraitSizes?.mainCell ?? 20) : landscapeMainCell
+  const miniCell =
+    orientation === 'portrait'
+      ? (portraitSizes?.miniCell ?? 10)
+      : config
+        ? clamp(
+            Math.min(Math.floor(mainCell / 2), Math.floor((viewport.width / 2 - 44) / config.width)),
+            6,
+            20,
+          )
+        : 10
+  const refCell =
+    orientation === 'portrait'
+      ? (portraitSizes?.refCell ?? 18)
+      : Math.min(24, Math.max(13, Math.floor(mainCell * 0.8)))
   const resCell = config ? clamp(Math.floor(200 / Math.max(config.width, config.height)), 4, 16) : 8
 
   /* ---------- 样式参考飞机拖拽（对手棋盘 cellSize 依赖上方尺寸；每局独立） ---------- */

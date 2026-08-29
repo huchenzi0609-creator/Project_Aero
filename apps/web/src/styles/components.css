@@ -249,10 +249,17 @@
   height: 26px;
   margin-top: 2px;
   border-radius: 3px;
-  border: 1px solid rgba(96, 78, 50, 0.45);
-  background: linear-gradient(180deg, #dcd3b8, #eae1c8);
-  box-shadow: inset 0 2px 3px rgba(84, 66, 38, 0.25);
-  transition: background-color 150ms ease;
+  /* 关闭 = 深红系（纸感渐变） */
+  border: 1px solid rgba(122, 41, 33, 0.55);
+  background: linear-gradient(180deg, #bd4b41, #922f26);
+  box-shadow: inset 0 2px 3px rgba(84, 38, 30, 0.35);
+  transition: background 150ms ease;
+}
+/* 开启 = 深绿系（纸感渐变） */
+.paper-toggle__input:checked + .paper-toggle__track {
+  border-color: rgba(47, 90, 66, 0.55);
+  background: linear-gradient(180deg, #3d7a5b, #245a40);
+  box-shadow: inset 0 2px 3px rgba(30, 70, 50, 0.4);
 }
 .paper-toggle__knob {
   position: absolute;

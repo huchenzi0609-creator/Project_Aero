@@ -1,6 +1,7 @@
 import { DEFAULT_PLANE_SHAPE } from '@aero/shared'
 import type { PlacedPlane, Shot } from '@aero/shared'
 import { useAppStore } from '../store/appStore'
+import { useEffectiveOrientation } from '../hooks/useOrientation'
 import { PaperButton } from '../components/ui/PaperButton'
 import { PaperCard } from '../components/ui/PaperCard'
 import { PaperGrid } from '../components/grid/PaperGrid'
@@ -16,6 +17,10 @@ const DEMO_SHOTS: Shot[] = [
 
 export function Rules() {
   const setView = useAppStore((s) => s.setView)
+  const orientation = useEffectiveOrientation()
+  // 竖版 9:16 舞台内示意图缩小格位（紧凑双栏排版），横版保持原尺寸
+  const cellA = orientation === 'portrait' ? 9 : 26
+  const cellB = orientation === 'portrait' ? 8 : 24
 
   return (
     <div className="page rules">
@@ -47,8 +52,8 @@ export function Rules() {
                 <PaperGrid
                   width={5}
                   height={5}
-                  cellSize={26}
-                  showLabels
+                  cellSize={cellA}
+                  showLabels={orientation !== 'portrait'}
                   planes={DEMO_PLANES}
                   shape={DEFAULT_PLANE_SHAPE}
                   invertMarks={false}
@@ -60,8 +65,8 @@ export function Rules() {
                 <PaperGrid
                   width={5}
                   height={5}
-                  cellSize={26}
-                  showLabels
+                  cellSize={cellA}
+                  showLabels={orientation !== 'portrait'}
                   planes={DEMO_PLANES_ROT}
                   shape={DEFAULT_PLANE_SHAPE}
                   invertMarks={false}
@@ -93,8 +98,8 @@ export function Rules() {
                 <PaperGrid
                   width={5}
                   height={5}
-                  cellSize={24}
-                  showLabels
+                  cellSize={cellB}
+                  showLabels={orientation !== 'portrait'}
                   planes={DEMO_PLANES}
                   shape={DEFAULT_PLANE_SHAPE}
                   destroyedPlaneIds={[0]}
@@ -108,8 +113,8 @@ export function Rules() {
                 <PaperGrid
                   width={5}
                   height={5}
-                  cellSize={24}
-                  showLabels
+                  cellSize={cellB}
+                  showLabels={orientation !== 'portrait'}
                   shots={DEMO_SHOTS}
                   invertMarks={false}
                   ariaLabel="对手视角：只有标记"
