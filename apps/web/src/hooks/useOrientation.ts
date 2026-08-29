@@ -49,15 +49,27 @@ export interface Viewport {
   height: number
 }
 
+/** 舞台尺寸：竖版 9:16 画幅（min(vw, vh*9/16) × min(vh, vw*16/9)），横版即窗口尺寸 */
+function computeStageSize(orientation: Orientation): Viewport {
+  if (typeof window === 'undefined') return { width: 1280, height: 800 }
+  const vw = window.innerWidth
+  const vh = window.innerHeight
+  if (orientation === 'landscape') return { width: vw, height: vh }
+  return {
+    width: Math.min(vw, (vh * 9) / 16),
+    height: Math.min(vh, (vw * 16) / 9),
+  }
+}
+
+/** 返回舞台（app-stage）的像素尺寸；战斗组件据此计算格宽等 */
 export function useViewport(): Viewport {
-  const [size, setSize] = useState<Viewport>(() => ({
-    width: typeof window === 'undefined' ? 1280 : window.innerWidth,
-    height: typeof window === 'undefined' ? 800 : window.innerHeight,
-  }))
+  const orientation = useEffectiveOrientation()
+  const [size, setSize] = useState<Viewport>(() => computeStageSize(orientation))
   useEffect(() => {
-    const onResize = () => setSize({ width: window.innerWidth, height: window.innerHeight })
-    window.addEventListener('resize', onResize)
-    return () => window.removeEventListener('resize', onResize)
-  }, [])
+    const update = () => setSize(computeStageSize(orientation))
+    update()
+    window.addEventListener('resize', update)
+    return () => window.removeEventListener('resize', update)
+  }, [orientation])
   return size
 }

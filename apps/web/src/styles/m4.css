@@ -1,15 +1,16 @@
 /* ============================================================
    M4 单机流程：摆阵页 / 先后手横幅 / 对战增强 / 结算界面
+   （v0.2.3：舞台内单位统一用 cqw/cqh；竖版待选牌组叠放）
    ============================================================ */
 
 /* ---------- 摆阵页 Placement ---------- */
 
 .placement {
-  height: 100dvh;
+  height: 100cqh;
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 8px clamp(10px, 2.5vw, 26px) 12px;
+  padding: 8px clamp(10px, 2.5cqw, 26px) 12px;
   overflow: hidden;
   user-select: none;
 }
@@ -52,8 +53,6 @@
 .placement__tray {
   display: flex;
   flex-direction: row;
-  flex-wrap: wrap;
-  gap: 10px;
   align-items: center;
   padding: 12px;
   background: var(--paper-deep);
@@ -70,9 +69,12 @@
 .placement--portrait .placement__tray {
   justify-content: center;
 }
-.placement__slot {
+/* 待选牌组：扑克牌叠放（竖版横向交叠、横版纵向交叠），露出识别条/编号 */
+.placement__deck {
   position: relative;
-  flex: none;
+}
+.placement__deck-card {
+  position: absolute;
   border: 1.5px dashed rgba(96, 78, 50, 0.5);
   border-radius: 3px;
   background: rgba(251, 247, 234, 0.75);
@@ -80,12 +82,32 @@
   touch-action: none;
   transition: transform 110ms var(--ease-paper), box-shadow 110ms var(--ease-paper);
 }
-.placement__slot:hover {
+.placement__deck-card:hover {
   transform: translateY(-2px);
   box-shadow: 0 3px 6px -2px rgba(84, 66, 38, 0.35);
 }
-.placement__slot--dim {
+.placement__deck-card--dim {
   opacity: 0.35;
+}
+.placement__deck-no {
+  position: absolute;
+  top: 2px;
+  left: 3px;
+  z-index: 1;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1;
+  color: var(--ink);
+  background: var(--paper-sheet-2);
+  border: 1px solid rgba(96, 78, 50, 0.45);
+  border-radius: 2px;
+  pointer-events: none;
 }
 .placement__tray-empty {
   color: var(--ink-faint);
@@ -199,7 +221,7 @@
   color: var(--ink-faint);
 }
 .game-banner__text {
-  font-size: clamp(30px, 6vw, 46px);
+  font-size: clamp(30px, 6cqw, 46px);
   font-weight: 600;
   letter-spacing: 0.06em;
 }
@@ -209,6 +231,40 @@
 }
 
 /* ---------- 对战增强 ---------- */
+
+/* 对局页高度随舞台（9:16 竖版舞台内用 cqh；覆盖 pages.css 的 100dvh） */
+.game {
+  height: 100cqh;
+}
+
+/* 竖版 9:16 舞台：状态条 / 样式参考 / 我方小网格 / 中央棋盘 / 输入栏 自上而下、互不重叠；
+   页面容器随内容滚动（26×26 等高棋盘时），横向不溢出 */
+.game--portrait {
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+.game--portrait .game__main {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 2px;
+  flex: none;
+  min-height: auto;
+}
+.game--portrait .game__ref,
+.game--portrait .game__mine {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+}
+.game--portrait .game__opp {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  margin-top: 2px;
+  padding-bottom: 4px;
+}
 
 .game__card-head {
   display: flex;
@@ -305,7 +361,7 @@
   gap: 10px;
 }
 .result__title {
-  font-size: clamp(26px, 4.6vw, 40px);
+  font-size: clamp(26px, 4.6cqw, 40px);
   margin: 0;
   font-weight: 600;
   letter-spacing: 0.04em;

@@ -71,6 +71,7 @@
   border: 1px solid rgba(96, 78, 50, 0.42);
   border-radius: var(--radius-sm);
   padding: 10px 22px;
+  min-height: 40px;
   cursor: pointer;
   user-select: none;
   touch-action: manipulation;

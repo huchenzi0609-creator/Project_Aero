@@ -1,8 +1,9 @@
 /**
  * components/placement/FleetPlacementBoard —— 摆阵交互棋盘（单机/联机共用）。
  *
- * 从 M4 Placement 抽取：托盘（点击旋转/拖拽）、棋盘（拖拽吸附/旋转/重叠越界红遮罩）、
- * 浮游幽灵。planes 为受控状态（父级持有），拖拽/旋转变化经 onPlanesChange 回传；
+ * 从 M4 Placement 抽取：待选牌组（扑克牌叠放：竖版横向交叠 / 横版纵向交叠，露出编号识别条；
+ * 点击旋转/拖拽）、棋盘（拖拽吸附/旋转/重叠越界红遮罩）、浮游幽灵。
+ * planes 为受控状态（父级持有），拖拽/旋转变化经 onPlanesChange 回传；
  * 托盘旋转记录在组件内部，飞机从网格拖回托盘后保持旋转。
  *
  * 父级职责：头部（标题/清空/随机/确认）、底部校验清单与状态、退出确认。
@@ -43,6 +44,9 @@ interface DragState {
   /** grid 来源：拖拽前的原 origin（取消拖拽时还原） */
   fromOrigin?: Cell
 }
+
+/** 牌组每张卡露出的识别条宽度（px）：竖版横向叠放时露出左侧条、横版纵向叠放时露出顶部条 */
+const DECK_STRIP = 22
 
 export interface FleetBoardProps {
   config: GridConfig
@@ -115,6 +119,9 @@ export function FleetPlacementBoard({ config, planes, onPlanesChange }: FleetBoa
     const availH = viewport.height - 330
     return clamp(Math.floor(Math.min(availW / width, availH / height)), 8, 26)
   }, [orientation, viewport, width, height])
+
+  /** 牌组卡片缩放（比棋盘格小，叠放后整体紧凑） */
+  const deckCell = clamp(Math.floor(cellSize * 0.6), 10, 18)
 
   /* ---------- 托盘与校验 ---------- */
 
@@ -285,33 +292,64 @@ export function FleetPlacementBoard({ config, planes, onPlanesChange }: FleetBoa
   const ghostLeft = drag ? drag.pointer.x - drag.grabOffset.c * cellSize : 0
   const ghostTop = drag ? drag.pointer.y - drag.grabOffset.r * cellSize : 0
 
-  const traySlot = (item: TrayItem) => {
-    const b = boundingBox(shape, item.rotation)
-    return (
-      <div
-        key={item.id}
-        className={['placement__slot', drag?.id === item.id ? 'placement__slot--dim' : '']
-          .filter(Boolean)
-          .join(' ')}
-        style={{ width: b.w * cellSize, height: b.h * cellSize }}
-        onPointerDown={(e) => startDrag(e, item.id, item.rotation, 'tray')}
-        title="点击旋转 90°，拖拽到棋盘摆放"
-        role="button"
-        aria-label={`托盘中的第 ${item.id + 1} 架飞机，点击旋转，拖拽摆放`}
-      >
-        <PlaneGlyph shape={shape} rotation={item.rotation} />
-      </div>
-    )
-  }
+  /* ---------- 待选牌组（扑克牌叠放） ---------- */
+
+  const deck = useMemo(() => {
+    if (trayItems.length === 0) return null
+    const dims = trayItems.map((t) => {
+      const b = boundingBox(shape, t.rotation)
+      return { w: b.w * deckCell, h: b.h * deckCell }
+    })
+    const maxW = Math.max(...dims.map((d) => d.w))
+    const maxH = Math.max(...dims.map((d) => d.h))
+    const n = trayItems.length
+    return {
+      items: trayItems,
+      dims,
+      width: orientation === 'landscape' ? maxW : (n - 1) * DECK_STRIP + maxW,
+      height: orientation === 'landscape' ? (n - 1) * DECK_STRIP + maxH : maxH,
+    }
+  }, [trayItems, shape, deckCell, orientation])
+
+  const deckCard = (item: TrayItem, index: number, dim: { w: number; h: number }) => (
+    <div
+      key={item.id}
+      className={['placement__deck-card', drag?.id === item.id ? 'placement__deck-card--dim' : '']
+        .filter(Boolean)
+        .join(' ')}
+      style={{
+        width: dim.w,
+        height: dim.h,
+        left: orientation === 'landscape' ? 0 : index * DECK_STRIP,
+        top: orientation === 'landscape' ? index * DECK_STRIP : 0,
+        zIndex: index + 1,
+      }}
+      onPointerDown={(e) => startDrag(e, item.id, item.rotation, 'tray')}
+      title="点击旋转 90°，拖拽到棋盘摆放"
+      role="button"
+      aria-label={`托盘中的第 ${item.id + 1} 架飞机，点击旋转，拖拽摆放`}
+    >
+      <PlaneGlyph shape={shape} rotation={item.rotation} />
+      <span className="placement__deck-no" aria-hidden="true">
+        {item.id + 1}
+      </span>
+    </div>
+  )
 
   return (
     <div className="placement__body">
-      {/* 托盘 */}
+      {/* 待选牌组（竖版横向叠放于棋盘上方 / 横版纵向叠放于棋盘左侧） */}
       <section ref={trayRef} className="placement__tray" aria-label="飞机托盘">
-        {trayItems.map(traySlot)}
-        {trayItems.length === 0 ? (
+        {deck ? (
+          <div
+            className={`placement__deck placement__deck--${orientation}`}
+            style={{ width: deck.width, height: deck.height }}
+          >
+            {deck.items.map((item, i) => deckCard(item, i, deck.dims[i]!))}
+          </div>
+        ) : (
           <span className="placement__tray-empty">全部飞机已上棋盘</span>
-        ) : null}
+        )}
       </section>
 
       {/* 棋盘 */}

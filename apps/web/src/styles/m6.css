@@ -69,7 +69,7 @@
   color: var(--ink);
   white-space: nowrap;
   animation: fadeIn 200ms ease-out;
-  max-width: 92vw;
+  max-width: 92cqw;
 }
 .online__banner--danger {
   border-color: var(--danger);

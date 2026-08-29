@@ -177,7 +177,13 @@ export function OnlineGame() {
 
   const miniCell = config
     ? clamp(
-        Math.min(Math.floor(mainCell / 2), Math.floor((viewport.width / 2 - 44) / config.width)),
+        Math.min(
+          Math.floor(mainCell / 2),
+          Math.floor(
+            (orientation === 'portrait' ? viewport.width - 60 : viewport.width / 2 - 44) /
+              config.width,
+          ),
+        ),
         6,
         20,
       )
@@ -507,7 +513,7 @@ export function OnlineGame() {
           onKeyDown={(e) => {
             if (e.key === 'Enter') commitInput()
           }}
-          placeholder="请输入报点坐标"
+          placeholder="请输入坐标"
           aria-label="报点坐标，如 A5"
           autoComplete="off"
         />

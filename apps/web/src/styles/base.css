@@ -53,6 +53,14 @@ body {
   min-height: 100dvh;
 }
 
+/* 舞台居中：竖版窗口过高/过宽时舞台 9:16 画幅居中留白（body 纸色背景露出） */
+.app {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
 ::selection {
   background: rgba(214, 178, 96, 0.4);
 }

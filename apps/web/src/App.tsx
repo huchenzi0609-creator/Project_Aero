@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { useAppStore } from './store/appStore'
 import { useOnlineStore } from './store/onlineStore'
+import { useEffectiveOrientation } from './hooks/useOrientation'
 import { StampFilterDefs } from './components/grid/StampFilterDefs'
 import { ToastRegion } from './components/ui/Toast'
 import { connectSocket } from './net/socket'
@@ -19,6 +20,7 @@ import { GameScreen } from './pages/GameScreen'
 export default function App() {
   const view = useAppStore((s) => s.view)
   const room = useOnlineStore((s) => s.room)
+  const orientation = useEffectiveOrientation()
 
   // 挂载即建立 Socket 连接（幂等；断线由 socket.io 自动重连）
   useEffect(() => {
@@ -47,19 +49,22 @@ export default function App() {
   return (
     <div className="app">
       <StampFilterDefs />
-      {/* key=view 触发 200ms 页面淡入切换 */}
-      <div key={view} className="page-fade">
-        {view === 'home' ? <Home /> : null}
-        {view === 'single' ? <SingleMenu /> : null}
-        {view === 'custom' ? <CustomConfig mode="single" /> : null}
-        {view === 'settings' ? <Settings /> : null}
-        {view === 'rules' ? <Rules /> : null}
-        {view === 'online' ? <OnlineMenu /> : null}
-        {view === 'onlineCustom' ? <CustomConfig mode="online" /> : null}
-        {view === 'onlinePlacement' ? <OnlinePlacement /> : null}
-        {view === 'onlineGame' ? <OnlineGame /> : null}
-        {view === 'placement' ? <Placement /> : null}
-        {view === 'game' ? <GameScreen mode="single" /> : null}
+      {/* 舞台容器：竖版 9:16 画幅 / 横版全窗口；页面在其内部滚动，舞台本身不滚动 */}
+      <div className={`app-stage app-stage--${orientation}`}>
+        {/* key=view 触发 200ms 页面淡入切换 */}
+        <div key={view} className="page-fade">
+          {view === 'home' ? <Home /> : null}
+          {view === 'single' ? <SingleMenu /> : null}
+          {view === 'custom' ? <CustomConfig mode="single" /> : null}
+          {view === 'settings' ? <Settings /> : null}
+          {view === 'rules' ? <Rules /> : null}
+          {view === 'online' ? <OnlineMenu /> : null}
+          {view === 'onlineCustom' ? <CustomConfig mode="online" /> : null}
+          {view === 'onlinePlacement' ? <OnlinePlacement /> : null}
+          {view === 'onlineGame' ? <OnlineGame /> : null}
+          {view === 'placement' ? <Placement /> : null}
+          {view === 'game' ? <GameScreen mode="single" /> : null}
+        </div>
       </div>
       <ToastRegion />
     </div>

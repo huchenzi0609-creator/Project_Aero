@@ -1,0 +1,22 @@
+/* ============================================================
+   舞台容器：9:16 竖版画幅 / 全窗口横版（v0.2.3 契约）
+   - 竖版：窗口过宽/过高时居中留白，body 背景仍为纸色
+   - container-type: size 使舞台内 cqw/cqh 相对舞台缩放
+   ============================================================ */
+
+.app-stage {
+  container-type: size;
+}
+
+.app-stage--portrait {
+  width: min(100vw, calc(100vh * 9 / 16));
+  height: min(100vh, calc(100vw * 16 / 9));
+  margin: 0 auto;
+  position: relative;
+  overflow: hidden;
+}
+
+.app-stage--landscape {
+  width: 100vw;
+  height: 100vh;
+}

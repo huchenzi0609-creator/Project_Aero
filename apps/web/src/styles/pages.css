@@ -1,15 +1,20 @@
 /* ============================================================
    页面布局：主页 / 单机菜单 / 自定义配置 / 设置 / 规则 / 联机 / 对局
    横版（landscape）与竖版（portrait）由容器类切换
+   舞台内单位约定（v0.2.3）：随画幅缩放的 vw/vh 一律用容器单位
+   cqw/cqh（相对 app-stage，container-type:size）
    ============================================================ */
 
 /* ---------- 页面通用 ---------- */
 
 .page {
-  min-height: 100dvh;
+  height: 100cqh;
   display: flex;
   flex-direction: column;
-  padding: 18px clamp(14px, 4vw, 40px) 30px;
+  padding: 18px clamp(14px, 4cqw, 40px) 30px;
+  /* 内容超出舞台时在页面容器内滚动（舞台本身 overflow:hidden 不滚动） */
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 .page-fade {
   animation: pageFade 200ms ease-out;
@@ -28,7 +33,7 @@
   flex-wrap: wrap;
 }
 .page__title {
-  font-size: clamp(26px, 4.5vw, 36px);
+  font-size: clamp(26px, 4.5cqw, 36px);
   margin: 0;
   font-weight: 600;
   line-height: 1.25;
@@ -81,7 +86,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: clamp(36px, 8vw, 110px);
+  gap: clamp(36px, 8cqw, 110px);
   min-height: 0;
   padding: 24px 0;
 }
@@ -108,7 +113,7 @@
   margin-bottom: 4px;
 }
 .home__title {
-  font-size: clamp(46px, 9vw, 92px);
+  font-size: clamp(46px, 9cqw, 92px);
   font-weight: 600;
   letter-spacing: 0.08em;
   line-height: 1.05;
@@ -129,7 +134,7 @@
   gap: 15px;
 }
 .home--portrait .home__menu {
-  width: min(300px, 84vw);
+  width: min(300px, 84cqw);
 }
 .home__foot {
   display: flex;
@@ -586,11 +591,11 @@
 /* ---------- 对局占位页 GameScreenPlaceholder ---------- */
 
 .game {
-  height: 100dvh;
+  height: 100cqh;
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding: 8px clamp(8px, 2.5vw, 26px) 12px;
+  padding: 8px clamp(8px, 2.5cqw, 26px) 12px;
 }
 .game__statusbar {
   display: flex;
