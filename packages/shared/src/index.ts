@@ -71,6 +71,8 @@ export interface GridConfig {
   height: number
   planeCount: number
   shape: PlaneShape
+  /** 是否允许在对局中拖拽移动样式参考飞机；缺省时由客户端设置项（默认 true）决定 */
+  allowMoveRefPlane?: boolean
 }
 
 export const PRESETS: Record<'small' | 'medium' | 'large', GridConfig> = {
@@ -108,6 +110,7 @@ export const gridConfigSchema = z.object({
   height: z.number().int().min(GRID_MIN).max(GRID_MAX),
   planeCount: z.number().int().min(1),
   shape: planeShapeSchema,
+  allowMoveRefPlane: z.boolean().optional(),
 })
 
 export const coordInputSchema = z
