@@ -312,47 +312,153 @@ interface FleetCandidate {
   weight: number
 }
 
+/** 占位格质心（用于分散度 / 簇中心计算） */
+const centerOf = (abs: Cell[]): { r: number; c: number } => {
+  let sr = 0
+  let sc = 0
+  for (const a of abs) {
+    sr += a.r
+    sc += a.c
+  }
+  return { r: sr / abs.length, c: sc / abs.length }
+}
+
+/** 曼哈顿距离 */
+const manhattan = (a: { r: number; c: number }, b: { r: number; c: number }): number =>
+  Math.abs(a.r - b.r) + Math.abs(a.c - b.c)
+
+/** 一个密铺簇：容量随机（hard 1~3、hell 2~3），簇内飞机互相贴邻 */
+interface FleetCluster {
+  cap: number
+  center: { r: number; c: number } | null // 成员质心平均（空簇为 null）
+  members: number
+  anchors: Cell[] // 簇内全部占位格（贴邻候选的目标格来源）
+}
+
 /**
- * 候选摆位的权重：
- * easy/normal 均匀随机；hard 惩罚聚集（4 邻相邻数）；hell 防御性——大间距（8 邻）
- * + 角落/边缘偏好 + 旋转多样性（非对称）。
- * 性能：occupiedSet 由调用方增量维护（整数格键），每放置一架更新一次而非每候选重建。
+ * 分散候选（簇首 / 非贴邻放置）：枚举全部合法摆放位，按
+ *   weight = (1 + 到最近已有簇质心的曼哈顿距离)^spreadPow × (1 + 边缘/角落格数 × edgeCoeff)
+ * 加权抽样——簇间整体分散 + 边缘/角落偏好；4 旋转全部混合（增强残骸多解迷惑）。
+ * 对任意形状通用（仅用占位格与界内判断，不假设形状）。
  */
-function fleetWeight(
-  difficulty: Difficulty,
-  abs: Cell[],
+function scatteredCandidates(
+  variants: Variant[],
   occupiedSet: Set<number>,
-  rotationCounts: [number, number, number, number],
-  rotation: Rotation,
+  clusters: FleetCluster[],
   width: number,
   height: number,
-): number {
-  if (difficulty === 'easy' || difficulty === 'normal') return 1
-  const neighbors: Array<[number, number]> =
-    difficulty === 'hell'
-      ? [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]]
-      : [[1, 0], [-1, 0], [0, 1], [0, -1]]
-  let adj = 0
-  for (const cell of abs) {
-    for (const [dr, dc] of neighbors) {
-      if (occupiedSet.has(cellKeyInt(cell.r + dr, cell.c + dc))) adj++
+  spreadPow: number,
+  edgeCoeff: number,
+): FleetCandidate[] {
+  const cands: FleetCandidate[] = []
+  for (const v of variants) {
+    if (v.cells.length === 0) continue
+    const r0Max = height - 1 - v.maxR
+    const c0Max = width - 1 - v.maxC
+    if (r0Max < 0 || c0Max < 0) continue
+    for (let r0 = 0; r0 <= r0Max; r0++) {
+      for (let c0 = 0; c0 <= c0Max; c0++) {
+        const abs: Cell[] = []
+        let overlap = false
+        for (const cell of v.cells) {
+          const a = { r: cell.r + r0, c: cell.c + c0 }
+          abs.push(a)
+          if (occupiedSet.has(cellKeyInt(a.r, a.c))) {
+            overlap = true
+            break
+          }
+        }
+        if (overlap) continue
+        // 整体分散：到最近已有簇质心的曼哈顿距离（无簇时距离视为 0，仅靠边缘偏好）
+        const center = centerOf(abs)
+        let minDist = 0
+        if (clusters.length > 0) {
+          minDist = Infinity
+          for (const cl of clusters) {
+            if (cl.center === null) continue
+            const d = manhattan(center, cl.center)
+            if (d < minDist) minDist = d
+          }
+          if (minDist === Infinity) minDist = 0
+        }
+        // 边缘/角落偏好
+        let edge = 0
+        let corner = 0
+        for (const a of abs) {
+          const onEdge = a.r === 0 || a.r === height - 1 || a.c === 0 || a.c === width - 1
+          const inCorner = (a.r === 0 || a.r === height - 1) && (a.c === 0 || a.c === width - 1)
+          if (onEdge) edge++
+          if (inCorner) corner++
+        }
+        const weight = (1 + minDist) ** spreadPow * (1 + (edge + corner * 2) * edgeCoeff)
+        cands.push({ rotation: v.rotation, origin: { r: r0, c: c0 }, abs, weight })
+      }
     }
   }
-  if (difficulty === 'hard') return 1 / (1 + adj)
+  return cands
+}
 
-  // hell：防御性摆位
-  let edge = 0
-  let corner = 0
-  for (const cell of abs) {
-    const onEdge = cell.r === 0 || cell.r === height - 1 || cell.c === 0 || cell.c === width - 1
-    const inCorner = (cell.r === 0 || cell.r === height - 1) && (cell.c === 0 || cell.c === width - 1)
-    if (onEdge) edge++
-    if (inCorner) corner++
+/**
+ * 贴邻候选（簇内密铺）：目标格 = 簇内占位格的 4 邻/8 邻；
+ * 新机任一格落于目标格即候选，按最小曼哈顿间隙加权——间隙 1（四邻紧贴）→ tightWeight，
+ * 间隙 2（对角/隔一格）→ looseWeight；hell 的 loose 更小（更紧）。带微扰随机破平。
+ */
+function denseCandidates(
+  variants: Variant[],
+  anchors: Cell[],
+  occupiedSet: Set<number>,
+  width: number,
+  height: number,
+  tightWeight: number,
+  looseWeight: number,
+  rng: Rng,
+): FleetCandidate[] {
+  const targets = new Map<string, Cell>()
+  for (const an of anchors) {
+    for (const [dr, dc] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]] as Array<[number, number]>) {
+      const r = an.r + dr
+      const c = an.c + dc
+      if (r < 0 || r >= height || c < 0 || c >= width) continue
+      if (occupiedSet.has(cellKeyInt(r, c))) continue
+      targets.set(`${r},${c}`, { r, c })
+    }
   }
-  const spacing = 1 / (1 + adj) ** 2.2
-  const edgeBonus = 1 + edge * 0.6 + corner * 1.2
-  const diversity = rotationCounts[rotation] > 0 ? 0.6 : 1
-  return spacing * edgeBonus * diversity
+  if (targets.size === 0) return []
+  const seenOrigins = new Set<number>()
+  const cands: FleetCandidate[] = []
+  for (const t of targets.values()) {
+    for (const v of variants) {
+      if (v.cells.length === 0) continue
+      for (const cell of v.cells) {
+        const r0 = t.r - cell.r
+        const c0 = t.c - cell.c
+        const okey = cellKeyInt(r0, c0)
+        if (seenOrigins.has(okey)) continue
+        const abs: Cell[] = []
+        let ok = true
+        for (const cc of v.cells) {
+          const a = { r: cc.r + r0, c: cc.c + c0 }
+          if (a.r < 0 || a.r >= height || a.c < 0 || a.c >= width || occupiedSet.has(cellKeyInt(a.r, a.c))) {
+            ok = false
+            break
+          }
+          abs.push(a)
+        }
+        if (!ok) continue
+        seenOrigins.add(okey)
+        let minGap = Infinity
+        for (const a of abs) {
+          for (const an of anchors) {
+            const d = Math.abs(a.r - an.r) + Math.abs(a.c - an.c)
+            if (d < minGap) minGap = d
+          }
+        }
+        const w = minGap <= 1 ? tightWeight : looseWeight
+        cands.push({ rotation: v.rotation, origin: { r: r0, c: c0 }, abs, weight: w * (0.9 + rng() * 0.2) })
+      }
+    }
+  }
+  return cands
 }
 
 function weightedPick<T extends { weight: number }>(items: T[], rng: Rng): T {
@@ -398,6 +504,131 @@ function greedyFallback(width: number, height: number, planeCount: number, varia
   return placed
 }
 
+/** easy/normal：均匀随机合法摆位（每架在全部合法候选中等概率选取） */
+function generateUniformFleet(
+  width: number,
+  height: number,
+  planeCount: number,
+  variants: Variant[],
+  rng: Rng,
+): PlacedPlane[] | null {
+  const placed: PlacedPlane[] = []
+  const occupiedSet = new Set<number>()
+  for (let i = 0; i < planeCount; i++) {
+    const cands: FleetCandidate[] = []
+    for (const v of variants) {
+      if (v.cells.length === 0) continue
+      const r0Max = height - 1 - v.maxR
+      const c0Max = width - 1 - v.maxC
+      if (r0Max < 0 || c0Max < 0) continue
+      for (let r0 = 0; r0 <= r0Max; r0++) {
+        for (let c0 = 0; c0 <= c0Max; c0++) {
+          const abs: Cell[] = []
+          let overlap = false
+          for (const cell of v.cells) {
+            const a = { r: cell.r + r0, c: cell.c + c0 }
+            abs.push(a)
+            if (occupiedSet.has(cellKeyInt(a.r, a.c))) {
+              overlap = true
+              break
+            }
+          }
+          if (overlap) continue
+          cands.push({ rotation: v.rotation, origin: { r: r0, c: c0 }, abs, weight: 1 })
+        }
+      }
+    }
+    if (cands.length === 0) return null // 死路：整局重来
+    const chosen = weightedPick(cands, rng)
+    placed.push({ id: i, rotation: chosen.rotation, origin: chosen.origin })
+    for (const a of chosen.abs) occupiedSet.add(cellKeyInt(a.r, a.c))
+  }
+  return placed
+}
+
+/**
+ * hard/hell：「局部密铺 + 整体分散」簇算法生成机队（对任意形状通用，仅用占位格与界内判断）。
+ * - 簇：容量随机（hard 1~3、hell 2~3）；簇内飞机以 denseProb 概率优先贴邻（间隙 1~2 格）；
+ * - 簇首：远离已有簇质心（整体分散）+ 边缘/角落偏好；
+ * - 4 旋转全部混合（增强残骸多解迷惑）；hell 的密铺倾向与分散强度均高于 hard；
+ * - 返回 null 表示棋盘已无可放位（由调用方整局重试）。
+ */
+function generateClusterFleet(
+  width: number,
+  height: number,
+  planeCount: number,
+  variants: Variant[],
+  difficulty: Difficulty,
+  rng: Rng,
+): PlacedPlane[] | null {
+  const denseProb = difficulty === 'hell' ? 0.97 : 0.95 // 簇内贴邻概率
+  const spreadPow = difficulty === 'hell' ? 3.0 : 2.0 // 簇间分散强度
+  const edgeCoeff = difficulty === 'hell' ? 0.7 : 0.4 // 边缘/角落偏好强度
+  const tightWeight = 1
+  const looseWeight = difficulty === 'hell' ? 0.1 : 0.12 // 间隙 2 格的权重（4 邻紧贴主导；hell 更紧）
+
+  const placed: PlacedPlane[] = []
+  const occupiedSet = new Set<number>()
+  const clusters: FleetCluster[] = []
+  let current: FleetCluster | null = null
+
+  for (let i = 0; i < planeCount; i++) {
+    // 开新簇：簇容量随机（hard 1~3 偏向 2~3，hell 2~3 偏向 3）——簇少则簇间对占比高、整体更分散
+    const openCluster = (): FleetCluster => {
+      const cap =
+        difficulty === 'hell'
+          ? rng() < 0.05
+            ? 2
+            : 3
+          : rng() < 0.05
+            ? 1
+            : rng() < 0.35
+              ? 2
+              : 3
+      const cl: FleetCluster = { cap, center: null, members: 0, anchors: [] }
+      clusters.push(cl)
+      return cl
+    }
+    if (current === null || current.members >= current.cap) {
+      current = openCluster()
+    }
+    let chosen: FleetCandidate | null = null
+    // 1) 簇内贴邻（局部密铺）
+    if (current.members > 0 && rng() < denseProb) {
+      const dense = denseCandidates(variants, current.anchors, occupiedSet, width, height, tightWeight, looseWeight, rng)
+      if (dense.length > 0) chosen = weightedPick(dense, rng)
+    }
+    // 2) 贴邻失败（或簇首 / 未触发贴邻）→ 结束当前簇、开新簇，簇首分散放置（仅相对其它簇）
+    if (chosen === null) {
+      if (current.members > 0) current = openCluster()
+      const scattered = scatteredCandidates(variants, occupiedSet, clusters, width, height, spreadPow, edgeCoeff)
+      if (scattered.length === 0) return null // 棋盘已无可放位：整局重试
+      // 簇首只在"分散+角落得分"最高的前 ~2.5% 候选中随机（避免加权抽样被中间区大量低权重候选稀释，
+      // 保证簇中心间距大的整体分散；同批候选中再随机以保留多样性）
+      const k = Math.max(4, Math.floor(scattered.length / 40))
+      const top = scattered.sort((a, b) => b.weight - a.weight).slice(0, k)
+      chosen = pickRandom(top, rng)
+    }
+    placed.push({ id: i, rotation: chosen.rotation, origin: chosen.origin })
+    for (const a of chosen.abs) occupiedSet.add(cellKeyInt(a.r, a.c))
+    // 更新当前簇
+    current.anchors.push(...chosen.abs)
+    const center = centerOf(chosen.abs)
+    if (current.center === null) {
+      current.center = center
+    } else {
+      // 质心增量更新：新质心 = (旧质心×旧成员数 + 新机质心) / 新成员数
+      const n = current.members + 1
+      current.center = {
+        r: (current.center.r * current.members + center.r) / n,
+        c: (current.center.c * current.members + center.c) / n,
+      }
+    }
+    current.members++
+  }
+  return placed
+}
+
 /** 生成合法机队（产物保证通过 validateFleet）。 */
 export function generateFleet(
   width: number,
@@ -409,47 +640,12 @@ export function generateFleet(
 ): PlacedPlane[] {
   const norm = normalizeShape(shape)
   const variants = makeVariants(norm)
-
-  const tryOnce = (): PlacedPlane[] | null => {
-    const placed: PlacedPlane[] = []
-    const occupiedSet = new Set<number>()
-    const rotationCounts: [number, number, number, number] = [0, 0, 0, 0]
-    for (let i = 0; i < planeCount; i++) {
-      const cands: FleetCandidate[] = []
-      for (const v of variants) {
-        if (v.cells.length === 0) continue
-        const r0Max = height - 1 - v.maxR
-        const c0Max = width - 1 - v.maxC
-        if (r0Max < 0 || c0Max < 0) continue
-        for (let r0 = 0; r0 <= r0Max; r0++) {
-          for (let c0 = 0; c0 <= c0Max; c0++) {
-            const abs: Cell[] = []
-            let overlap = false
-            for (const cell of v.cells) {
-              const a = { r: cell.r + r0, c: cell.c + c0 }
-              abs.push(a)
-              if (occupiedSet.has(cellKeyInt(a.r, a.c))) {
-                overlap = true
-                break
-              }
-            }
-            if (overlap) continue
-            const weight = fleetWeight(difficulty, abs, occupiedSet, rotationCounts, v.rotation, width, height)
-            cands.push({ rotation: v.rotation, origin: { r: r0, c: c0 }, abs, weight })
-          }
-        }
-      }
-      if (cands.length === 0) return null // 死路：整局重来
-      const chosen = weightedPick(cands, rng)
-      placed.push({ id: i, rotation: chosen.rotation, origin: chosen.origin })
-      for (const a of chosen.abs) occupiedSet.add(cellKeyInt(a.r, a.c))
-      rotationCounts[chosen.rotation]++
-    }
-    return placed
-  }
+  const clustered = difficulty === 'hard' || difficulty === 'hell'
 
   for (let attempt = 0; attempt < 2000; attempt++) {
-    const fleet = tryOnce()
+    const fleet = clustered
+      ? generateClusterFleet(width, height, planeCount, variants, difficulty, rng)
+      : generateUniformFleet(width, height, planeCount, variants, rng)
     if (fleet !== null) {
       const check = validateFleet(width, height, planeCount, norm, fleet)
       if (check.ok) return fleet

@@ -545,7 +545,7 @@ export class RoomManager {
     }
   }
 
-  /** 读秒超时：机会消耗（继续由本人走）/ 机器接管 */
+  /** 读秒超时：机会消耗（系统代走一步并轮换）/ 机器接管 */
   private onTurnTimeout(room: Room, player: 0 | 1): void {
     room.turnTimer = null
     const game = room.game
@@ -556,17 +556,17 @@ export class RoomManager {
     const decision = handleTimeout(seat.timing, this.timings, Date.now())
     seat.timing = decision.next
     if (decision.kind === 'consume') {
-      // 消耗 1 次全局机会，本回合读秒重置继续由本人走
-      room.turnDeadline = seat.timing.deadline
-      this.emitTurnState(room, player)
-      room.turnTimer = setTimeout(
-        () => this.onTurnTimeout(room, player),
-        Math.max(0, (seat.timing.deadline as number) - Date.now()),
-      )
+      // 新语义（用户反馈）：超时并消耗 1 次机会 → 系统立即代走一步（即超时方本回合行动），
+      // 随后由 shootInternal 正常广播 shotResult、轮换回合、判定胜负并启动对手计时器。
+      // 先广播一次机会消耗，供前端展示剩余机会数。
+      this.broadcast(room, 'timerUpdate', { player, remainingMs: 0, chancesLeft: seat.timing.chancesLeft })
+      const coord = this.chooseShotFor(room, player)
+      this.shootInternal(room, player, coord)
+      // 注意：若代走一步直接终局（全灭/绝地反击），finishGame 已清理全部计时器，此处无需也不得再启动计时。
       return
     }
     if (decision.kind === 'takeover') {
-      // 机会耗尽后首次超时 → 机器永久接管
+      // 机会耗尽（降档）后首次超时 → 机器永久接管
       seat.machine = true
       room.turnDeadline = null
       room.takeovers.push(player)
@@ -577,13 +577,10 @@ export class RoomManager {
     // kind === 'none'：机器席位不应有超时
   }
 
-  /** 机器走棋：只用自身报点历史（绝不读对方阵型） */
-  private machineMove(room: Room, player: 0 | 1): void {
-    const seat = room.seats[player]
-    seat.machineTimer = null
+  /** 系统/机器代走：构造该席位自身的报点知识（只用报点历史与反馈，绝不读对方阵型）并给出一个报点 */
+  private chooseShotFor(room: Room, player: 0 | 1): Cell {
     const game = room.game
-    if (!game || game.phase === 'ended') return
-    if (game.turn !== player) return // 过期调度
+    if (!game) throw new Error('对局不存在（内部错误）')
     const board = game.players[player]
     const knowledge = {
       width: board.width,
@@ -591,7 +588,17 @@ export class RoomManager {
       shots: board.shotsFired,
       planeShape: board.shape,
     }
-    const coord = this.core.chooseShot(knowledge, MACHINE_TAKEOVER_DIFFICULTY, seat.rng)
+    return this.core.chooseShot(knowledge, MACHINE_TAKEOVER_DIFFICULTY, room.seats[player].rng)
+  }
+
+  /** 机器走棋：复用 chooseShotFor 选点后走 shootInternal */
+  private machineMove(room: Room, player: 0 | 1): void {
+    const seat = room.seats[player]
+    seat.machineTimer = null
+    const game = room.game
+    if (!game || game.phase === 'ended') return
+    if (game.turn !== player) return // 过期调度
+    const coord = this.chooseShotFor(room, player)
     this.shootInternal(room, player, coord)
   }
 

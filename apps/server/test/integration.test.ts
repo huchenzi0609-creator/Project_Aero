@@ -157,6 +157,10 @@ function drive(client: TestClient, width: number, height: number, errs: string[]
   for (const s of client.history<ShotResultPayload>('shotResult')) {
     if (s.by === 'you') shotSet.add(`${s.coord.r},${s.coord.c}`)
   }
+  // 持续跟踪本座视角的 by:'you' 报点（含本座超时后系统代走的步），避免驱动器重复选格
+  client.socket.on('shotResult', (s) => {
+    if (s.by === 'you') shotSet.add(`${s.coord.r},${s.coord.c}`)
+  })
   let lastHandled = ''
   const maybeShoot = (): void => {
     const turns = client.history<{ yourTurn: boolean; turnNo: number; deadline: number }>('turnStart')
@@ -193,6 +197,18 @@ function findEmptyCell(
   width: number,
   height: number,
 ): Cell {
+  return findEmptyCellExcluding(fleet0, fleet1, shape, width, height, new Set())
+}
+
+/** 同上，但排除指定的格（如本座已报过的格），避免重复报点 */
+function findEmptyCellExcluding(
+  fleet0: PlacedPlane[],
+  fleet1: PlacedPlane[],
+  shape: GridConfig['shape'],
+  width: number,
+  height: number,
+  exclude: Set<string>,
+): Cell {
   const occ = new Set<string>()
   for (const f of [fleet0, fleet1]) {
     for (const p of f) {
@@ -201,10 +217,11 @@ function findEmptyCell(
   }
   for (let r = 0; r < height; r++) {
     for (let c = 0; c < width; c++) {
-      if (!occ.has(`${r},${c}`)) return { r, c }
+      const k = `${r},${c}`
+      if (!occ.has(k) && !exclude.has(k)) return { r, c }
     }
   }
-  throw new Error('棋盘没有空格（不应发生）')
+  throw new Error('棋盘没有可用空格（不应发生）')
 }
 
 /* ---------------------------------------------------------------- 测试 */
@@ -505,7 +522,7 @@ describe('断线重连与超时判负（reconnectGraceMs=400ms）', () => {
   })
 })
 
-describe('围棋读秒 → 机器接管（快速计时）', () => {
+describe('围棋读秒 → 系统代走 / 机器接管（快速计时）', () => {
   let server: ServerHandle
   let core: GameCoreApi
 
@@ -517,8 +534,8 @@ describe('围棋读秒 → 机器接管（快速计时）', () => {
       dataDir: ':memory:',
       roomManagerOptions: {
         core,
-        timings: { turnLimitMs: 60, overtimeChances: 1, reducedTurnLimitMs: 40 },
-        machineDelay: { min: 15, max: 30 },
+        timings: { turnLimitMs: 30, overtimeChances: 3, reducedTurnLimitMs: 20 },
+        machineDelay: { min: 10, max: 20 },
       },
     })
   })
@@ -526,7 +543,80 @@ describe('围棋读秒 → 机器接管（快速计时）', () => {
     await server.close()
   })
 
-  it('超时消耗机会 → 机会耗尽降档 → 首次降档超时机器接管 → 对局继续至终局', async () => {
+  it('超时→消耗 1 次机会→系统代走一步（shotResult 归属超时方）→回合轮换→对方正常报点', { timeout: 15_000 }, async () => {
+    const a = new TestClient(server.url) // 超时方：永不主动报点
+    const b = new TestClient(server.url) // 对方：正常报点
+    try {
+      await authClient(a)
+      await authClient(b)
+      const config = PRESETS.small
+      const fleetA = core.generateFleet(config.width, config.height, config.planeCount, config.shape, 'normal', core.mulberry32(61))
+      const fleetB = core.generateFleet(config.width, config.height, config.planeCount, config.shape, 'normal', core.mulberry32(62))
+      const { youA, youB } = await setupRoom(a, b, config, { a: fleetA, b: fleetB })
+      await readyBoth(a, b)
+      void youA
+      void youB
+
+      // 先手判定
+      const tsA = await a.waitFor<{ yourTurn: boolean }>('turnStart')
+      await b.waitFor<{ yourTurn: boolean }>('turnStart')
+      const firstIsA = tsA.yourTurn
+
+      // 若先手是 B：B 先手动报一个空格（保证 miss，不提前终局），把回合交给 A 触发其超时
+      const usedByB = new Set<string>()
+      if (!firstIsA) {
+        const empty = findEmptyCell(fleetA, fleetB, config.shape, config.width, config.height)
+        usedByB.add(`${empty.r},${empty.c}`)
+        const r = await emitAck<{ ok: boolean; error?: string }>(b.socket, 'shoot', { coord: empty })
+        expect(r.ok).toBe(true)
+      }
+
+      // A 不报点 → 超时 → 消耗 1 次机会 → 系统代走一步：A 侧收到 by:'you'，B 侧收到同点 by:'opponent'
+      const aShot = await a.waitFor<ShotResultPayload>('shotResult', (s) => s.by === 'you', 10_000)
+      const bShot = await b.waitFor<ShotResultPayload>(
+        'shotResult',
+        (s) => s.by === 'opponent' && s.coord.r === aShot.coord.r && s.coord.c === aShot.coord.c,
+        5_000,
+      )
+      expect(bShot.outcome).toBe(aShot.outcome)
+
+      // 机会被消耗：A 的 timerUpdate chancesLeft 3 → 2
+      const timerUpdates = a.history<{ player: 0 | 1; remainingMs: number; chancesLeft: number }>('timerUpdate')
+      const chances = timerUpdates.filter((t) => t.player === youA).map((t) => t.chancesLeft)
+      expect(chances).toContain(2)
+
+      // 回合轮换到对手：B 收到 yourTurn=true
+      await b.waitFor<{ yourTurn: boolean }>('turnStart', (p) => p.yourTurn, 5_000)
+
+      // 对方正常报点（选一个双方机队不占用、且 B 未报过的格）→ ok，双方收到 shotResult
+      const usedByBAfter = new Set(usedByB)
+      usedByBAfter.add(`${aShot.coord.r},${aShot.coord.c}`)
+      const empty2 = findEmptyCellExcluding(fleetA, fleetB, config.shape, config.width, config.height, usedByBAfter)
+      const r2 = await emitAck<{ ok: boolean; error?: string }>(b.socket, 'shoot', { coord: empty2 })
+      expect(r2.ok).toBe(true)
+      await b.waitFor<ShotResultPayload>(
+        'shotResult',
+        (s) => s.by === 'you' && s.coord.r === empty2.r && s.coord.c === empty2.c,
+        5_000,
+      )
+
+      // 收尾：B 投降 → gameEnd('resign')，胜者是 A
+      const endAP = a.waitFor<GameEndPayload>('gameEnd', undefined, 5_000)
+      const endBP = b.waitFor<GameEndPayload>('gameEnd', undefined, 5_000)
+      b.socket.emit('resign')
+      const [endA, endB] = await Promise.all([endAP, endBP])
+      expect(endA.reason).toBe('resign')
+      expect(endA.winner).toBe(youA)
+      expect(endB.reason).toBe('resign')
+      expect(endA.layouts.player0).toEqual(fleetA)
+      expect(endA.layouts.player1).toEqual(fleetB)
+    } finally {
+      a.dispose()
+      b.dispose()
+    }
+  })
+
+  it('连续 3 次超时消耗完机会 → 降档 10s(测试 20ms) → 首次降档超时机器接管 → 机器代打至终局', { timeout: 30_000 }, async () => {
     const a = new TestClient(server.url) // 被接管方：永不报点
     const b = new TestClient(server.url) // 正常报点
     try {
@@ -536,26 +626,34 @@ describe('围棋读秒 → 机器接管（快速计时）', () => {
       const fleetA = core.generateFleet(config.width, config.height, config.planeCount, config.shape, 'normal', core.mulberry32(41))
       const fleetB = core.generateFleet(config.width, config.height, config.planeCount, config.shape, 'normal', core.mulberry32(42))
       const { youA, youB } = await setupRoom(a, b, config, { a: fleetA, b: fleetB })
-      await readyBoth(a, b)
 
-      // B 驱动报点；A 不报点
+      // 先挂驱动再就绪，确保 B 不错过自己的初始回合（否则 B 会超时被系统代走，干扰断言）
       const errs: string[] = []
       const stopB = drive(b, config.width, config.height, errs)
+      await readyBoth(a, b)
 
       // 双方都收到 machineTakeover（player = A 的下标）
-      const takeAP = a.waitFor<{ player: 0 | 1 }>('machineTakeover', undefined, 15_000)
-      const takeBP = b.waitFor<{ player: 0 | 1 }>('machineTakeover', undefined, 15_000)
+      const takeAP = a.waitFor<{ player: 0 | 1 }>('machineTakeover', undefined, 20_000)
+      const takeBP = b.waitFor<{ player: 0 | 1 }>('machineTakeover', undefined, 20_000)
       const [takeA, takeB] = await Promise.all([takeAP, takeBP])
       expect(takeA.player).toBe(youA)
       expect(takeB.player).toBe(youA)
 
-      // A 的计时器轨迹：机会被消耗（chancesLeft 出现过 1→0）
+      // A 的机会轨迹：开局 3 次机会，三次超时消耗后为 0（机会耗尽 → 降档）
       const timerUpdates = a.history<{ player: 0 | 1; remainingMs: number; chancesLeft: number }>('timerUpdate')
       const chances = timerUpdates.filter((t) => t.player === youA).map((t) => t.chancesLeft)
-      expect(chances).toContain(1)
-      expect(chances).toContain(0)
+      expect(new Set(chances)).toEqual(new Set([0, 1, 2, 3]))
 
-      // 接管后机器代打，对局继续直至终局
+      // 系统代走 + 机器代打：A 从未主动报点，其 by:'you' 的 shotResult 全部来自系统/机器；
+      // 三次机会消耗各代走一步（≥3），接管后机器继续代打
+      const aYou = a.history<ShotResultPayload>('shotResult').filter((s) => s.by === 'you')
+      expect(aYou.length).toBeGreaterThanOrEqual(3)
+      // B 侧同步收到这些行动（by:'opponent'），且 B 自身正常报点（by:'you'）
+      const bShots = b.history<ShotResultPayload>('shotResult')
+      expect(bShots.filter((s) => s.by === 'opponent').length).toBeGreaterThanOrEqual(3)
+      expect(bShots.filter((s) => s.by === 'you').length).toBeGreaterThan(0)
+
+      // 接管后机器继续代打，对局继续直至终局
       const endAP = a.waitFor<GameEndPayload>('gameEnd', undefined, 30_000)
       const endBP = b.waitFor<GameEndPayload>('gameEnd', undefined, 30_000)
       const [endA, endB] = await Promise.all([endAP, endBP])
@@ -564,9 +662,6 @@ describe('围棋读秒 → 机器接管（快速计时）', () => {
       expect(endA.winner).toBe(endB.winner)
       expect(endA.layouts.player0).toEqual(fleetA)
       expect(endA.layouts.player1).toEqual(fleetB)
-      // 机器确实为 A 代打过：A 侧存在本座报点（by:'you'）
-      const aShots = a.history<ShotResultPayload>('shotResult')
-      expect(aShots.some((s) => s.by === 'you')).toBe(true)
       // 若 B 获胜（败方是被接管的 A）→ reason 应为 timeout-takeover
       if (endA.winner === youB) expect(endA.reason).toBe('timeout-takeover')
     } finally {

@@ -3,7 +3,7 @@ import { useAppStore } from '../store/appStore'
 import { PaperButton } from '../components/ui/PaperButton'
 
 /** 迷你棋盘图标（按档位格数画点阵） */
-function MiniGridIcon({ cols, rows }: { cols: number; rows: number }) {
+function MiniGridIcon({ cols }: { cols: number }) {
   const n = cols === 10 ? 4 : cols === 15 ? 5 : 6
   const step = 40 / (n - 1)
   const dots: Array<{ x: number; y: number }> = []
@@ -19,9 +19,6 @@ function MiniGridIcon({ cols, rows }: { cols: number; rows: number }) {
       {dots.map((d, i) => (
         <circle key={i} cx={d.x} cy={d.y} r="1.6" fill="var(--ink-soft)" />
       ))}
-      <text x="26" y="40" textAnchor="middle" fontFamily="var(--font-mono)" fontSize="11" fill="var(--ink-soft)">
-        {cols}×{rows}
-      </text>
     </svg>
   )
 }
@@ -84,7 +81,7 @@ export function SingleMenu() {
             className="single__card"
             onClick={() => goPreset(p.key)}
           >
-            <MiniGridIcon cols={p.cols} rows={p.rows} />
+            <MiniGridIcon cols={p.cols} />
             <span>
               <span className="single__card-label">{p.label}</span>
               <span className="single__card-sub">{p.sub}</span>

@@ -1,4 +1,3 @@
-/* eslint-disable */
 import { chromium } from '@playwright/test'
 const exe = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE
 const b = await chromium.launch({ executablePath: exe, headless: true })

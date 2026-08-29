@@ -28,6 +28,7 @@ import { PaperButton } from '../components/ui/PaperButton'
 import { PaperCard } from '../components/ui/PaperCard'
 import { PaperModal } from '../components/ui/PaperModal'
 import { PaperGrid } from '../components/grid/PaperGrid'
+import { ColoringToolButton, useColoring } from '../components/grid/ColoringTool'
 
 const REF_SHOTS: Shot[] = [
   { coord: { r: 0, c: 0 }, outcome: 'miss' },
@@ -81,6 +82,10 @@ export function GameScreen({ mode = 'single' }: { mode?: 'single' | 'online' }) 
   const me = session?.me ?? 0
   const ai = session?.ai ?? 1
 
+  /* ---------- 着色工具（每局独立，新对局清空） ---------- */
+  const coloring = useColoring()
+  const isColoring = coloring.coloringMode
+
   /* ---------- 音量占位接线（M7 实现真实音效） ---------- */
   useEffect(() => {
     audioService.setBgmVolume(bgmVolume)
@@ -103,6 +108,7 @@ export function GameScreen({ mode = 'single' }: { mode?: 'single' | 'online' }) 
     setAiFlash(null)
     setAiMsg(null)
     setMyMsg(null)
+    coloring.reset()
     audioService.playSfx('page-flip')
     const t = window.setTimeout(() => setScreen('battle'), 1500)
     return () => window.clearTimeout(t)
@@ -253,6 +259,7 @@ export function GameScreen({ mode = 'single' }: { mode?: 'single' | 'online' }) 
   }
 
   const commitInput = () => {
+    if (isColoring) return // 着色模式下不触发报点
     const cell = parseCoord(input)
     if (!cell) {
       toast('坐标格式应为"字母+数字"，如 A5', 'error')
@@ -365,20 +372,50 @@ export function GameScreen({ mode = 'single' }: { mode?: 'single' | 'online' }) 
 
         {/* 对手网格（居中）：只渲染我方报点标记，绝不显示对方阵型 */}
         <section className="game__opp">
-          <PaperGrid
-            width={config.width}
-            height={config.height}
-            cellSize={mainCell}
-            showLabels
-            onCellClick={onOppCellClick}
-            shots={myBoard.shotsFired}
-            highlight={highlight}
-            ariaLabel="对手棋盘"
-          />
+          <div className="coloring-stage">
+            <PaperGrid
+              width={config.width}
+              height={config.height}
+              cellSize={mainCell}
+              showLabels
+              onCellClick={onOppCellClick}
+              shots={myBoard.shotsFired}
+              highlight={highlight}
+              coloredCells={coloring.coloredCells}
+              coloring={
+                isColoring
+                  ? { active: true, color: coloring.currentColor, onPaint: coloring.paintCell }
+                  : undefined
+              }
+              ariaLabel="对手棋盘"
+            />
+            <ColoringToolButton
+              className="coloring-stage__btn"
+              active={isColoring}
+              color={coloring.currentColor}
+              paletteOpen={coloring.paletteOpen}
+              paletteDir="down"
+              onToggle={coloring.toggleMode}
+              onOpenPalette={() => coloring.setPaletteOpen(true)}
+              onClosePalette={() => coloring.setPaletteOpen(false)}
+              onSelectColor={coloring.selectColor}
+            />
+          </div>
         </section>
       </main>
 
       <footer className="game__inputbar">
+        <ColoringToolButton
+          className="coloring-inputbar__btn"
+          active={isColoring}
+          color={coloring.currentColor}
+          paletteOpen={coloring.paletteOpen}
+          paletteDir="up"
+          onToggle={coloring.toggleMode}
+          onOpenPalette={() => coloring.setPaletteOpen(true)}
+          onClosePalette={() => coloring.setPaletteOpen(false)}
+          onSelectColor={coloring.selectColor}
+        />
         <label className="visually-hidden" htmlFor="game-coord">
           报点坐标
         </label>
@@ -387,19 +424,21 @@ export function GameScreen({ mode = 'single' }: { mode?: 'single' | 'online' }) 
           className={['paper-select__control game__input', shake ? 'shake' : ''].filter(Boolean).join(' ')}
           style={{ width: 130, textAlign: 'center', letterSpacing: '0.08em' }}
           value={input}
-          disabled={!isMyTurn || screen !== 'battle'}
+          disabled={!isMyTurn || screen !== 'battle' || isColoring}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Enter') commitInput()
           }}
-          placeholder="如 A5"
+          placeholder="请输入报点坐标"
           aria-label="报点坐标，如 A5"
           autoComplete="off"
         />
-        <PaperButton variant="primary" onClick={commitInput} disabled={!isMyTurn || screen !== 'battle'}>
+        <PaperButton variant="primary" onClick={commitInput} disabled={!isMyTurn || screen !== 'battle' || isColoring}>
           确认报点
         </PaperButton>
-        <span className="game__hint">点击棋盘选格，再点一次报点 · 或输入坐标回车</span>
+        <span className="game__hint">
+          {isColoring ? '着色模式：点按染色 · 按住拖动画线 · 再点同色擦除' : '点击棋盘选格，再点一次报点 · 或输入坐标回车'}
+        </span>
       </footer>
 
       {/* 先后手横幅 */}
@@ -422,9 +461,6 @@ export function GameScreen({ mode = 'single' }: { mode?: 'single' | 'online' }) 
             <h1 className={`result__title ${iWin ? 'result__title--win' : 'result__title--lose'}`}>
               {iWin ? '恭喜您，您赢了！' : '您输了，下次一定！'}
             </h1>
-            <p className="result__sub">
-              {iWin ? '您的机队笑到了最后，海面归于平静。' : '电脑技高一筹，重整旗鼓再战一局吧。'}
-            </p>
 
             <div className="result__boards">
               <div className="result__board">

@@ -1,0 +1,152 @@
+/* ============================================================
+   着色工具（v0.2.0）：图标按钮 / 调色板 / 棋盘着色层 / 横竖版放置
+   ============================================================ */
+
+/* ---------- 着色按钮（仅图标，无文字） ---------- */
+
+.coloring-tool {
+  position: relative;
+  display: inline-flex;
+}
+.coloring-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border: 1px solid rgba(96, 78, 50, 0.42);
+  border-radius: var(--radius-sm);
+  background: var(--paper-sheet);
+  color: var(--ink);
+  cursor: pointer;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.6),
+    0 2px 3px rgba(84, 66, 38, 0.22);
+  touch-action: none;
+  transition:
+    transform 120ms var(--ease-paper),
+    box-shadow 120ms var(--ease-paper),
+    background-color 120ms ease;
+}
+.coloring-btn:hover {
+  transform: translateY(-1px);
+}
+.coloring-btn:active {
+  transform: translateY(1px);
+}
+.coloring-btn--active {
+  background: linear-gradient(180deg, #f3ead2, #e7dbbd);
+  border-color: rgba(96, 78, 50, 0.6);
+  box-shadow:
+    inset 0 1px 3px rgba(84, 66, 38, 0.25),
+    0 1px 2px rgba(84, 66, 38, 0.2);
+}
+.coloring-btn:focus-visible {
+  outline: 2px dashed var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.coloring-icon__dot--yellow {
+  fill: #e3b341;
+}
+.coloring-icon__dot--blue {
+  fill: #4a7fb5;
+}
+.coloring-icon__dot--green {
+  fill: #5f8f5a;
+}
+.coloring-icon__ring {
+  fill: none;
+  stroke: var(--ink);
+  stroke-width: 1.3;
+}
+
+/* ---------- 调色板（黄/蓝/绿，纸卡浮层） ---------- */
+
+.coloring-palette {
+  position: absolute;
+  z-index: 40;
+  display: flex;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--paper-sheet);
+  border: 1px solid rgba(96, 78, 50, 0.4);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+  animation: modalIn 160ms var(--ease-paper);
+}
+.coloring-palette--down {
+  top: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+}
+.coloring-palette--up {
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+}
+.coloring-swatch {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1.5px solid rgba(96, 78, 50, 0.5);
+  cursor: pointer;
+  transition: transform 100ms var(--ease-paper);
+}
+.coloring-swatch:hover {
+  transform: scale(1.14);
+}
+.coloring-swatch:focus-visible {
+  outline: 2px dashed var(--focus-ring);
+  outline-offset: 2px;
+}
+.coloring-swatch--current {
+  box-shadow: inset 0 0 0 2px var(--paper-sheet);
+  border-color: var(--ink);
+}
+.coloring-swatch--yellow {
+  background: rgba(227, 179, 65, 0.55);
+}
+.coloring-swatch--blue {
+  background: rgba(74, 127, 181, 0.55);
+}
+.coloring-swatch--green {
+  background: rgba(95, 143, 90, 0.55);
+}
+
+/* ---------- 横竖版放置 ---------- */
+
+/* 横版：中央对手棋盘上方右侧（浮层，不影响布局） */
+.coloring-stage {
+  position: relative;
+}
+.coloring-stage__btn {
+  position: absolute;
+  top: -38px;
+  right: 0;
+}
+/* 竖版：底部输入栏附近（由页面插入 footer 内） */
+.game--portrait .coloring-stage__btn {
+  display: none;
+}
+.game--landscape .coloring-inputbar__btn {
+  display: none;
+}
+
+/* ---------- 棋盘着色层（位于盖章标记下层，印章仍可见） ---------- */
+
+.paper-grid__colored {
+  position: absolute;
+  pointer-events: none;
+}
+.paper-grid__colored--yellow {
+  background: rgba(227, 179, 65, 0.35);
+}
+.paper-grid__colored--blue {
+  background: rgba(74, 127, 181, 0.35);
+}
+.paper-grid__colored--green {
+  background: rgba(95, 143, 90, 0.35);
+}

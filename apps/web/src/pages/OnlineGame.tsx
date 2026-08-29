@@ -21,6 +21,7 @@ import { PaperButton } from '../components/ui/PaperButton'
 import { PaperCard } from '../components/ui/PaperCard'
 import { PaperModal } from '../components/ui/PaperModal'
 import { PaperGrid } from '../components/grid/PaperGrid'
+import { ColoringToolButton, useColoring } from '../components/grid/ColoringTool'
 
 const REF_SHOTS: Shot[] = [
   { coord: { r: 0, c: 0 }, outcome: 'miss' },
@@ -85,6 +86,18 @@ export function OnlineGame() {
   const flashTimer = useRef(0)
   const lastShotSeq = useRef(0)
   const sfxTimers = useRef<number[]>([])
+
+  /* ---------- 着色工具（每局独立：新房间 / 终局时清空） ---------- */
+  const coloring = useColoring()
+  const isColoring = coloring.coloringMode
+  const roomCode = room?.code ?? ''
+  useEffect(() => {
+    coloring.reset()
+    // eslint 无需 exhaustive-deps：reset 为稳定引用，仅需在房间变化时触发
+  }, [roomCode])
+  useEffect(() => {
+    if (gameEnd) coloring.reset()
+  }, [gameEnd])
 
   /** 延时播放音效（报点后的盖章/击毁结果音），卸载时统一清理 */
   const playSfxAt = (name: Parameters<typeof audioService.playSfx>[0], delayMs: number) => {
@@ -199,7 +212,7 @@ export function OnlineGame() {
   const oppName = oppSeat?.name ?? '对手'
 
   const isPlaying = phase === 'playing' || phase === 'counterattack'
-  const canShoot = isPlaying && yourTurn && socketStatus === 'connected'
+  const canShoot = isPlaying && yourTurn && socketStatus === 'connected' && !isColoring
 
   const alreadyShot = (cell: Cell) =>
     myShots.some((s) => s.coord.r === cell.r && s.coord.c === cell.c)
@@ -251,6 +264,7 @@ export function OnlineGame() {
   }
 
   const commitInput = () => {
+    if (isColoring) return // 着色模式下不触发报点
     const cell = parseCoord(input)
     if (!cell) {
       toast('坐标格式应为"字母+数字"，如 A5', 'error')
@@ -396,20 +410,50 @@ export function OnlineGame() {
 
         {/* 对手网格（居中）：只渲染我方报点标记，绝不显示对方阵型 */}
         <section className="game__opp">
-          <PaperGrid
-            width={config.width}
-            height={config.height}
-            cellSize={mainCell}
-            showLabels
-            onCellClick={onOppCellClick}
-            shots={myShots}
-            highlight={highlight}
-            ariaLabel="对手棋盘"
-          />
+          <div className="coloring-stage">
+            <PaperGrid
+              width={config.width}
+              height={config.height}
+              cellSize={mainCell}
+              showLabels
+              onCellClick={onOppCellClick}
+              shots={myShots}
+              highlight={highlight}
+              coloredCells={coloring.coloredCells}
+              coloring={
+                isColoring
+                  ? { active: true, color: coloring.currentColor, onPaint: coloring.paintCell }
+                  : undefined
+              }
+              ariaLabel="对手棋盘"
+            />
+            <ColoringToolButton
+              className="coloring-stage__btn"
+              active={isColoring}
+              color={coloring.currentColor}
+              paletteOpen={coloring.paletteOpen}
+              paletteDir="down"
+              onToggle={coloring.toggleMode}
+              onOpenPalette={() => coloring.setPaletteOpen(true)}
+              onClosePalette={() => coloring.setPaletteOpen(false)}
+              onSelectColor={coloring.selectColor}
+            />
+          </div>
         </section>
       </main>
 
       <footer className="game__inputbar">
+        <ColoringToolButton
+          className="coloring-inputbar__btn"
+          active={isColoring}
+          color={coloring.currentColor}
+          paletteOpen={coloring.paletteOpen}
+          paletteDir="up"
+          onToggle={coloring.toggleMode}
+          onOpenPalette={() => coloring.setPaletteOpen(true)}
+          onClosePalette={() => coloring.setPaletteOpen(false)}
+          onSelectColor={coloring.selectColor}
+        />
         <label className="visually-hidden" htmlFor="online-coord">
           报点坐标
         </label>
@@ -423,14 +467,16 @@ export function OnlineGame() {
           onKeyDown={(e) => {
             if (e.key === 'Enter') commitInput()
           }}
-          placeholder="如 A5"
+          placeholder="请输入报点坐标"
           aria-label="报点坐标，如 A5"
           autoComplete="off"
         />
         <PaperButton variant="primary" onClick={commitInput} disabled={!canShoot}>
           确认报点
         </PaperButton>
-        <span className="game__hint">点击棋盘选格，再点一次报点 · 或输入坐标回车</span>
+        <span className="game__hint">
+          {isColoring ? '着色模式：点按染色 · 按住拖动画线 · 再点同色擦除' : '点击棋盘选格，再点一次报点 · 或输入坐标回车'}
+        </span>
       </footer>
 
       {/* 机器接管横幅 */}
