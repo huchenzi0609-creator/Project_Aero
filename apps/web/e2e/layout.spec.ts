@@ -91,6 +91,8 @@ async function runPortraitChecks(
     // 状态条在最上、输入栏在最下
     expect(statusbar.y < refCard.y).toBe(true)
     expect(oppBoard.y < inputbar.y).toBe(true)
+    // v0.2.8 空网格优先：宽度吃满舞台可用宽度（≥ 舞台宽 85%）
+    expect(oppBoard.width >= stage.width * 0.85).toBe(true)
   }
   expect(await noVerticalScroll(page, '.game')).toBe(true)
   expect(await noHorizontalOverflow(page)).toBe(true)
@@ -216,5 +218,66 @@ test.describe('竖版 9:16 舞台布局', () => {
 
     expect(errs()).toEqual([])
     await ctx.close()
+  })
+
+  test('联机摆阵 20×20：网格不被上方组件遮挡、完整可见、无滚动、尺寸冻结', async ({ browser }) => {
+    test.setTimeout(120_000)
+    for (const viewport of [
+      { width: 390, height: 667 },
+      { width: 1280, height: 800 },
+    ]) {
+      const ctx = await browser.newContext({ viewport })
+      const page = await ctx.newPage()
+      const errs = watchErrors(page)
+      await page.goto('/')
+      await page.getByRole('button', { name: '联机对战' }).click()
+      await page
+        .getByRole('group', { name: '创建房间档位' })
+        .getByRole('button', { name: /大型/ })
+        .click()
+      await page.getByRole('button', { name: '创建房间' }).click()
+      await expect(page.locator('.placement')).toBeVisible({ timeout: 10000 })
+      await page.waitForTimeout(300)
+
+      const measure = () =>
+        page.evaluate(() => {
+          const r = (sel: string) => {
+            const el = document.querySelector(sel)
+            if (!el) return null
+            const b = el.getBoundingClientRect()
+            return { y: Math.round(b.y), bottom: Math.round(b.bottom), w: Math.round(b.width) }
+          }
+          const pl = document.querySelector('.placement')
+          return {
+            head: r('.placement__head'),
+            status: r('.online__statusrow'),
+            tray: r('.placement__tray'),
+            board: r('.placement__board'),
+            foot: r('.placement__foot'),
+            noScroll: pl ? pl.scrollHeight <= pl.clientHeight + 1 : false,
+          }
+        })
+      const m1 = await measure()
+      if (!m1.board || !m1.head || !m1.status || !m1.tray || !m1.foot) throw new Error('摆阵元素不可见')
+      // 网格不被上方组件遮挡（逐项比较；横版牌组在左侧非上方，不参与）
+      const above = viewport.width > viewport.height
+        ? Math.max(m1.head.bottom, m1.status.bottom)
+        : Math.max(m1.head.bottom, m1.status.bottom, m1.tray.bottom)
+      expect(m1.board.y >= above - 1).toBe(true)
+      // 完整可见：网格底 ≤ 底部校验区顶
+      expect(m1.board.bottom <= m1.foot.y + 1).toBe(true)
+      // 无内部滚动
+      expect(m1.noScroll).toBe(true)
+
+      // 尺寸冻结：切换视口高度 → 网格宽度不变
+      const otherH = viewport.height === 667 ? 844 : 720
+      await page.setViewportSize({ width: viewport.width, height: otherH })
+      await page.waitForTimeout(400)
+      const m2 = await measure()
+      expect(m2.board?.w).toBe(m1.board.w)
+
+      expect(errs()).toEqual([])
+      await ctx.close()
+    }
   })
 })

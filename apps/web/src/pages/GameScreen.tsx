@@ -166,7 +166,7 @@ export function GameScreen({ mode = 'single' }: { mode?: 'single' | 'online' }) 
   // 竖版 9:16 无滚动：状态条 + 参考/我方行 + 中央棋盘 + 输入栏 全部收进舞台
   // （常量由 390×667 实测校准：主区高度基准 172、行预算 170、各卡固定开销）
   const PORTRAIT_MAIN_BASE = 172
-  const PORTRAIT_ROW_BUDGET = 170
+  const PORTRAIT_ROW_BUDGET = 128 // 参考/我方行的最小预留（空网格优先，行取剩余空间）
   const REF_CARD_CHROME = 81 // 参考卡：标题+列标+内边距
   const MINE_CARD_CHROME = 53 // 我方卡：标题+内边距
   const OPP_CARD_CHROME = 27 // 中央棋盘：列标+边框
@@ -191,8 +191,9 @@ export function GameScreen({ mode = 'single' }: { mode?: 'single' | 'online' }) 
     if (!config) return null
     const availW = frozenViewport.width - 16
     const mainAvailH = frozenViewport.height - PORTRAIT_MAIN_BASE
-    let mainCell = clamp(Math.floor(availW / config.width), 8, 30)
-    // 中央棋盘高度 + 行预算不超主区；宽度优先，必要时缩格
+    // 空网格优先（v0.2.8）：宽度吃满舞台可用宽度（上限 34），
+    // 在舞台高度预算内保证完整显示无遮挡，参考/我方行取剩余空间
+    let mainCell = clamp(Math.floor(availW / config.width), 8, 34)
     const oppMaxH = mainAvailH - PORTRAIT_ROW_BUDGET
     if (mainCell * config.height + OPP_CARD_CHROME > oppMaxH) {
       mainCell = Math.max(8, Math.floor((oppMaxH - OPP_CARD_CHROME) / config.height))
@@ -200,10 +201,10 @@ export function GameScreen({ mode = 'single' }: { mode?: 'single' | 'online' }) 
     const oppH = mainCell * config.height + OPP_CARD_CHROME
     const rowH = mainAvailH - oppH - 8
     const halfW = Math.floor((availW - 8) / 2)
-    const refCell = clamp(Math.floor((rowH - REF_CARD_CHROME) / 5), 8, 24)
+    const refCell = clamp(Math.floor((rowH - REF_CARD_CHROME) / 5), 6, 24)
     const miniCell = clamp(
       Math.min(Math.floor((rowH - MINE_CARD_CHROME) / config.height), Math.floor((halfW - 18) / config.width)),
-      4,
+      2,
       18,
     )
     return { mainCell, refCell, miniCell }

@@ -12,6 +12,7 @@ import { useMemo, useRef, useState } from 'react'
 import type { Cell, GridConfig, PlaneShape, PlacedPlane, Rotation } from '@aero/shared'
 import { boundingBox, inBounds, occupiedCells, rotateShape } from '@aero/game-core'
 import { useEffectiveOrientation, useViewport } from '../../hooks/useOrientation'
+import type { Viewport } from '../../hooks/useOrientation'
 import { colLetter } from '../../lib/coord'
 import { cellsBBox } from '../../lib/shape'
 import { PlaneGlyph } from '../grid/PlaneGlyph'
@@ -56,6 +57,9 @@ export interface FleetBoardProps {
   config: GridConfig
   planes: PlacedPlane[]
   onPlanesChange: (planes: PlacedPlane[]) => void
+  /** 竖版摆阵页上部组件（头部/牌组/校验）占用的高度预留（网格优先，上部组件须收进预留内）；
+   *  单机约 240，联机（房码/状态行更高）约 400；缺省 300 */
+  portraitChromeReserve?: number
 }
 
 /** 重叠/越界机 id 集合（父级校验清单与棋盘红遮罩共用） */
@@ -95,7 +99,12 @@ export function fleetCheckState(planes: PlacedPlane[], config: GridConfig) {
   return { countOk, boundsOk, overlapOk, ok: countOk && boundsOk && overlapOk, flags }
 }
 
-export function FleetPlacementBoard({ config, planes, onPlanesChange }: FleetBoardProps) {
+export function FleetPlacementBoard({
+  config,
+  planes,
+  onPlanesChange,
+  portraitChromeReserve = 300,
+}: FleetBoardProps) {
   const { width, height, planeCount, shape } = config
   const orientation = useEffectiveOrientation()
   const viewport = useViewport()
@@ -111,19 +120,26 @@ export function FleetPlacementBoard({ config, planes, onPlanesChange }: FleetBoa
     setDrag(d)
   }
 
-  /* ---------- 尺寸 ---------- */
+  /* ---------- 尺寸（v0.2.8：进入摆阵时按配置捕获一次舞台尺寸并冻结；网格优先） ---------- */
+
+  const frozenRef = useRef<{ config: GridConfig; viewport: Viewport } | null>(null)
+  if (!frozenRef.current || frozenRef.current.config !== config) {
+    frozenRef.current = { config, viewport }
+  }
+  const frozenViewport = frozenRef.current.viewport
 
   const cellSize = useMemo(() => {
     if (orientation === 'landscape') {
-      const availW = viewport.width - 380
-      const availH = viewport.height - 170
+      const availW = frozenViewport.width - 380
+      const availH = frozenViewport.height - 170
       return clamp(Math.floor(Math.min(availW / width, availH / height)), 10, 34)
     }
-    // 竖版 9:16 无滚动：头部 + 待选牌组 + 棋盘 + 校验清单全部收进舞台
-    const availW = viewport.width - 24
-    const availH = viewport.height - 250
+    // 竖版 9:16 无滚动：网格优先——按可用空间（舞台高 − 上部组件预留）计算，
+    // 上部组件（头部/牌组/校验）须收进预留高度内，网格任何部分不被遮挡
+    const availW = frozenViewport.width - 24
+    const availH = frozenViewport.height - portraitChromeReserve
     return clamp(Math.floor(Math.min(availW / width, availH / height)), 8, 26)
-  }, [orientation, viewport, width, height])
+  }, [frozenViewport, portraitChromeReserve, orientation, width, height])
 
   /** 牌组卡片缩放（比棋盘格小，叠放后整体紧凑） */
   const deckCell = clamp(Math.floor(cellSize * 0.6), 10, 18)

@@ -240,7 +240,12 @@ export function OnlinePlacement() {
         </span>
       </div>
 
-      <FleetPlacementBoard config={config} planes={grid} onPlanesChange={setGrid} />
+      <FleetPlacementBoard
+        config={config}
+        planes={grid}
+        onPlanesChange={setGrid}
+        portraitChromeReserve={430}
+      />
 
       {/* 底部：校验清单 + 确认 */}
       <footer className="placement__foot">

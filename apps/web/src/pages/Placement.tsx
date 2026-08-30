@@ -118,7 +118,12 @@ export function Placement() {
         </div>
       </header>
 
-      <FleetPlacementBoard config={config} planes={grid} onPlanesChange={setGrid} />
+      <FleetPlacementBoard
+        config={config}
+        planes={grid}
+        onPlanesChange={setGrid}
+        portraitChromeReserve={345}
+      />
 
       {/* 底部：常驻校验清单 */}
       <footer className="placement__foot">
