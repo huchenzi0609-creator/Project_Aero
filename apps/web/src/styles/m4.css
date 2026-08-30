@@ -429,3 +429,48 @@
   flex-wrap: wrap;
   justify-content: center;
 }
+
+/* ---------- 结算界面（竖版 9:16：两真实阵型棋盘并排、统计两列、无滚动收容） ---------- */
+
+.game--portrait .result {
+  padding: 10px;
+}
+.game--portrait .result__card {
+  width: 100%;
+  padding: 14px;
+  gap: 8px;
+}
+.game--portrait .result__title {
+  font-size: clamp(22px, 6cqw, 30px);
+}
+.game--portrait .result__sub {
+  font-size: 13px;
+}
+.game--portrait .result__boards {
+  flex-wrap: nowrap;
+  gap: 10px;
+  width: 100%;
+  margin-top: 4px;
+}
+.game--portrait .result__board {
+  flex: 1 1 0;
+  min-width: 0;
+}
+.game--portrait .result__stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  width: 100%;
+  margin: 4px 0 2px;
+}
+.game--portrait .result__stat {
+  min-width: 0;
+  padding: 8px 8px;
+}
+.game--portrait .result__stat dd {
+  font-size: 20px;
+}
+.game--portrait .result__actions {
+  gap: 10px;
+  margin-top: 4px;
+}

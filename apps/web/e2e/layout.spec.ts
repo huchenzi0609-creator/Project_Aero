@@ -11,7 +11,7 @@
  */
 import { expect, test } from '@playwright/test'
 import type { BrowserContext, Page } from '@playwright/test'
-import { watchErrors } from './helpers'
+import { allCoords, oppCell, watchErrors } from './helpers'
 
 interface Rect {
   x: number
@@ -129,6 +129,92 @@ test.describe('竖版 9:16 舞台布局', () => {
     const viewport = { width: 390, height: 844 }
     const ctx = await browser.newContext({ viewport })
     await runPortraitChecks(ctx, viewport)
+    await ctx.close()
+  })
+
+  test('390×667 竖版结算：两真实阵型棋盘并排、无滚动、尺寸冻结', async ({ browser }) => {
+    test.setTimeout(180_000)
+    const ctx = await browser.newContext({ viewport: { width: 390, height: 667 } })
+    const page = await ctx.newPage()
+    const errs = watchErrors(page)
+    // 难度地狱：AI 更快找到我方机队，缩短对局
+    await page.addInitScript(() => {
+      localStorage.setItem(
+        'aero-settings',
+        JSON.stringify({ state: { difficulty: 'hell' }, version: 0 }),
+      )
+    })
+    await page.goto('/')
+    await page.getByRole('button', { name: '单人对局' }).click()
+    await page.getByRole('button', { name: /小型 · 10×10/ }).click()
+    await expect(page.getByRole('heading', { name: '摆阵 · 单人对局' })).toBeVisible()
+    await page.getByRole('button', { name: '随机摆阵' }).click()
+    await page.getByRole('button', { name: '确认布阵' }).click()
+    await expect(page.locator('.game-banner')).toBeVisible()
+    await expect(page.locator('.game-banner')).toBeHidden({ timeout: 5000 })
+
+    // ---- 报点循环至结算（复用 single.spec 手法） ----
+    const result = page.locator('.result')
+    const coordInput = page.getByLabel('报点坐标，如 A5')
+    const shotCoords = allCoords(10, 10)
+    const shotSet = new Set<string>()
+    let shotIndex = 0
+    let rounds = 0
+    while (rounds < 150 && !(await result.isVisible().catch(() => false))) {
+      rounds += 1
+      if (!(await coordInput.isEnabled())) {
+        await page.waitForTimeout(250)
+        continue
+      }
+      while (shotSet.has(shotCoords[shotIndex] ?? '')) shotIndex += 1
+      const coord = shotCoords[shotIndex] ?? 'A1'
+      shotSet.add(coord)
+      const cell = oppCell(page, coord)
+      await cell.click()
+      await page.waitForTimeout(120)
+      await cell.click()
+      await page.waitForTimeout(900)
+    }
+    await expect(result).toBeVisible({ timeout: 30000 })
+
+    // ---- 两真实阵型棋盘并排（同行、x 递增） ----
+    const boardA = result.locator('.result__board').nth(0)
+    const boardB = result.locator('.result__board').nth(1)
+    const gridA = boardA.locator('.paper-grid__board')
+    const gridB = boardB.locator('.paper-grid__board')
+    const ra = await boardA.boundingBox()
+    const rb = await boardB.boundingBox()
+    const ga = await gridA.boundingBox()
+    const gb = await gridB.boundingBox()
+    if (ra && rb && ga && gb) {
+      expect(ra.x < rb.x).toBe(true)
+      expect(Math.abs(ra.y - rb.y)).toBeLessThan(20)
+      expect(ga.x < gb.x).toBe(true)
+    }
+
+    // ---- 结算容器无内部滚动、无横向溢出 ----
+    const noScroll = await page.evaluate(() => {
+      const el = document.querySelector('.result')
+      if (!el) return false
+      return el.scrollHeight <= el.clientHeight + 1
+    })
+    expect(noScroll).toBe(true)
+    const noH = await page.evaluate(() => {
+      const el = document.querySelector('.result')
+      if (!el) return false
+      return el.scrollWidth <= el.clientWidth + 1
+    })
+    expect(noH).toBe(true)
+
+    // ---- 结算尺寸冻结：切换视口高度后两棋盘宽度不变 ----
+    await page.setViewportSize({ width: 390, height: 844 })
+    await page.waitForTimeout(400)
+    const ga2 = await gridA.boundingBox()
+    const gb2 = await gridB.boundingBox()
+    expect(ga2?.width).toBe(ga?.width)
+    expect(gb2?.width).toBe(gb?.width)
+
+    expect(errs()).toEqual([])
     await ctx.close()
   })
 })

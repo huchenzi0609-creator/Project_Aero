@@ -224,7 +224,24 @@ export function GameScreen({ mode = 'single' }: { mode?: 'single' | 'online' }) 
     orientation === 'portrait'
       ? (portraitSizes?.refCell ?? 18)
       : Math.min(24, Math.max(13, Math.floor(mainCell * 0.8)))
-  const resCell = config ? clamp(Math.floor(200 / Math.max(config.width, config.height)), 4, 16) : 8
+
+  /* ---------- 结算尺寸：进入结算瞬间捕获舞台尺寸并冻结（resize 不再改变） ---------- */
+  const resultViewportRef = useRef<Map<number, Viewport>>(new Map())
+  if (screen === 'result' && !resultViewportRef.current.has(gameNonce)) {
+    resultViewportRef.current.set(gameNonce, viewport)
+  }
+  const resultViewport = screen === 'result' ? (resultViewportRef.current.get(gameNonce) ?? viewport) : null
+
+  // 竖版结算：两真实阵型棋盘并排（各约半宽），随结果视图冻结的舞台尺寸计算；横版保持原样
+  const resCell = config
+    ? orientation === 'portrait'
+      ? clamp(
+          Math.floor(((resultViewport ?? frozenViewport).width - 62) / 2 / Math.max(config.width, config.height)),
+          3,
+          16,
+        )
+      : clamp(Math.floor(200 / Math.max(config.width, config.height)), 4, 16)
+    : 8
 
   /* ---------- 样式参考飞机拖拽（对手棋盘 cellSize 依赖上方尺寸；每局独立） ---------- */
   const refPlanes = useRefPlanes({
