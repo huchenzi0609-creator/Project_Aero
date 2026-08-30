@@ -7,19 +7,19 @@
 .online__roommeta {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 6px;
   flex-wrap: wrap;
 }
 .online__roomcode {
   font-family: var(--font-mono);
-  font-size: 26px;
+  font-size: 20px;
   font-weight: 600;
-  letter-spacing: 0.22em;
+  letter-spacing: 0.18em;
   color: var(--ink);
   background: var(--paper-sheet);
   border: 1.5px dashed rgba(96, 78, 50, 0.55);
   border-radius: var(--radius-sm);
-  padding: 5px 14px 5px 16px;
+  padding: 3px 10px 3px 12px;
   box-shadow: inset 0 1px 3px rgba(84, 66, 38, 0.12);
 }
 .online__roomsize {
@@ -32,13 +32,13 @@
 
 .online__statusrow {
   display: flex;
-  gap: 18px;
+  gap: 12px;
   flex-wrap: wrap;
   align-items: center;
-  padding: 4px 2px;
+  padding: 2px 2px;
 }
 .online__statusitem {
-  font-size: 14px;
+  font-size: 13px;
   color: var(--ink-soft);
 }
 .online__statusitem--me {
@@ -47,6 +47,19 @@
 }
 .online__statusitem--warn {
   color: var(--danger);
+}
+
+/* 竖版 9:16 无滚动：顶部房码/状态模块进一步紧凑，保证下方网格完整显示 */
+.placement--portrait .online__roomcode {
+  font-size: 17px;
+  letter-spacing: 0.14em;
+  padding: 2px 9px 2px 11px;
+}
+.placement--portrait .online__roommeta {
+  gap: 5px;
+}
+.placement--portrait .online__statusrow {
+  gap: 10px;
 }
 
 /* ---------- 横幅（断线 / 机器接管） ---------- */

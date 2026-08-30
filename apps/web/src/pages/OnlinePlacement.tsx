@@ -82,7 +82,8 @@ export function OnlinePlacement() {
     if (!config) return null
     const b = cellsBBox(config.shape.cells)
     if (!b) return null
-    const cell = 16
+    // 紧凑预览（v0.2.5：缩小顶部模块，保证竖版 9:16 无滚动时下方网格完整显示）
+    const cell = 10
     return (
       <div
         style={{

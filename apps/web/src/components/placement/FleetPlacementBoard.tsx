@@ -45,8 +45,12 @@ interface DragState {
   fromOrigin?: Cell
 }
 
-/** 牌组每张卡露出的识别条宽度（px）：竖版横向叠放时露出左侧条、横版纵向叠放时露出顶部条 */
+/** 牌组每张卡露出的识别间距（px）：竖版横向叠放 / 横版纵向叠放 */
 const DECK_STRIP = 22
+/** 牌组间距下限：保证每张卡仍有可点按的可见区域（26×26/27 架等密集场景动态缩距的下限） */
+const DECK_MIN_STRIP = 8
+/** 待选框预留余量（px），防止卡片贴边 */
+const DECK_RESERVE = 12
 
 export interface FleetBoardProps {
   config: GridConfig
@@ -304,15 +308,34 @@ export function FleetPlacementBoard({ config, planes, onPlanesChange }: FleetBoa
     const maxW = Math.max(...dims.map((d) => d.w))
     const maxH = Math.max(...dims.map((d) => d.h))
     const n = trayItems.length
+    // 牌组间距：一般状态固定 DECK_STRIP；卡片总尺寸超出待选框可用空间时动态缩小间距，
+    // 下限 DECK_MIN_STRIP 保证每张卡仍有可点按的可见区域（竖版横向 / 横版纵向分别按轴计算）
+    const axisSize = orientation === 'portrait' ? maxW : maxH
+    const avail = orientation === 'portrait' ? viewport.width - 50 : viewport.height - 210
+    const need = (n - 1) * DECK_STRIP + axisSize
+    const strip =
+      need <= avail - DECK_RESERVE
+        ? DECK_STRIP
+        : clamp(
+            Math.floor((avail - DECK_RESERVE - axisSize) / Math.max(1, n - 1)),
+            DECK_MIN_STRIP,
+            DECK_STRIP,
+          )
     return {
       items: trayItems,
       dims,
-      width: orientation === 'landscape' ? maxW : (n - 1) * DECK_STRIP + maxW,
-      height: orientation === 'landscape' ? (n - 1) * DECK_STRIP + maxH : maxH,
+      strip,
+      width: orientation === 'landscape' ? maxW : (n - 1) * strip + maxW,
+      height: orientation === 'landscape' ? (n - 1) * strip + maxH : maxH,
     }
-  }, [trayItems, shape, deckCell, orientation])
+  }, [trayItems, shape, deckCell, orientation, viewport])
 
-  const deckCard = (item: TrayItem, index: number, dim: { w: number; h: number }) => (
+  const deckCard = (
+    item: TrayItem,
+    index: number,
+    dim: { w: number; h: number },
+    strip: number,
+  ) => (
     <div
       key={item.id}
       className={['placement__deck-card', drag?.id === item.id ? 'placement__deck-card--dim' : '']
@@ -321,8 +344,8 @@ export function FleetPlacementBoard({ config, planes, onPlanesChange }: FleetBoa
       style={{
         width: dim.w,
         height: dim.h,
-        left: orientation === 'landscape' ? 0 : index * DECK_STRIP,
-        top: orientation === 'landscape' ? index * DECK_STRIP : 0,
+        left: orientation === 'landscape' ? 0 : index * strip,
+        top: orientation === 'landscape' ? index * strip : 0,
         zIndex: index + 1,
       }}
       onPointerDown={(e) => startDrag(e, item.id, item.rotation, 'tray')}
@@ -343,7 +366,7 @@ export function FleetPlacementBoard({ config, planes, onPlanesChange }: FleetBoa
             className={`placement__deck placement__deck--${orientation}`}
             style={{ width: deck.width, height: deck.height }}
           >
-            {deck.items.map((item, i) => deckCard(item, i, deck.dims[i]!))}
+            {deck.items.map((item, i) => deckCard(item, i, deck.dims[i]!, deck.strip))}
           </div>
         ) : (
           <span className="placement__tray-empty">全部飞机已上棋盘</span>

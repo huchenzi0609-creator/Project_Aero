@@ -44,7 +44,10 @@ async function noVerticalScroll(page: Page, selector: string): Promise<boolean> 
   }, selector)
 }
 
-async function runPortraitChecks(ctx: BrowserContext) {
+async function runPortraitChecks(
+  ctx: BrowserContext,
+  viewport: { width: number; height: number },
+) {
   const page = await ctx.newPage()
   const errs = watchErrors(page)
   await page.goto('/')
@@ -92,6 +95,22 @@ async function runPortraitChecks(ctx: BrowserContext) {
   expect(await noVerticalScroll(page, '.game')).toBe(true)
   expect(await noHorizontalOverflow(page)).toBe(true)
 
+  // ---- 尺寸冻结：进入对局后切换视口高度，棋盘/参考/我方网格尺寸保持不变 ----
+  const boardW1 = (await page.locator('.game__opp .paper-grid__board').boundingBox())?.width
+  const refW1 = (await page.locator('.game__ref .paper-grid__board').boundingBox())?.width
+  const mineW1 = (await page.locator('.game__mine .paper-grid__board').boundingBox())?.width
+  if (boardW1 !== undefined && refW1 !== undefined && mineW1 !== undefined) {
+    const otherH = viewport.height === 667 ? 844 : 667
+    await page.setViewportSize({ width: viewport.width, height: otherH })
+    await page.waitForTimeout(400)
+    const boardW2 = (await page.locator('.game__opp .paper-grid__board').boundingBox())?.width
+    const refW2 = (await page.locator('.game__ref .paper-grid__board').boundingBox())?.width
+    const mineW2 = (await page.locator('.game__mine .paper-grid__board').boundingBox())?.width
+    expect(boardW2).toBe(boardW1)
+    expect(refW2).toBe(refW1)
+    expect(mineW2).toBe(mineW1)
+  }
+
   expect(errs()).toEqual([])
   await page.close()
 }
@@ -99,15 +118,17 @@ async function runPortraitChecks(ctx: BrowserContext) {
 test.describe('竖版 9:16 舞台布局', () => {
   test.setTimeout(120_000)
 
-  test('390×667 竖版：摆阵与对局互不重叠、无溢出', async ({ browser }) => {
-    const ctx = await browser.newContext({ viewport: { width: 390, height: 667 } })
-    await runPortraitChecks(ctx)
+  test('390×667 竖版：摆阵与对局互不重叠、无溢出；尺寸冻结', async ({ browser }) => {
+    const viewport = { width: 390, height: 667 }
+    const ctx = await browser.newContext({ viewport })
+    await runPortraitChecks(ctx, viewport)
     await ctx.close()
   })
 
-  test('390×844 竖版：摆阵与对局互不重叠、无溢出', async ({ browser }) => {
-    const ctx = await browser.newContext({ viewport: { width: 390, height: 844 } })
-    await runPortraitChecks(ctx)
+  test('390×844 竖版：摆阵与对局互不重叠、无溢出；尺寸冻结', async ({ browser }) => {
+    const viewport = { width: 390, height: 844 }
+    const ctx = await browser.newContext({ viewport })
+    await runPortraitChecks(ctx, viewport)
     await ctx.close()
   })
 })

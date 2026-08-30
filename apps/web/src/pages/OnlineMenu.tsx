@@ -13,6 +13,7 @@ import { useAppStore } from '../store/appStore'
 import { useOnlineStore } from '../store/onlineStore'
 import { useGuestStore } from '../store/guestStore'
 import { useToastStore } from '../store/toastStore'
+import { useEffectiveOrientation } from '../hooks/useOrientation'
 import { cancelMatchmaking, onlineApi } from '../net/socket'
 import { PaperButton } from '../components/ui/PaperButton'
 import { PaperCard } from '../components/ui/PaperCard'
@@ -37,6 +38,8 @@ export function OnlineMenu() {
   const guestName = useGuestStore((s) => s.name)
   const socketStatus = useOnlineStore((s) => s.socketStatus)
   const matchmaking = useOnlineStore((s) => s.matchmaking)
+  const orientation = useEffectiveOrientation()
+  const isPortrait = orientation === 'portrait'
 
   const [code, setCode] = useState('')
   const [lanTier, setLanTier] = useState<MatchTier>('small')
@@ -156,7 +159,8 @@ export function OnlineMenu() {
                 aria-pressed={lanTier === t.key}
                 onClick={() => setLanTier(t.key)}
               >
-                {t.label} · {t.sub}
+                {t.label}
+                {isPortrait ? '' : ` · ${t.sub}`}
               </PaperButton>
             ))}
             <PaperButton
@@ -192,7 +196,7 @@ export function OnlineMenu() {
               加入房间
             </PaperButton>
           </div>
-          <p className="online__card-desc" style={{ marginTop: 10, fontSize: 13 }}>
+          <p className="online__card-desc online__hint">
             提示：加入自定义房间无需提前配置，入房后可见棋盘与形状预览。
           </p>
         </PaperCard>
@@ -211,7 +215,8 @@ export function OnlineMenu() {
                 disabled={matching}
                 onClick={() => setMatchTier(t.key)}
               >
-                {t.label} · {t.sub}
+                {t.label}
+                {isPortrait ? '' : ` · ${t.sub}`}
               </PaperButton>
             ))}
           </div>

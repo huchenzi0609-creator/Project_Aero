@@ -18,6 +18,7 @@ import { useSettingsStore } from '../store/settingsStore'
 import { useToastStore } from '../store/toastStore'
 import { onlineApi } from '../net/socket'
 import { useEffectiveOrientation, useViewport } from '../hooks/useOrientation'
+import type { Viewport } from '../hooks/useOrientation'
 import { audioService } from '../lib/audioService'
 import { PaperButton } from '../components/ui/PaperButton'
 import { PaperCard } from '../components/ui/PaperCard'
@@ -169,17 +170,25 @@ export function OnlineGame() {
   const MINE_CARD_CHROME = 53
   const OPP_CARD_CHROME = 27
 
+  // 尺寸冻结：仅在本局（房间码）首次进入时捕获舞台尺寸，本局内元素大小保持不变；
+  // 新房间 → 新房间码 → 重新计算一次
+  const frozenViewportRef = useRef<Map<string, Viewport>>(new Map())
+  if (!frozenViewportRef.current.has(roomCode)) {
+    frozenViewportRef.current.set(roomCode, viewport)
+  }
+  const frozenViewport = frozenViewportRef.current.get(roomCode) ?? viewport
+
   const landscapeMainCell = useMemo(() => {
     if (!config) return 20
-    const availW = viewport.width * 0.4
-    const availH = viewport.height - 170
+    const availW = frozenViewport.width * 0.4
+    const availH = frozenViewport.height - 170
     return clamp(Math.floor(Math.min(availW / config.width, availH / config.height)), 12, 34)
-  }, [viewport, config])
+  }, [frozenViewport, config])
 
   const portraitSizes = useMemo(() => {
     if (!config) return null
-    const availW = viewport.width - 16
-    const mainAvailH = viewport.height - PORTRAIT_MAIN_BASE
+    const availW = frozenViewport.width - 16
+    const mainAvailH = frozenViewport.height - PORTRAIT_MAIN_BASE
     let mainCell = clamp(Math.floor(availW / config.width), 8, 30)
     const oppMaxH = mainAvailH - PORTRAIT_ROW_BUDGET
     if (mainCell * config.height + OPP_CARD_CHROME > oppMaxH) {
@@ -195,7 +204,7 @@ export function OnlineGame() {
       18,
     )
     return { mainCell, refCell, miniCell }
-  }, [viewport, config])
+  }, [frozenViewport, config])
 
   const mainCell = orientation === 'portrait' ? (portraitSizes?.mainCell ?? 20) : landscapeMainCell
   const miniCell =
