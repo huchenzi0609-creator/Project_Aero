@@ -44,6 +44,10 @@ export const SHAPE_MAX_CELLS = 15
 
 /** 联机计时（围棋读秒制） */
 export const TURN_LIMIT_MS = 30_000
+/** 自定义房间可选的每步限时（毫秒） */
+export const TURN_LIMIT_OPTIONS_MS = [10_000, 20_000, 30_000, 60_000] as const
+/** turnLimitMs 为此值表示不限时 */
+export const UNLIMITED_TURN_LIMIT_MS = 0
 export const OVERTIME_CHANCES = 3
 export const REDUCED_TURN_LIMIT_MS = 10_000
 export const RECONNECT_GRACE_MS = 60_000
@@ -73,6 +77,8 @@ export interface GridConfig {
   shape: PlaneShape
   /** 是否允许在对局中拖拽移动样式参考飞机；缺省时由客户端设置项（默认 true）决定 */
   allowMoveRefPlane?: boolean
+  /** 联机每步限时（毫秒）；缺省用默认值；0 表示不限时 */
+  turnLimitMs?: number
 }
 
 export const PRESETS: Record<'small' | 'medium' | 'large', GridConfig> = {
@@ -111,6 +117,7 @@ export const gridConfigSchema = z.object({
   planeCount: z.number().int().min(1),
   shape: planeShapeSchema,
   allowMoveRefPlane: z.boolean().optional(),
+  turnLimitMs: z.number().int().min(0).optional(),
 })
 
 export const coordInputSchema = z
