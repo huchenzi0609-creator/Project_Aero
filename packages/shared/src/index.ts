@@ -43,7 +43,7 @@ export const SHAPE_MIN_CELLS = 2
 export const SHAPE_MAX_CELLS = 15
 
 /** 联机计时（围棋读秒制） */
-export const TURN_LIMIT_MS = 20_000
+export const TURN_LIMIT_MS = 30_000
 export const OVERTIME_CHANCES = 3
 export const REDUCED_TURN_LIMIT_MS = 10_000
 export const RECONNECT_GRACE_MS = 60_000
