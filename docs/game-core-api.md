@@ -81,6 +81,11 @@ export interface ShotResult {
 }
 
 export function applyShot(state: GameState, coord: Cell): ShotResult
+
+/** 双方平均击杀效率（v0.2.9 起）：对每位玩家，统计其击毁的每架敌机
+ *  "从首次命中到击毁"的报点步数（该玩家 shotsFired 中 kill 枪下标 − 首次命中该机下标，
+ *  直接爆头 = 0 步）并取平均、四舍五入 1 位小数；无击毁时对应项为 null。纯函数。 */
+export function killEfficiencyStats(state: GameState): { player0: number | null; player1: number | null }
 ```
 
 ### applyShot 语义（必须逐条实现）

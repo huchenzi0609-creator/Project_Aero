@@ -72,6 +72,12 @@ test.describe('单机全流程', () => {
     await expect(result.locator('.result__stats')).toContainText('总回合数')
     await expect(result.locator('.result__stats')).toContainText('我方命中率')
     await expect(result.locator('.result__stats')).toContainText('电脑命中率')
+    // v0.2.9 平均击杀效率对比
+    await expect(result.locator('.result__stats')).toContainText('平均击杀效率')
+    await expect(result.locator('.result__stat-eff')).toContainText('/')
+    // v0.2.9 结算叠加标记：真实阵型上带双方报点标记（本局双方均有报点）
+    await expect(result.locator('.result__board').nth(0).locator('.paper-grid__stamp').first()).toBeVisible()
+    await expect(result.locator('.result__board').nth(1).locator('.paper-grid__stamp').first()).toBeVisible()
     await expect(result.locator('.result__board')).toHaveCount(2)
     await expect(result).toContainText('我方真实阵型')
     await expect(result).toContainText('对方真实阵型')

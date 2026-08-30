@@ -1,6 +1,15 @@
 import { useMemo, useState } from 'react'
-import { DEFAULT_PLANE_SHAPE, GRID_MAX, GRID_MIN, SHAPE_MAX_CELLS, SHAPE_MIN_CELLS } from '@aero/shared'
-import type { Cell, PlaneShape } from '@aero/shared'
+import {
+  DEFAULT_PLANE_SHAPE,
+  GRID_MAX,
+  GRID_MIN,
+  SHAPE_MAX_CELLS,
+  SHAPE_MIN_CELLS,
+  TURN_LIMIT_MS,
+  TURN_LIMIT_OPTIONS_MS,
+  UNLIMITED_TURN_LIMIT_MS,
+} from '@aero/shared'
+import type { Cell, GridConfig, PlaneShape } from '@aero/shared'
 import { validateShape } from '@aero/game-core'
 import { useAppStore } from '../store/appStore'
 import { useToastStore } from '../store/toastStore'
@@ -8,11 +17,18 @@ import { useEffectiveOrientation } from '../hooks/useOrientation'
 import { onlineApi } from '../net/socket'
 import { PaperButton } from '../components/ui/PaperButton'
 import { PaperCard } from '../components/ui/PaperCard'
+import { PaperSelect } from '../components/ui/PaperSelect'
 import { PaperToggle } from '../components/ui/PaperToggle'
 import { PlaneGlyph } from '../components/grid/PlaneGlyph'
 import { anchorShape, cellsBBox } from '../lib/shape'
 
 const EDITOR_SIZE = 5
+
+/** 联机每步限时档位（毫秒 → 文案）；0 = 不限 */
+const TURN_LIMIT_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
+  ...TURN_LIMIT_OPTIONS_MS.map((ms) => ({ value: String(ms), label: `${ms / 1000} 秒` })),
+  { value: String(UNLIMITED_TURN_LIMIT_MS), label: '不限' },
+]
 
 function cellKey(p: Cell): string {
   return `${p.r},${p.c}`
@@ -32,6 +48,8 @@ export function CustomConfig({ mode = 'single' }: { mode?: 'single' | 'online' }
   const [planeText, setPlaneText] = useState('3')
   const [useDefault, setUseDefault] = useState(true)
   const [allowMoveRefPlane, setAllowMoveRefPlane] = useState(true)
+  // 联机每步限时（毫秒字符串）；默认 30 秒，仅联机自定义房间使用
+  const [turnLimitMs, setTurnLimitMs] = useState<string>(String(TURN_LIMIT_MS))
   const [cells, setCells] = useState<Cell[]>([])
   const [head, setHead] = useState<Cell | null>(null)
   const [tool, setTool] = useState<'paint' | 'erase'>('paint')
@@ -102,7 +120,10 @@ export function CustomConfig({ mode = 'single' }: { mode?: 'single' | 'online' }
   }
 
   function confirm() {
-    const config = { width, height, planeCount, shape, allowMoveRefPlane }
+    // 联机自定义房间携带每步限时（单机无计时概念，不带该字段）
+    const config: GridConfig = isOnline
+      ? { width, height, planeCount, shape, allowMoveRefPlane, turnLimitMs: Number(turnLimitMs) }
+      : { width, height, planeCount, shape, allowMoveRefPlane }
     if (isOnline) {
       if (busy) return
       setBusy(true)
@@ -244,6 +265,17 @@ export function CustomConfig({ mode = 'single' }: { mode?: 'single' | 'online' }
               onChange={setAllowMoveRefPlane}
             />
           </div>
+
+          {isOnline ? (
+            <div className="custom__field">
+              <PaperSelect
+                label="每步限时"
+                value={turnLimitMs}
+                onChange={setTurnLimitMs}
+                options={TURN_LIMIT_OPTIONS}
+              />
+            </div>
+          ) : null}
         </PaperCard>
 
         {/* 右栏：形状编辑器 + 校验清单 */}

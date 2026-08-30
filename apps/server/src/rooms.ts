@@ -25,6 +25,8 @@ import {
   PRESETS,
   RECONNECT_GRACE_MS,
   ROOM_CODE_LENGTH,
+  TURN_LIMIT_MS,
+  UNLIMITED_TURN_LIMIT_MS,
   type Cell,
   type ClientToServerEvents,
   type GameEndPayload,
@@ -86,6 +88,8 @@ interface ShotLogEntry {
 interface Room {
   code: string
   config: GridConfig
+  /** 本房间每步限时（ms；UNLIMITED_TURN_LIMIT_MS=0 表示不限时），来自 config.turnLimitMs ?? TURN_LIMIT_MS */
+  turnLimitMs: number
   seats: [Seat, Seat]
   phase: RoomPhase
   game: GameState | null
@@ -278,19 +282,39 @@ export class RoomManager {
 
   /* ---------------------------------------------------------------- 房间操作 */
 
+  /**
+   * 兜底释放残留房间（客户端异常退出导致用户仍挂在 waiting/placing 阶段的房间）。
+   * 清理计时器、通知房间内另一玩家解散（roomUpdate players=[]）、从 rooms 删除。
+   * 对局中（playing/counterattack）不释放，返回 false。
+   */
+  private releaseStaleRoomOf(userId: string): boolean {
+    const room = this.roomOfUser(userId)
+    if (!room) return false
+    if (room.phase === 'playing' || room.phase === 'counterattack') return false
+    this.clearRoomTimers(room)
+    this.notifyRoomClosed(room)
+    this.rooms.delete(room.code)
+    return true
+  }
+
   createRoom(
     userId: string,
     name: string,
     socketId: string,
     config: GridConfig,
   ): { ok: true; code: string } | { ok: false; error: string } {
-    if (this.roomOfUser(userId)) return { ok: false, error: '您已在其他对局中，请先退出' }
     const parsed = gridConfigSchema.safeParse(config)
     if (!parsed.success) return { ok: false, error: '棋盘配置非法' }
+    // 兜底：若用户残留一个 waiting/placing 阶段的房间，先自动释放再建房；
+    // 对局中（playing/counterattack）仍拒绝
+    if (!this.releaseStaleRoomOf(userId)) {
+      if (this.roomOfUser(userId)) return { ok: false, error: '您已在其他对局中，请先退出' }
+    }
     const code = this.uniqueCode()
     const room: Room = {
       code,
       config: parsed.data,
+      turnLimitMs: parsed.data.turnLimitMs ?? TURN_LIMIT_MS,
       seats: [this.newSeat(0), this.newSeat(1)],
       phase: 'waiting',
       game: null,
@@ -321,7 +345,18 @@ export class RoomManager {
     if (!room) return { ok: false, error: '房间不存在' }
     if (room.phase === 'ended') return { ok: false, error: '对局已结束' }
     if (room.phase === 'playing') return { ok: false, error: '对局已开始' }
-    if (this.roomOfUser(userId)) return { ok: false, error: '您已在其他对局中，请先退出' }
+    // 兜底：若用户残留 waiting/placing 阶段的房间，先自动释放再入房；
+    // 对局中仍拒绝；重复 join 自己所在的房间直接报错
+    const stale = this.roomOfUser(userId)
+    if (stale) {
+      if (stale === room) return { ok: false, error: '您已在该房间中' }
+      if (stale.phase === 'playing' || stale.phase === 'counterattack') {
+        return { ok: false, error: '您已在其他对局中，请先退出' }
+      }
+      this.clearRoomTimers(stale)
+      this.notifyRoomClosed(stale)
+      this.rooms.delete(stale.code)
+    }
     const freeIndex = room.seats.findIndex((s) => !s.userId)
     if (freeIndex === -1) return { ok: false, error: '房间已满' }
     this.occupySeat(room, freeIndex as 0 | 1, userId, name, socketId)
@@ -514,13 +549,24 @@ export class RoomManager {
       room.turnDeadline = null
       return
     }
-    seat.timing = startTurn(seat.timing, Date.now(), this.timings)
+    if (room.turnLimitMs === UNLIMITED_TURN_LIMIT_MS) {
+      // 不限时房间：不设 deadline、不启动超时定时器、不消耗机会、永不机器接管
+      room.turnDeadline = null
+      this.emitTurnState(room, player) // turnStart.deadline = 0，客户端据此隐藏计时
+      return
+    }
+    seat.timing = startTurn(seat.timing, Date.now(), this.timingConfigFor(room))
     room.turnDeadline = seat.timing.deadline
     this.emitTurnState(room, player)
     room.turnTimer = setTimeout(
       () => this.onTurnTimeout(room, player),
       Math.max(0, (seat.timing.deadline as number) - Date.now()),
     )
+  }
+
+  /** 房间级计时配置：每步限时以房间为准（config.turnLimitMs ?? TURN_LIMIT_MS），机会数/降档沿用全局 */
+  private timingConfigFor(room: Room): TimingConfig {
+    return { ...this.timings, turnLimitMs: room.turnLimitMs }
   }
 
   /** 向双方推送 turnStart / timerUpdate（时钟显示同步） */
@@ -548,12 +594,13 @@ export class RoomManager {
   /** 读秒超时：机会消耗（系统代走一步并轮换）/ 机器接管 */
   private onTurnTimeout(room: Room, player: 0 | 1): void {
     room.turnTimer = null
+    if (room.turnLimitMs === UNLIMITED_TURN_LIMIT_MS) return // 不限时房间不应有超时定时器（防御）
     const game = room.game
     if (!game || game.phase === 'ended') return
     if (game.turn !== player) return // 过期计时器
     const seat = room.seats[player]
     if (!seat.connected) return // 断线期间计时已暂停，不应触发
-    const decision = handleTimeout(seat.timing, this.timings, Date.now())
+    const decision = handleTimeout(seat.timing, this.timingConfigFor(room), Date.now())
     seat.timing = decision.next
     if (decision.kind === 'consume') {
       // 新语义（用户反馈）：超时并消耗 1 次机会 → 系统立即代走一步（即超时方本回合行动），
@@ -793,12 +840,15 @@ export class RoomManager {
     socketId: string,
     config: unknown,
   ): { ok: true } | { ok: false; error: string } {
-    if (this.roomOfUser(userId)) return { ok: false, error: '您已在其他对局中，请先退出' }
     const parsed = gridConfigSchema.safeParse(config)
     if (!parsed.success) return { ok: false, error: '棋盘配置非法' }
     const key = this.configKey(parsed.data)
     const presetKeys = Object.values(PRESETS).map((c) => this.configKey(c))
     if (!presetKeys.includes(key)) return { ok: false, error: '自定义配置不进匹配池，请自建房间' }
+    // 兜底：若用户残留 waiting/placing 阶段的房间，先自动释放再入队；对局中仍拒绝
+    if (!this.releaseStaleRoomOf(userId)) {
+      if (this.roomOfUser(userId)) return { ok: false, error: '您已在其他对局中，请先退出' }
+    }
 
     const queue = this.matchQueue.get(key) ?? []
     const waitingIdx = queue.findIndex((e) => e.socketId !== socketId && this.io.sockets.sockets.has(e.socketId))
@@ -815,6 +865,7 @@ export class RoomManager {
       const room: Room = {
         code,
         config: parsed.data,
+        turnLimitMs: parsed.data.turnLimitMs ?? TURN_LIMIT_MS,
         seats: [this.newSeat(0), this.newSeat(1)],
         phase: 'waiting',
         game: null,

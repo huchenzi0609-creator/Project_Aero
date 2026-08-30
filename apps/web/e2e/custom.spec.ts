@@ -125,6 +125,9 @@ test.describe('自定义模式', () => {
       .locator('input')
     await expect(singleToggle).toBeChecked()
 
+    // 单机自定义模式不显示「每步限时」选单
+    await expect(page.getByLabel('每步限时')).toHaveCount(0)
+
     // 联机自定义房间页
     await page.getByRole('button', { name: '← 返回单人对局' }).click()
     await page.getByRole('button', { name: '← 返回主页' }).click()
@@ -136,6 +139,14 @@ test.describe('自定义模式', () => {
       .filter({ hasText: '允许对战双方移动参考飞机' })
       .locator('input')
     await expect(onlineToggle).toBeChecked()
+
+    // 联机自定义房间「每步限时」：默认 30 秒、共 5 档（10/20/30/60 秒 + 不限）
+    const turnSelect = page.getByLabel('每步限时')
+    await expect(turnSelect).toBeVisible()
+    await expect(turnSelect).toHaveValue('30000')
+    await expect(turnSelect.locator('option')).toHaveCount(5)
+    await expect(turnSelect.locator('option').first()).toHaveAttribute('value', '10000')
+    await expect(turnSelect.locator('option').last()).toHaveAttribute('value', '0')
 
     expect(errs()).toEqual([])
   })

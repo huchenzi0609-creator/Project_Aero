@@ -410,3 +410,46 @@ export function applyShot(state: GameState, coord: Cell): ShotResult {
   if (winner !== null) result.winner = winner
   return result
 }
+
+/**
+ * 双方平均击杀效率：对每位玩家，统计其击毁的每架敌机"从首次命中到击毁"的报点步数并取平均；
+ * 无击毁时对应项为 null。
+ *
+ * 步数定义：该玩家 shotsFired 中 kill 那一枪的下标 − 首次命中该机（任一占位格）那一枪的下标
+ * （"直接爆头"= 0 步）。结果四舍五入保留 1 位小数。纯函数，不修改 state。
+ */
+export function killEfficiencyStats(state: GameState): { player0: number | null; player1: number | null } {
+  const result: { player0: number | null; player1: number | null } = { player0: null, player1: null }
+  for (const shooter of [0, 1] as const) {
+    const target = (1 - shooter) as 0 | 1
+    const shooterBoard = state.players[shooter]
+    const targetBoard = state.players[target]
+    const destroyedIds = targetBoard.destroyedPlaneIds
+    if (destroyedIds.length === 0) continue // 无击毁 → null
+
+    const steps: number[] = []
+    for (const pid of destroyedIds) {
+      const plane = targetBoard.planes.find((p) => p.id === pid)
+      if (!plane) continue
+      const cells = occupiedCells(plane, targetBoard.shape)
+      let firstHitIdx = -1
+      let killIdx = -1
+      for (let i = 0; i < shooterBoard.shotsFired.length; i++) {
+        const s = shooterBoard.shotsFired[i]!
+        const onPlane = cells.some((c) => c.r === s.coord.r && c.c === s.coord.c)
+        if (!onPlane) continue
+        if (firstHitIdx === -1) firstHitIdx = i
+        if (s.outcome === 'kill') killIdx = i
+      }
+      // kill 枪本身也在该机占位格上（机头），故 firstHitIdx 必然 ≤ killIdx；防御性跳过异常
+      if (firstHitIdx !== -1 && killIdx !== -1) steps.push(killIdx - firstHitIdx)
+    }
+    if (steps.length > 0) {
+      const avg = steps.reduce((a, b) => a + b, 0) / steps.length
+      const rounded = Math.round(avg * 10) / 10
+      if (shooter === 0) result.player0 = rounded
+      else result.player1 = rounded
+    }
+  }
+  return result
+}

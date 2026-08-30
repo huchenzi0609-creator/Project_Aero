@@ -14,7 +14,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Cell } from '@aero/shared'
 import { DEFAULT_PLANE_SHAPE } from '@aero/shared'
-import { boundingBox, formatCoord, inBounds, parseCoord } from '@aero/game-core'
+import { boundingBox, formatCoord, inBounds, killEfficiencyStats, parseCoord } from '@aero/game-core'
 import type { GameState, ShotResult } from '@aero/game-core'
 import { chooseShot } from '@aero/game-core/ai'
 import type { ShotKnowledge } from '@aero/game-core/ai'
@@ -164,12 +164,13 @@ export function GameScreen({ mode = 'single' }: { mode?: 'single' | 'online' }) 
 
   /* ---------- 尺寸 ---------- */
   // 竖版 9:16 无滚动：状态条 + 参考/我方行 + 中央棋盘 + 输入栏 全部收进舞台
-  // （常量由 390×667 实测校准：主区高度基准 172、行预算 170、各卡固定开销）
+  // （常量由 390×667 实测校准：主区高度基准 172、行预算 128、各卡固定开销）
   const PORTRAIT_MAIN_BASE = 172
-  const PORTRAIT_ROW_BUDGET = 128 // 参考/我方行的最小预留（空网格优先，行取剩余空间）
-  const REF_CARD_CHROME = 81 // 参考卡：标题+列标+内边距
-  const MINE_CARD_CHROME = 53 // 我方卡：标题+内边距
+  const PORTRAIT_ROW_BUDGET = 128 // 参考/我方行的最小预留（行完整显示优先，网格让位）
+  const REF_CARD_CHROME = 81 // 参考卡：标题+列标+边框+内边距（实测校准）
+  const MINE_CARD_CHROME = 58 // 我方卡：标题+边框+内边距（实测校准；原 53 低估 6px 有重叠风险）
   const OPP_CARD_CHROME = 27 // 中央棋盘：列标+边框
+  const ROW_GAP = 8
 
   // 尺寸冻结：仅在本局会话首次进入时捕获舞台尺寸，本局内所有元素大小保持不变
   // （不再响应 resize；新对局/再来一局 → 新 nonce → 重新计算一次）
@@ -191,21 +192,31 @@ export function GameScreen({ mode = 'single' }: { mode?: 'single' | 'online' }) 
     if (!config) return null
     const availW = frozenViewport.width - 16
     const mainAvailH = frozenViewport.height - PORTRAIT_MAIN_BASE
-    // 空网格优先（v0.2.8）：宽度吃满舞台可用宽度（上限 34），
-    // 在舞台高度预算内保证完整显示无遮挡，参考/我方行取剩余空间
-    let mainCell = clamp(Math.floor(availW / config.width), 8, 34)
-    const oppMaxH = mainAvailH - PORTRAIT_ROW_BUDGET
-    if (mainCell * config.height + OPP_CARD_CHROME > oppMaxH) {
-      mainCell = Math.max(8, Math.floor((oppMaxH - OPP_CARD_CHROME) / config.height))
-    }
+    // 空网格 ≥85% 舞台宽（任务契约下限）对应的格宽
+    const mainFloor = Math.ceil((frozenViewport.width * 0.85) / config.width)
+    // 行预算约束下的网格格宽上限（行完整显示优先）
+    const heightBound = Math.floor((mainAvailH - PORTRAIT_ROW_BUDGET - OPP_CARD_CHROME) / config.height)
+    // 宽度上限取格（≤34），再与行预算约束取较小者
+    const gridCap = clamp(Math.floor(availW / config.width), 8, 34)
+    let mainCell = Math.min(gridCap, heightBound)
+    // 行利用率（v0.2.9）：在 ≥85% 约束内把网格压缩到下限，释放的纵向空间全部给参考/我方行
+    if (mainCell >= mainFloor) mainCell = mainFloor
     const oppH = mainCell * config.height + OPP_CARD_CHROME
-    const rowH = mainAvailH - oppH - 8
-    const halfW = Math.floor((availW - 8) / 2)
-    const refCell = clamp(Math.floor((rowH - REF_CARD_CHROME) / 5), 6, 24)
+    const rowH = mainAvailH - oppH - ROW_GAP
+    const halfW = Math.floor((availW - ROW_GAP) / 2)
+    // 行取满剩余空间：先按高度取格，再受半宽约束（卡片内边距 24 + 行标列 20），上限放宽
+    const refCell = clamp(
+      Math.min(Math.floor((rowH - REF_CARD_CHROME) / 5), Math.floor((halfW - 24 - 20) / 5)),
+      6,
+      34,
+    )
     const miniCell = clamp(
-      Math.min(Math.floor((rowH - MINE_CARD_CHROME) / config.height), Math.floor((halfW - 18) / config.width)),
+      Math.min(
+        Math.floor((rowH - MINE_CARD_CHROME) / config.height),
+        Math.floor((halfW - 24) / config.width),
+      ),
       2,
-      18,
+      26,
     )
     return { mainCell, refCell, miniCell }
   }, [frozenViewport, config])
@@ -260,6 +271,10 @@ export function GameScreen({ mode = 'single' }: { mode?: 'single' | 'online' }) 
       paintPlane: coloring.paintPlane,
     },
   })
+
+  // v0.2.9 平均击杀效率：从首次命中到击毁的平均报点步数（越低越高效）；无击毁 = null。
+  // useMemo：state 引用仅在报点/开局时变化，避免无关重渲染（横幅/着色等）下重复计算
+  const killEff = useMemo(() => (state ? killEfficiencyStats(state) : null), [state])
 
   if (!session || !state || !config) {
     return (
@@ -397,6 +412,7 @@ export function GameScreen({ mode = 'single' }: { mode?: 'single' | 'online' }) 
 
   const iWin = state.winner === me
   const bannerText = state.firstMover === me ? '您先手' : '您后手'
+  const fmtEff = (v: number | null | undefined) => (v === null || v === undefined ? '—' : v.toFixed(1))
 
   return (
     <div className={`game game--${orientation}`}>
@@ -560,23 +576,29 @@ export function GameScreen({ mode = 'single' }: { mode?: 'single' | 'online' }) 
             <div className="result__boards">
               <div className="result__board">
                 <h2 className="game__card-title">我方真实阵型</h2>
+                {/* v0.2.9：叠加对方标记（receivedShots + 残骸暗色层） */}
                 <PaperGrid
                   width={config.width}
                   height={config.height}
                   cellSize={resCell}
                   planes={myBoard.planes}
                   shape={config.shape}
+                  shots={myBoard.receivedShots}
+                  destroyedPlaneIds={myBoard.destroyedPlaneIds}
                   ariaLabel="我方真实阵型"
                 />
               </div>
               <div className="result__board">
                 <h2 className="game__card-title">对方真实阵型</h2>
+                {/* v0.2.9：叠加我方标记与染色（shotsFired + 本局着色 coloredCells） */}
                 <PaperGrid
                   width={config.width}
                   height={config.height}
                   cellSize={resCell}
                   planes={aiBoard.planes}
                   shape={config.shape}
+                  shots={myBoard.shotsFired}
+                  coloredCells={coloring.coloredCells}
                   ariaLabel="对方真实阵型"
                 />
               </div>
@@ -601,6 +623,14 @@ export function GameScreen({ mode = 'single' }: { mode?: 'single' | 'online' }) 
                 <dd className="result__stat-note">
                   命中 {stats.aiHits}/{stats.aiShots} · 击毁 {stats.aiKills} 架
                 </dd>
+              </div>
+              {/* v0.2.9 平均击杀效率对比：我方 / 对方（从首次命中到击毁的平均报点步数） */}
+              <div className="result__stat">
+                <dt>平均击杀效率</dt>
+                <dd className="result__stat-eff">
+                  我方 {fmtEff(killEff?.player0)} / 对方 {fmtEff(killEff?.player1)}
+                </dd>
+                <dd className="result__stat-note">平均每架从首中到击毁的步数 · 越低越高效</dd>
               </div>
             </dl>
 

@@ -9,7 +9,7 @@ export const DIFFICULTY_OPTIONS: ReadonlyArray<{ value: Difficulty; label: strin
   { value: 'easy', label: '简单', description: '随机乱射，偶尔“忘记”己方命中。' },
   { value: 'normal', label: '正常', description: '命中后围杀相邻四格。' },
   { value: 'hard', label: '困难', description: '全局概率热图，会绕开你已知的残骸。' },
-  { value: 'hell', label: '地狱', description: '还会学习你的布阵习惯。' },
+  { value: 'hell', label: '地狱', description: '机头概率热图 + 斩首式报点，强度显著高于困难。' },
 ]
 
 interface SettingsState {

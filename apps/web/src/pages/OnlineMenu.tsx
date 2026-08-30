@@ -148,7 +148,6 @@ export function OnlineMenu() {
         {/* 局域网对局 */}
         <PaperCard tape>
           <h2 className="online__card-title">局域网对局</h2>
-          <p className="online__card-desc">同一局域网内，输入房主分享的 6 位房码即可加入。</p>
 
           <div className="online__tiers" role="group" aria-label="创建房间档位">
             {TIERS.map((t) => (
@@ -196,15 +195,11 @@ export function OnlineMenu() {
               加入房间
             </PaperButton>
           </div>
-          <p className="online__card-desc online__hint">
-            提示：加入自定义房间无需提前配置，入房后可见棋盘与形状预览。
-          </p>
         </PaperCard>
 
         {/* 公网匹配 */}
         <PaperCard pin>
           <h2 className="online__card-title">公网匹配</h2>
-          <p className="online__card-desc">选择配置，匹配对手</p>
           <div className="online__tiers" role="group" aria-label="匹配档位">
             {TIERS.map((t) => (
               <PaperButton
@@ -240,10 +235,6 @@ export function OnlineMenu() {
         {/* 自定义房间 */}
         <PaperCard className="online__span2">
           <h2 className="online__card-title">自定义房间</h2>
-          <p className="online__card-desc">
-            房主配置棋盘与飞机形状（双方使用同一形状）；自定义配置不进公网匹配池。
-            加入者输入房码即可入房，自动获得房主配置。
-          </p>
           <PaperButton variant="primary" onClick={() => setView('onlineCustom')}>
             配置并创建自定义房间
           </PaperButton>

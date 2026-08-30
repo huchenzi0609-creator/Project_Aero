@@ -1,0 +1,45 @@
+/* ============================================================
+   全局小浮窗（v0.2.9）：回到未完成的对局
+   - 圆形、约 48px、方便点按但不挡内容
+   - 无说明文字（图标即可）；拖拽自由移动、靠近舞台边缘自动吸附
+   ============================================================ */
+
+.fab {
+  position: absolute;
+  /* 默认位置：舞台右下角（拖拽后由内联 left/top 接管） */
+  right: 12px;
+  bottom: 16px;
+  z-index: 55;
+  width: 48px;
+  height: 48px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid rgba(96, 78, 50, 0.65);
+  border-radius: 50%;
+  background: linear-gradient(180deg, #3c7557, #2c5a41);
+  color: #f5efdf;
+  cursor: pointer;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.25),
+    0 4px 10px rgba(60, 40, 10, 0.35);
+  touch-action: none;
+  user-select: none;
+  transition:
+    transform 120ms var(--ease-paper),
+    box-shadow 120ms var(--ease-paper);
+}
+.fab:hover {
+  transform: translateY(-1px);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.25),
+    0 6px 14px rgba(60, 40, 10, 0.42);
+}
+.fab:active {
+  transform: translateY(1px);
+}
+.fab:focus-visible {
+  outline: 2px dashed var(--focus-ring);
+  outline-offset: 2px;
+}

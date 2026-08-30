@@ -46,6 +46,9 @@ test.describe('设置', () => {
     await difficulty.selectOption('hell')
     await expect(difficulty).toHaveValue('hell')
 
+    // 地狱难度描述为新算法文案（机头概率热图 / 斩首式报点）
+    await expect(page.locator('.paper-select__desc')).toContainText('斩首')
+
     // 刷新后保留（刷新回主页，需再进设置页）
     await page.reload()
     await page.getByRole('button', { name: '设置' }).click()

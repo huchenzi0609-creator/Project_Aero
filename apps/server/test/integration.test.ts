@@ -549,7 +549,8 @@ describe('围棋读秒 → 系统代走 / 机器接管（快速计时）', () =>
     try {
       await authClient(a)
       await authClient(b)
-      const config = PRESETS.small
+      // 房间级限时：config 显式传 30ms，覆盖注入的全局短时限（验证 config 优先语义）
+      const config: GridConfig = { ...PRESETS.small, turnLimitMs: 30 }
       const fleetA = core.generateFleet(config.width, config.height, config.planeCount, config.shape, 'normal', core.mulberry32(61))
       const fleetB = core.generateFleet(config.width, config.height, config.planeCount, config.shape, 'normal', core.mulberry32(62))
       const { youA, youB } = await setupRoom(a, b, config, { a: fleetA, b: fleetB })
@@ -622,7 +623,8 @@ describe('围棋读秒 → 系统代走 / 机器接管（快速计时）', () =>
     try {
       await authClient(a)
       await authClient(b)
-      const config = PRESETS.small
+      // 房间级限时：config 显式传 30ms（与注入 timings 一致），覆盖默认 30s
+      const config: GridConfig = { ...PRESETS.small, turnLimitMs: 30 }
       const fleetA = core.generateFleet(config.width, config.height, config.planeCount, config.shape, 'normal', core.mulberry32(41))
       const fleetB = core.generateFleet(config.width, config.height, config.planeCount, config.shape, 'normal', core.mulberry32(42))
       const { youA, youB } = await setupRoom(a, b, config, { a: fleetA, b: fleetB })
@@ -664,6 +666,283 @@ describe('围棋读秒 → 系统代走 / 机器接管（快速计时）', () =>
       expect(endA.layouts.player1).toEqual(fleetB)
       // 若 B 获胜（败方是被接管的 A）→ reason 应为 timeout-takeover
       if (endA.winner === youB) expect(endA.reason).toBe('timeout-takeover')
+    } finally {
+      a.dispose()
+      b.dispose()
+    }
+  })
+})
+
+describe('残留房间自动释放（客户端异常退出兜底）', () => {
+  let server: ServerHandle
+  let core: GameCoreApi
+
+  beforeAll(async () => {
+    const resolved = resolveGameCore()
+    core = resolved.core
+    server = await startServer({ port: 0, dataDir: ':memory:', roomManagerOptions: { core } })
+  })
+  afterAll(async () => {
+    await server.close()
+  })
+
+  it('waiting 阶段残留：A 再次 createRoom 成功，旧房间自动释放', async () => {
+    const a = new TestClient(server.url)
+    try {
+      await authClient(a)
+      const r1 = await emitAck<{ roomCode?: string }>(a.socket, 'createRoom', { config: PRESETS.small })
+      expect(r1.roomCode).toBeDefined()
+      // 再次建房 → 成功（旧 waiting 房间被自动释放），房码不同
+      const r2 = await emitAck<{ roomCode?: string }>(a.socket, 'createRoom', { config: PRESETS.small })
+      expect(r2.roomCode).toBeDefined()
+      expect(r2.roomCode).not.toBe(r1.roomCode)
+      // 旧房码已释放：他人 join 报"房间不存在"
+      const b = new TestClient(server.url)
+      try {
+        await authClient(b)
+        const j = await emitAck<{ room?: RoomSummary }>(b.socket, 'joinRoom', { code: r1.roomCode as string })
+        expect(j.room).toBeUndefined()
+      } finally {
+        b.dispose()
+      }
+      // 收尾：A 离开新房
+      a.socket.emit('leaveRoom')
+    } finally {
+      a.dispose()
+    }
+  })
+
+  it('placing 阶段残留：A 与 B 同房时再 createRoom → 成功，B 收到 players=[] 解散', async () => {
+    const a = new TestClient(server.url)
+    const b = new TestClient(server.url)
+    try {
+      await authClient(a)
+      await authClient(b)
+      const r1 = await emitAck<{ roomCode?: string }>(a.socket, 'createRoom', { config: PRESETS.small })
+      const j1 = await emitAck<{ room?: RoomSummary }>(b.socket, 'joinRoom', { code: r1.roomCode as string })
+      expect(j1.room).toBeDefined()
+      // A 在 placing 阶段再建房：B 应收到房间解散（players=[]），A 建房成功
+      const bClosed = b.waitFor<RoomUpdate>('roomUpdate', (r) => r.players.length === 0)
+      const r2 = await emitAck<{ roomCode?: string }>(a.socket, 'createRoom', { config: PRESETS.small })
+      expect(r2.roomCode).toBeDefined()
+      const closed = await bClosed
+      expect(closed.code).toBe(r1.roomCode)
+      expect(closed.players).toHaveLength(0)
+      a.socket.emit('leaveRoom')
+    } finally {
+      a.dispose()
+      b.dispose()
+    }
+  })
+
+  it('对局中（playing）再 createRoom → 仍报"您已在其他对局中"', async () => {
+    const a = new TestClient(server.url)
+    const b = new TestClient(server.url)
+    try {
+      await authClient(a)
+      await authClient(b)
+      const config = PRESETS.small
+      const fleetA = core.generateFleet(config.width, config.height, config.planeCount, config.shape, 'normal', core.mulberry32(71))
+      const fleetB = core.generateFleet(config.width, config.height, config.planeCount, config.shape, 'normal', core.mulberry32(72))
+      await setupRoom(a, b, config, { a: fleetA, b: fleetB })
+      await readyBoth(a, b)
+
+      const res = await emitAck<{ roomCode?: string; error?: string }>(a.socket, 'createRoom', { config: PRESETS.small })
+      expect(res.roomCode).toBeUndefined()
+      expect(res.error).toContain('您已在其他对局中')
+
+      // 收尾：B 投降结束对局
+      const endAP = a.waitFor<GameEndPayload>('gameEnd', undefined, 5_000)
+      const endBP = b.waitFor<GameEndPayload>('gameEnd', undefined, 5_000)
+      b.socket.emit('resign')
+      await Promise.all([endAP, endBP])
+    } finally {
+      a.dispose()
+      b.dispose()
+    }
+  })
+
+  it('joinRoom 时释放自身残留房间：B 先建房再 join A 的房间 → 成功', async () => {
+    const a = new TestClient(server.url)
+    const b = new TestClient(server.url)
+    try {
+      await authClient(a)
+      await authClient(b)
+      const rA = await emitAck<{ roomCode?: string }>(a.socket, 'createRoom', { config: PRESETS.small })
+      const rB = await emitAck<{ roomCode?: string }>(b.socket, 'createRoom', { config: PRESETS.small })
+      expect(rB.roomCode).toBeDefined()
+      // B 残留自己的 waiting 房间，再 join A 的房间 → 成功
+      const j = await emitAck<{ room?: RoomSummary }>(b.socket, 'joinRoom', { code: rA.roomCode as string })
+      expect(j.room?.code).toBe(rA.roomCode)
+      // B 的旧房码已释放
+      const b2 = new TestClient(server.url)
+      try {
+        await authClient(b2)
+        const j2 = await emitAck<{ room?: RoomSummary }>(b2.socket, 'joinRoom', { code: rB.roomCode as string })
+        expect(j2.room).toBeUndefined()
+      } finally {
+        b2.dispose()
+      }
+      a.socket.emit('leaveRoom')
+      b.socket.emit('leaveRoom')
+    } finally {
+      a.dispose()
+      b.dispose()
+    }
+  })
+})
+
+describe('每步限时（turnLimitMs：config 优先 / 不限时 / 默认 30s）', () => {
+  let server: ServerHandle
+  let core: GameCoreApi
+
+  beforeAll(async () => {
+    const resolved = resolveGameCore()
+    core = resolved.core
+    // 注入"快时钟"全局 timings：验证 config.turnLimitMs 覆盖全局、不限时与默认 30s 语义
+    server = await startServer({
+      port: 0,
+      dataDir: ':memory:',
+      roomManagerOptions: {
+        core,
+        timings: { turnLimitMs: 150, overtimeChances: 3, reducedTurnLimitMs: 100 },
+      },
+    })
+  })
+  afterAll(async () => {
+    await server.close()
+  })
+
+  it('config.turnLimitMs 覆盖全局 timings：60s 房在 150ms 快时钟服务器上不超时', { timeout: 15_000 }, async () => {
+    const a = new TestClient(server.url) // 不报点（等超时）
+    const b = new TestClient(server.url)
+    try {
+      await authClient(a)
+      await authClient(b)
+      const config: GridConfig = { ...PRESETS.small, turnLimitMs: 60_000 }
+      const fleetA = core.generateFleet(config.width, config.height, config.planeCount, config.shape, 'normal', core.mulberry32(81))
+      const fleetB = core.generateFleet(config.width, config.height, config.planeCount, config.shape, 'normal', core.mulberry32(82))
+      const { youA, youB } = await setupRoom(a, b, config, { a: fleetA, b: fleetB })
+      await readyBoth(a, b)
+      void youB
+
+      // 先手判定；若先手是 B，B 报一个空格把回合交给 A（A 不报点，等超时）
+      const tsA = await a.waitFor<{ yourTurn: boolean }>('turnStart')
+      const tsB = await b.waitFor<{ yourTurn: boolean }>('turnStart')
+      if (!tsA.yourTurn) {
+        const empty = findEmptyCell(fleetA, fleetB, config.shape, config.width, config.height)
+        const r = await emitAck<{ ok: boolean; error?: string }>(b.socket, 'shoot', { coord: empty })
+        expect(r.ok).toBe(true)
+      }
+      void tsB
+
+      // 等 700ms（> 全局 150ms）：若房间用了 config 的 60s，A 不应超时（机会不消耗、无接管）
+      await new Promise((r) => setTimeout(r, 700))
+      const chances = a
+        .history<{ player: 0 | 1; remainingMs: number; chancesLeft: number }>('timerUpdate')
+        .filter((t) => t.player === youA)
+        .map((t) => t.chancesLeft)
+      expect(new Set(chances)).toEqual(new Set([3]))
+      expect(a.history<{ player: 0 | 1 }>('machineTakeover')).toHaveLength(0)
+
+      // 收尾：B 投降
+      const endAP = a.waitFor<GameEndPayload>('gameEnd', undefined, 5_000)
+      const endBP = b.waitFor<GameEndPayload>('gameEnd', undefined, 5_000)
+      b.socket.emit('resign')
+      const [endA, endB] = await Promise.all([endAP, endBP])
+      expect(endA.reason).toBe('resign')
+      expect(endB.reason).toBe('resign')
+    } finally {
+      a.dispose()
+      b.dispose()
+    }
+  })
+
+  it('不限时房（turnLimitMs=0）：无超时、无接管、turnStart.deadline=0，正常对局至终局', { timeout: 30_000 }, async () => {
+    const a = new TestClient(server.url)
+    const b = new TestClient(server.url)
+    try {
+      await authClient(a)
+      await authClient(b)
+      const config: GridConfig = { ...PRESETS.small, turnLimitMs: 0 }
+      const fleetA = core.generateFleet(config.width, config.height, config.planeCount, config.shape, 'normal', core.mulberry32(91))
+      const fleetB = core.generateFleet(config.width, config.height, config.planeCount, config.shape, 'normal', core.mulberry32(92))
+      const { youA } = await setupRoom(a, b, config, { a: fleetA, b: fleetB })
+      // 双方驱动正常对局至终局（不限时，无超时干预）
+      const errs: string[] = []
+      const stopA = drive(a, config.width, config.height, errs)
+      const stopB = drive(b, config.width, config.height, errs)
+      const endAP = a.waitFor<GameEndPayload>('gameEnd', undefined, 30_000)
+      const endBP = b.waitFor<GameEndPayload>('gameEnd', undefined, 30_000)
+      await readyBoth(a, b)
+      const [endA, endB] = await Promise.all([endAP, endBP])
+      stopA()
+      stopB()
+      expect(errs).toEqual([])
+      expect(endA.winner).toBe(endB.winner)
+      expect(endA.layouts.player0).toEqual(fleetA)
+      expect(endA.layouts.player1).toEqual(fleetB)
+
+      // 全程 turnStart.deadline === 0（客户端据此隐藏计时）
+      const aTurns = a.history<{ yourTurn: boolean; deadline: number }>('turnStart')
+      const bTurns = b.history<{ yourTurn: boolean; deadline: number }>('turnStart')
+      expect(aTurns.length).toBeGreaterThan(0)
+      expect(bTurns.length).toBeGreaterThan(0)
+      for (const t of [...aTurns, ...bTurns]) expect(t.deadline).toBe(0)
+      // 无机器接管；A 的机会从未被消耗
+      expect(a.history<{ player: 0 | 1 }>('machineTakeover')).toHaveLength(0)
+      const chances = a
+        .history<{ player: 0 | 1; remainingMs: number; chancesLeft: number }>('timerUpdate')
+        .filter((t) => t.player === youA)
+        .map((t) => t.chancesLeft)
+      expect(new Set(chances)).toEqual(new Set([3]))
+    } finally {
+      a.dispose()
+      b.dispose()
+    }
+  })
+
+  it('默认房（未指定 turnLimitMs）→ 用 TURN_LIMIT_MS(30s) 语义（而非注入的 150ms）', { timeout: 15_000 }, async () => {
+    const a = new TestClient(server.url) // 不报点（等超时）
+    const b = new TestClient(server.url)
+    try {
+      await authClient(a)
+      await authClient(b)
+      const config = PRESETS.small // 未指定 turnLimitMs
+      const fleetA = core.generateFleet(config.width, config.height, config.planeCount, config.shape, 'normal', core.mulberry32(101))
+      const fleetB = core.generateFleet(config.width, config.height, config.planeCount, config.shape, 'normal', core.mulberry32(102))
+      const { youA, youB } = await setupRoom(a, b, config, { a: fleetA, b: fleetB })
+      await readyBoth(a, b)
+      void youB
+
+      // 先手判定：若 A 先手，A 的回合已在进行（初始 turnStart 即 A 的回合）；
+      // 若 B 先手，B 先报一个空格把回合交给 A（A 不报点，等超时验证）
+      const firstTurn = await a.waitFor<{ yourTurn: boolean; deadline: number }>('turnStart')
+      if (firstTurn.yourTurn) {
+        expect(firstTurn.deadline).toBeGreaterThan(Date.now() + 25_000)
+      } else {
+        const empty = findEmptyCell(fleetA, fleetB, config.shape, config.width, config.height)
+        const r = await emitAck<{ ok: boolean; error?: string }>(b.socket, 'shoot', { coord: empty })
+        expect(r.ok).toBe(true)
+        const aTurn = await a.waitFor<{ yourTurn: boolean; deadline: number }>('turnStart', (p) => p.yourTurn, 5_000)
+        expect(aTurn.deadline).toBeGreaterThan(Date.now() + 25_000)
+      }
+
+      // 等 500ms（> 注入的 150ms）：证明用的是 30s 而非全局快时钟，无超时、无接管
+      await new Promise((r) => setTimeout(r, 500))
+      const chances = a
+        .history<{ player: 0 | 1; remainingMs: number; chancesLeft: number }>('timerUpdate')
+        .filter((t) => t.player === youA)
+        .map((t) => t.chancesLeft)
+      expect(new Set(chances)).toEqual(new Set([3]))
+      expect(a.history<{ player: 0 | 1 }>('machineTakeover')).toHaveLength(0)
+
+      // 收尾：B 投降
+      const endAP = a.waitFor<GameEndPayload>('gameEnd', undefined, 5_000)
+      const endBP = b.waitFor<GameEndPayload>('gameEnd', undefined, 5_000)
+      b.socket.emit('resign')
+      await Promise.all([endAP, endBP])
+      void youA
     } finally {
       a.dispose()
       b.dispose()

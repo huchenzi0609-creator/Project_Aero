@@ -8,7 +8,7 @@
  *
  * 父级职责：头部（标题/清空/随机/确认）、底部校验清单与状态、退出确认。
  */
-import { useMemo, useRef, useState } from 'react'
+import { useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { Cell, GridConfig, PlaneShape, PlacedPlane, Rotation } from '@aero/shared'
 import { boundingBox, inBounds, occupiedCells, rotateShape } from '@aero/game-core'
 import { useEffectiveOrientation, useViewport } from '../../hooks/useOrientation'
@@ -128,18 +128,44 @@ export function FleetPlacementBoard({
   }
   const frozenViewport = frozenRef.current.viewport
 
+  // v0.2.9：实测网格可用空间（.placement__board-wrap 内容盒，按配置冻结一次）——
+  // 竖版上部组件（头部/牌组/校验）为流式布局，窄视口下换行变高，固定预留会失真，
+  // 导致网格溢出、首行被裁剪；直接测量实际剩余空间后网格总能精确收进（网格优先）。
+  const wrapRef = useRef<HTMLDivElement | null>(null)
+  const [availBox, setAvailBox] = useState<{ w: number; h: number } | null>(null)
+  const measuredRef = useRef<{ config: GridConfig; box: { w: number; h: number } } | null>(null)
+  useLayoutEffect(() => {
+    const wrap = wrapRef.current
+    if (!wrap) return
+    if (measuredRef.current && measuredRef.current.config === config) return
+    const cs = getComputedStyle(wrap)
+    const box = {
+      w: wrap.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight),
+      h: wrap.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom),
+    }
+    measuredRef.current = { config, box }
+    setAvailBox(box)
+  }, [config])
+
   const cellSize = useMemo(() => {
     if (orientation === 'landscape') {
       const availW = frozenViewport.width - 380
       const availH = frozenViewport.height - 170
       return clamp(Math.floor(Math.min(availW / width, availH / height)), 10, 34)
     }
-    // 竖版 9:16 无滚动：网格优先——按可用空间（舞台高 − 上部组件预留）计算，
-    // 上部组件（头部/牌组/校验）须收进预留高度内，网格任何部分不被遮挡
-    const availW = frozenViewport.width - 24
-    const availH = frozenViewport.height - portraitChromeReserve
-    return clamp(Math.floor(Math.min(availW / width, availH / height)), 8, 26)
-  }, [frozenViewport, portraitChromeReserve, orientation, width, height])
+    // 竖版 9:16 无滚动：网格优先——按实测可用空间（回退：舞台 − 上部组件预留）计算；
+    // 扣掉列标行 15 / 行标列 20+4 / 棋盘边框 3 / 安全余量 4，网格任何部分不被遮挡
+    const box = availBox ?? { w: frozenViewport.width - 24, h: frozenViewport.height - portraitChromeReserve }
+    const availW = box.w - 20 - 4 - 3 - 4
+    const availH = box.h - 15 - 3 - 4
+    // 下限放宽到 2：极端小屏（320×568）下大棋盘（20×20）也须完整显示首行
+    return clamp(Math.floor(Math.min(availW / width, availH / height)), 2, 26)
+  }, [frozenViewport, portraitChromeReserve, orientation, width, height, availBox])
+
+  /** 网格整体尺寸（含列标/行标/边框）；超出实测空间时顶端对齐，保证首行完整可见 */
+  const gridW = 20 + 4 + width * cellSize + 3
+  const gridH = 15 + height * cellSize + 3
+  const wrapOverflow = availBox ? gridW > availBox.w || gridH > availBox.h : false
 
   /** 牌组卡片缩放（比棋盘格小，叠放后整体紧凑） */
   const deckCell = clamp(Math.floor(cellSize * 0.6), 10, 18)
@@ -405,8 +431,12 @@ export function FleetPlacementBoard({
         )}
       </section>
 
-      {/* 棋盘 */}
-      <section className="placement__board-wrap">
+      {/* 棋盘（wrapOverflow 时顶端对齐：flex 居中会把顶部溢出裁掉且不可滚动到） */}
+      <section
+        ref={wrapRef}
+        className="placement__board-wrap"
+        style={wrapOverflow ? { alignItems: 'flex-start', justifyContent: 'flex-start' } : undefined}
+      >
         <div className="paper-grid">
           <div className="paper-grid__cols" style={{ marginLeft: 20, height: 15 }}>
             {Array.from({ length: width }, (_, c) => (

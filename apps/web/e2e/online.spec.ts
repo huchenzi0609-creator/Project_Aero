@@ -54,6 +54,18 @@ test.describe('联机全流程', () => {
     const aText = await A.locator('.game__status-text').innerText()
     const active = aText.includes('轮到我方报点') ? A : B
     const inactive = active === A ? B : A
+
+    // ---- v0.2.9 空网格外缘随回合变色：回合方=深绿（mine）、非回合方=深红（theirs），恰一方轮到 ----
+    const aIsMine = ((await A.locator('.game__opp').getAttribute('class')) ?? '').includes('game__opp--mine')
+    const bIsMine = ((await B.locator('.game__opp').getAttribute('class')) ?? '').includes('game__opp--mine')
+    expect(aIsMine !== bIsMine).toBe(true) // 双方必有一方轮到
+    const mineColor = 'rgb(47, 107, 79)' // --hit-green
+    const theirsColor = 'rgb(168, 54, 47)' // --kill-red
+    const aColor = await A.locator('.game__opp .paper-grid__board').evaluate((el) => getComputedStyle(el).borderTopColor)
+    const bColor = await B.locator('.game__opp .paper-grid__board').evaluate((el) => getComputedStyle(el).borderTopColor)
+    expect(aIsMine ? aColor : bColor).toBe(mineColor)
+    expect(aIsMine ? bColor : aColor).toBe(theirsColor)
+
     // 非回合方：坐标输入与确认按钮禁用
     await expect(inactive.getByLabel('报点坐标，如 A5')).toBeDisabled()
     await expect(inactive.getByRole('button', { name: '确认报点' })).toBeDisabled()
@@ -100,11 +112,62 @@ test.describe('联机全流程', () => {
       await expect(p.locator('.result')).toContainText('我方真实阵型')
       await expect(p.locator('.result')).toContainText('对方真实阵型')
       await expect(p.locator('.result__stats')).toContainText('总报点数')
+      // v0.2.9 平均击杀效率对比："我方 X / 对方 Y"
+      await expect(p.locator('.result__stats')).toContainText('平均击杀效率')
+      await expect(p.locator('.result__stat-eff')).toContainText('/')
       await expect(p.getByRole('button', { name: '返回联机菜单' })).toBeVisible()
     }
+    // v0.2.9 结算叠加标记：双方报点后必有一方结算棋盘带标记（本局已进行若干轮）
+    const aStamps = await A.locator('.result .paper-grid__stamp').count()
+    const bStamps = await B.locator('.result .paper-grid__stamp').count()
+    expect(aStamps + bStamps).toBeGreaterThan(0)
 
     expect(errsA()).toEqual([])
     expect(errsB()).toEqual([])
+    await ctxA.close()
+    await ctxB.close()
+  })
+
+  test('不限时房间（每步限时=不限）：对局不显示倒计时条', async ({ browser }) => {
+    test.setTimeout(150_000)
+    const ctxA = await browser.newContext({ viewport: { width: 1280, height: 800 } })
+    const ctxB = await browser.newContext({ viewport: { width: 1280, height: 800 } })
+    const A = await ctxA.newPage()
+    const B = await ctxB.newPage()
+    const errsA = watchErrors(A)
+
+    // ---- A 建房（联机自定义：每步限时=不限）----
+    await A.goto('/')
+    await A.getByRole('button', { name: '联机对战' }).click()
+    await A.getByRole('button', { name: '自定义房间' }).click()
+    await A.getByLabel('每步限时').selectOption({ label: '不限' })
+    await A.getByRole('button', { name: '确认 · 创建房间' }).click()
+    await expect(A.locator('.online__roomcode')).toBeVisible({ timeout: 10000 })
+    const code = (await A.locator('.online__roomcode').innerText()).trim()
+
+    // ---- B 凭房码入房 ----
+    await B.goto('/')
+    await B.getByRole('button', { name: '联机对战' }).click()
+    await B.getByLabel('房码输入').fill(code)
+    await B.getByRole('button', { name: '加入房间' }).click()
+    await expect(B.locator('.online__roomcode')).toHaveText(code, { timeout: 10000 })
+
+    // ---- 双摆阵就绪 → 进入对局 ----
+    for (const p of [A, B]) {
+      await p.getByRole('button', { name: '随机摆阵' }).click()
+      await expect(p.getByRole('button', { name: '确认布阵并就绪' })).toBeEnabled({ timeout: 10000 })
+      await p.getByRole('button', { name: '确认布阵并就绪' }).click()
+    }
+    await expect(A.locator('.game__opp .paper-grid__board')).toBeVisible({ timeout: 20000 })
+    await expect(B.locator('.game__opp .paper-grid__board')).toBeVisible({ timeout: 20000 })
+
+    // ---- v0.2.9 不限时：turnStart.deadline === 0 → 不显示倒计时条 ----
+    await expect(A.locator('.game__timerbar')).toHaveCount(0)
+    await expect(B.locator('.game__timerbar')).toHaveCount(0)
+    // 状态条仍在（回合信息正常）
+    await expect(A.locator('.game__status-text')).toContainText(/轮到我方报点|等待对方报点/)
+
+    expect(errsA()).toEqual([])
     await ctxA.close()
     await ctxB.close()
   })

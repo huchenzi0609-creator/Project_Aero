@@ -22,6 +22,13 @@ export function Settings() {
   const setDifficulty = useSettingsStore((s) => s.setDifficulty)
   const toggleAllowMoveRefPlane = useSettingsStore((s) => s.toggleAllowMoveRefPlane)
 
+  // 「地狱」难度描述跟随新算法（v0.2.7 后：机头概率热图 + 斩首式报点）
+  const difficultyOptions = DIFFICULTY_OPTIONS.map((o) =>
+    o.value === 'hell'
+      ? { ...o, description: '机头概率热图 + 斩首式报点，强度显著高于困难。' }
+      : o,
+  )
+
   // 试听：解锁 Web Audio 并播放一组合成音效（翻页+盖章+暖音）
   const preview = () => {
     audioService.unlock()
@@ -97,7 +104,7 @@ export function Settings() {
               label="AI 难度"
               value={difficulty}
               onChange={setDifficulty}
-              options={DIFFICULTY_OPTIONS}
+              options={difficultyOptions}
             />
             <div className="settings__row">
               <PaperToggle

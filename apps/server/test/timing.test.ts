@@ -39,10 +39,10 @@ describe('围棋读秒（timing.ts）', () => {
     expect(currentTurnLimitMs(s, T)).toBe(TURN_LIMIT_MS)
   })
 
-  it('开始回合：deadline = now + 20s', () => {
+  it('开始回合：deadline = now + 当前时限', () => {
     const s = startTurn(createTimingState(T), NOW, T)
     expect(s.deadline).toBe(NOW + TURN_LIMIT_MS)
-    expect(remainingMs(s.deadline, NOW + 5_000)).toBe(15_000)
+    expect(remainingMs(s.deadline, NOW + 5_000)).toBe(TURN_LIMIT_MS - 5_000)
     expect(remainingMs(s.deadline, NOW + TURN_LIMIT_MS + 1_000)).toBe(0) // 不取负
   })
 
@@ -99,13 +99,13 @@ describe('围棋读秒（timing.ts）', () => {
 
   it('断线宽限：冻结剩余时间、重连恢复 deadline（读秒暂停）', () => {
     const s = startTurn(createTimingState(T), NOW, T)
-    // 断线发生在回合开始 5s 后 → 冻结剩余 15s
+    // 断线发生在回合开始 5s 后 → 冻结剩余（TURN_LIMIT_MS - 5s）
     const f = freeze(s, NOW + 5_000)
-    expect(f.frozenRemainingMs).toBe(15_000)
+    expect(f.frozenRemainingMs).toBe(TURN_LIMIT_MS - 5_000)
     expect(f.state.deadline).toBeNull()
-    // 断线 10s 后重连 → deadline = now + 15s（剩余时间不因断线流逝）
+    // 断线 10s 后重连 → deadline = now + 冻结剩余（剩余时间不因断线流逝）
     const r = resume(f.state, NOW + 15_000, f.frozenRemainingMs)
-    expect(r.deadline).toBe(NOW + 15_000 + 15_000)
+    expect(r.deadline).toBe(NOW + 15_000 + (TURN_LIMIT_MS - 5_000))
     // 无冻结值 → 重新开始完整回合（deadline null，由调用方 startTurn）
     const r2 = resume(f.state, NOW + 20_000, null)
     expect(r2.deadline).toBeNull()

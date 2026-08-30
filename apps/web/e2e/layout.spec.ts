@@ -85,7 +85,7 @@ async function runPortraitChecks(
     // 参考在左、我方在右、同一行（顶对齐）
     expect(refCard.x < mineCard.x).toBe(true)
     expect(Math.abs(refCard.y - mineCard.y)).toBeLessThan(20)
-    // 参考/我方行在中央棋盘上方
+    // 参考/我方行在中央棋盘上方（行放大后仍不重叠）
     expect(refCard.y + refCard.height <= oppBoard.y + 1).toBe(true)
     expect(mineCard.y + mineCard.height <= oppBoard.y + 1).toBe(true)
     // 状态条在最上、输入栏在最下
@@ -93,6 +93,13 @@ async function runPortraitChecks(
     expect(oppBoard.y < inputbar.y).toBe(true)
     // v0.2.8 空网格优先：宽度吃满舞台可用宽度（≥ 舞台宽 85%）
     expect(oppBoard.width >= stage.width * 0.85).toBe(true)
+  }
+  // v0.2.9 参考/我方行利用率提升：行内格宽不低于阈值（390×667 下 ref ≥ 11 / mini ≥ 8）
+  const refCellW = (await page.locator('.game__ref .paper-grid__cell').first().boundingBox())?.width
+  const mineCellW = (await page.locator('.game__mine .paper-grid__cell').first().boundingBox())?.width
+  if (refCellW !== undefined && mineCellW !== undefined) {
+    expect(refCellW).toBeGreaterThanOrEqual(10)
+    expect(mineCellW).toBeGreaterThanOrEqual(7)
   }
   expect(await noVerticalScroll(page, '.game')).toBe(true)
   expect(await noHorizontalOverflow(page)).toBe(true)
@@ -208,6 +215,14 @@ test.describe('竖版 9:16 舞台布局', () => {
     })
     expect(noH).toBe(true)
 
+    // ---- v0.2.9 结算叠加标记：我方真实阵型叠对方标记（receivedShots+残骸）、对方真实阵型叠我方标记（shotsFired）----
+    await expect(result.locator('.result__board').nth(0).locator('.paper-grid__stamp').first()).toBeVisible()
+    await expect(result.locator('.result__board').nth(1).locator('.paper-grid__stamp').first()).toBeVisible()
+
+    // ---- v0.2.9 平均击杀效率对比：统计卡含"我方 X / 对方 Y" ----
+    await expect(result.locator('.result__stats')).toContainText('平均击杀效率')
+    await expect(result.locator('.result__stat-eff')).toContainText('/')
+
     // ---- 结算尺寸冻结：切换视口高度后两棋盘宽度不变 ----
     await page.setViewportSize({ width: 390, height: 844 })
     await page.waitForTimeout(400)
@@ -220,10 +235,12 @@ test.describe('竖版 9:16 舞台布局', () => {
     await ctx.close()
   })
 
-  test('联机摆阵 20×20：网格不被上方组件遮挡、完整可见、无滚动、尺寸冻结', async ({ browser }) => {
-    test.setTimeout(120_000)
+  test('联机摆阵 20×20：网格不被上方组件遮挡、完整可见、无滚动、尺寸冻结；小屏首行完整显示', async ({ browser }) => {
+    test.setTimeout(150_000)
     for (const viewport of [
       { width: 390, height: 667 },
+      { width: 360, height: 640 },
+      { width: 320, height: 568 },
       { width: 1280, height: 800 },
     ]) {
       const ctx = await browser.newContext({ viewport })
@@ -266,11 +283,23 @@ test.describe('竖版 9:16 舞台布局', () => {
       expect(m1.board.y >= above - 1).toBe(true)
       // 完整可见：网格底 ≤ 底部校验区顶
       expect(m1.board.bottom <= m1.foot.y + 1).toBe(true)
+      // v0.2.9 小屏首行完整显示：首行格顶不低于托盘底（不被上部组件裁剪；仅竖版，横版托盘在左侧）
+      if (viewport.width <= viewport.height) {
+        const firstRow = await page.evaluate(() => {
+          const cell = document.querySelector('.placement__board .paper-grid__cell')
+          const tray = document.querySelector('.placement__tray')
+          if (!cell || !tray) return null
+          const c = cell.getBoundingClientRect()
+          const t = tray.getBoundingClientRect()
+          return { cellTop: c.top, trayBottom: t.bottom }
+        })
+        if (firstRow) expect(firstRow.cellTop >= firstRow.trayBottom - 2).toBe(true)
+      }
       // 无内部滚动
       expect(m1.noScroll).toBe(true)
 
       // 尺寸冻结：切换视口高度 → 网格宽度不变
-      const otherH = viewport.height === 667 ? 844 : 720
+      const otherH = viewport.height === 667 ? 844 : viewport.height === 640 ? 690 : viewport.height === 568 ? 667 : 720
       await page.setViewportSize({ width: viewport.width, height: otherH })
       await page.waitForTimeout(400)
       const m2 = await measure()

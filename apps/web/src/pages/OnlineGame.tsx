@@ -8,9 +8,9 @@
  * - 投降按钮（二次确认）；gameEnd 结算页复用 M4 布局（胜负+双方真实阵型+stats）。
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { Cell } from '@aero/shared'
+import type { Cell, PlaneShape, PlacedPlane, Shot } from '@aero/shared'
 import { DEFAULT_PLANE_SHAPE } from '@aero/shared'
-import { boundingBox, formatCoord, inBounds, parseCoord, rotateShape } from '@aero/game-core'
+import { boundingBox, formatCoord, inBounds, killEfficiencyStats, parseCoord, rotateShape } from '@aero/game-core'
 import { useAppStore } from '../store/appStore'
 import { useOnlineStore } from '../store/onlineStore'
 import { useGuestStore } from '../store/guestStore'
@@ -25,6 +25,7 @@ import { PaperCard } from '../components/ui/PaperCard'
 import { PaperModal } from '../components/ui/PaperModal'
 import { PaperGrid } from '../components/grid/PaperGrid'
 import { PlaneGlyph } from '../components/grid/PlaneGlyph'
+import type { GameState } from '@aero/game-core'
 import {
   ColoringToolButton,
   refShotsFor,
@@ -36,6 +37,17 @@ const OUTCOME_TEXT: Record<string, string> = {
   miss: '击空',
   hit: '击中',
   kill: '击毁',
+}
+
+/** 按报点 kill 标记还原被击毁飞机 id（v0.2.9 结算叠加残骸层 / 击杀效率计算共用） */
+function killedPlaneIds(layout: PlacedPlane[], shots: Shot[], shape: PlaneShape): number[] {
+  const kills = new Set(shots.filter((s) => s.outcome === 'kill').map((s) => `${s.coord.r},${s.coord.c}`))
+  return layout
+    .filter((p) => {
+      const head = rotateShape(shape, p.rotation).head
+      return kills.has(`${head.r + p.origin.r},${head.c + p.origin.c}`)
+    })
+    .map((p) => p.id)
 }
 
 function clamp(v: number, lo: number, hi: number): number {
@@ -165,10 +177,11 @@ export function OnlineGame() {
 
   /* ---------- 尺寸（竖版 9:16 无滚动：状态条+计时条+参考/我方行+中央棋盘+输入栏收进舞台；横版沿用 M4） ---------- */
   const PORTRAIT_MAIN_BASE = 206 // 172（状态条+输入栏+边距+间距）+ 34（联机回合计时条）
-  const PORTRAIT_ROW_BUDGET = 128 // 参考/我方行的最小预留（空网格优先，行取剩余空间）
-  const REF_CARD_CHROME = 81
-  const MINE_CARD_CHROME = 53
-  const OPP_CARD_CHROME = 27
+  const PORTRAIT_ROW_BUDGET = 128 // 参考/我方行的最小预留（行完整显示优先，网格让位）
+  const REF_CARD_CHROME = 81 // 参考卡：标题+列标+边框+内边距（实测校准）
+  const MINE_CARD_CHROME = 58 // 我方卡：标题+边框+内边距（实测校准；原 53 低估 6px 有重叠风险）
+  const OPP_CARD_CHROME = 27 // 中央棋盘：列标+边框
+  const ROW_GAP = 8
 
   // 尺寸冻结：仅在本局（房间码）首次进入时捕获舞台尺寸，本局内元素大小保持不变；
   // 新房间 → 新房间码 → 重新计算一次
@@ -189,21 +202,31 @@ export function OnlineGame() {
     if (!config) return null
     const availW = frozenViewport.width - 16
     const mainAvailH = frozenViewport.height - PORTRAIT_MAIN_BASE
-    // 空网格优先（v0.2.8）：宽度吃满舞台可用宽度（上限 34），
-    // 在舞台高度预算内保证完整显示无遮挡，参考/我方行取剩余空间
-    let mainCell = clamp(Math.floor(availW / config.width), 8, 34)
-    const oppMaxH = mainAvailH - PORTRAIT_ROW_BUDGET
-    if (mainCell * config.height + OPP_CARD_CHROME > oppMaxH) {
-      mainCell = Math.max(8, Math.floor((oppMaxH - OPP_CARD_CHROME) / config.height))
-    }
+    // 空网格 ≥85% 舞台宽（任务契约下限）对应的格宽
+    const mainFloor = Math.ceil((frozenViewport.width * 0.85) / config.width)
+    // 行预算约束下的网格格宽上限（行完整显示优先）
+    const heightBound = Math.floor((mainAvailH - PORTRAIT_ROW_BUDGET - OPP_CARD_CHROME) / config.height)
+    // 宽度上限取格（≤34），再与行预算约束取较小者
+    const gridCap = clamp(Math.floor(availW / config.width), 8, 34)
+    let mainCell = Math.min(gridCap, heightBound)
+    // 行利用率（v0.2.9）：在 ≥85% 约束内把网格压缩到下限，释放的纵向空间全部给参考/我方行
+    if (mainCell >= mainFloor) mainCell = mainFloor
     const oppH = mainCell * config.height + OPP_CARD_CHROME
-    const rowH = mainAvailH - oppH - 8
-    const halfW = Math.floor((availW - 8) / 2)
-    const refCell = clamp(Math.floor((rowH - REF_CARD_CHROME) / 5), 6, 24)
+    const rowH = mainAvailH - oppH - ROW_GAP
+    const halfW = Math.floor((availW - ROW_GAP) / 2)
+    // 行取满剩余空间：先按高度取格，再受半宽约束（卡片内边距 24 + 行标列 20），上限放宽
+    const refCell = clamp(
+      Math.min(Math.floor((rowH - REF_CARD_CHROME) / 5), Math.floor((halfW - 24 - 20) / 5)),
+      6,
+      34,
+    )
     const miniCell = clamp(
-      Math.min(Math.floor((rowH - MINE_CARD_CHROME) / config.height), Math.floor((halfW - 18) / config.width)),
+      Math.min(
+        Math.floor((rowH - MINE_CARD_CHROME) / config.height),
+        Math.floor((halfW - 24) / config.width),
+      ),
       2,
-      18,
+      26,
     )
     return { mainCell, refCell, miniCell }
   }, [frozenViewport, config])
@@ -282,6 +305,41 @@ export function OnlineGame() {
       })
       .map((p) => p.id)
   }, [myFleet, oppShots, config])
+
+  // v0.2.9 结算用：gameEnd 权威阵型（双方真实机队；未终局为空）
+  const mineLayout = gameEnd ? gameEnd.layouts[you === 0 ? 'player0' : 'player1'] : []
+  const oppLayout = gameEnd ? gameEnd.layouts[you === 0 ? 'player1' : 'player0'] : []
+
+  // v0.2.9 平均击杀效率：客户端只持有报点与终局阵型，按契约重建 GameState 供 killEfficiencyStats 计算。
+  // useMemo：仅终局/报点/阵型变化时重算，避免无关重渲染（计时/着色/横幅）下重复计算
+  const killEff = useMemo(() => {
+    if (!gameEnd || !config) return null
+    const mkBoard = (
+      planes: PlacedPlane[],
+      destroyedPlaneIds: number[],
+      shotsFired: Shot[],
+      receivedShots: Shot[],
+    ) => ({
+      width: config.width,
+      height: config.height,
+      shape: config.shape,
+      planes,
+      destroyedPlaneIds,
+      receivedShots,
+      shotsFired,
+    })
+    const mineBoard = mkBoard(mineLayout, killedPlaneIds(mineLayout, oppShots, config.shape), myShots, oppShots)
+    const oppBoard = mkBoard(oppLayout, killedPlaneIds(oppLayout, myShots, config.shape), oppShots, myShots)
+    const synth: GameState = {
+      phase: 'ended',
+      players: you === 0 ? [mineBoard, oppBoard] : [oppBoard, mineBoard],
+      turn: 0,
+      firstMover: 0,
+      turnNo: gameEnd.stats.turnCount,
+      winner: gameEnd.winner,
+    }
+    return killEfficiencyStats(synth)
+  }, [gameEnd, config, you, myShots, oppShots, mineLayout, oppLayout])
 
   if (!room || !config) {
     return (
@@ -418,8 +476,10 @@ export function OnlineGame() {
   const oppHits = oppShots.filter((s) => s.outcome !== 'miss').length
   const oppKillCount = oppShots.filter((s) => s.outcome === 'kill').length
 
-  const mineLayout = gameEnd ? gameEnd.layouts[you === 0 ? 'player0' : 'player1'] : []
-  const oppLayout = gameEnd ? gameEnd.layouts[you === 0 ? 'player1' : 'player0'] : []
+  // v0.2.9 结算叠加：按 gameEnd 权威阵型 + 对方报点还原我方被击毁飞机（残骸暗色层）；
+  // 对方真实阵型不叠残骸层（我方 kill 章已覆盖）
+  const resultMineKilled = gameEnd ? killedPlaneIds(mineLayout, oppShots, config.shape) : []
+  const fmtEff = (v: number | null) => (v === null ? '—' : v.toFixed(1))
 
   const takeoverMine = takeovers.includes(you)
   const takeoverOpp = takeovers.includes((1 - you) as 0 | 1)
@@ -440,7 +500,7 @@ export function OnlineGame() {
         </span>
       </header>
 
-      {/* 计时条 */}
+      {/* 计时条（v0.2.9：turnStart.deadline === 0 表示不限时/机器回合 → 不显示倒计时） */}
       {isPlaying && deadline > 0 ? (
         <div className={['game__timerbar', remainingSec <= 5 ? 'game__timerbar--urgent' : ''].filter(Boolean).join(' ')}>
           <span className="game__timer">
@@ -494,8 +554,16 @@ export function OnlineGame() {
           </PaperCard>
         </section>
 
-        {/* 对手网格（居中）：只渲染我方报点标记，绝不显示对方阵型；可放置参考飞机副本 */}
-        <section className="game__opp">
+        {/* 对手网格（居中）：只渲染我方报点标记，绝不显示对方阵型；可放置参考飞机副本；
+            外缘随回合变色（轮到我方=深绿 / 轮到对方=深红，v0.2.9；着色模式/结算下隐藏） */}
+        <section
+          className={[
+            'game__opp',
+            isPlaying && !isColoring ? (yourTurn ? 'game__opp--mine' : 'game__opp--theirs') : '',
+          ]
+            .filter(Boolean)
+            .join(' ')}
+        >
           <div className="coloring-stage">
             <PaperGrid
               width={config.width}
@@ -609,23 +677,29 @@ export function OnlineGame() {
             <div className="result__boards">
               <div className="result__board">
                 <h2 className="game__card-title">我方真实阵型（{guestName}）</h2>
+                {/* v0.2.9：叠加对方标记（receivedShots + 残骸暗色层） */}
                 <PaperGrid
                   width={config.width}
                   height={config.height}
                   cellSize={resCell}
                   planes={mineLayout}
                   shape={config.shape}
+                  shots={oppShots}
+                  destroyedPlaneIds={resultMineKilled}
                   ariaLabel="我方真实阵型"
                 />
               </div>
               <div className="result__board">
                 <h2 className="game__card-title">对方真实阵型（{oppName}）</h2>
+                {/* v0.2.9：叠加我方标记与染色（myShots + 本局着色 coloredCells） */}
                 <PaperGrid
                   width={config.width}
                   height={config.height}
                   cellSize={resCell}
                   planes={oppLayout}
                   shape={config.shape}
+                  shots={myShots}
+                  coloredCells={coloring.coloredCells}
                   ariaLabel="对方真实阵型"
                 />
               </div>
@@ -654,6 +728,15 @@ export function OnlineGame() {
                 <dd className="result__stat-note">
                   命中 {oppHits}/{oppShots.length} · 击毁 {oppKillCount} 架
                 </dd>
+              </div>
+              {/* v0.2.9 平均击杀效率对比：我方 / 对方（从首次命中到击毁的平均报点步数） */}
+              <div className="result__stat">
+                <dt>平均击杀效率</dt>
+                <dd className="result__stat-eff">
+                  我方 {fmtEff(killEff ? (you === 0 ? killEff.player0 : killEff.player1) : null)} / 对方{' '}
+                  {fmtEff(killEff ? (you === 0 ? killEff.player1 : killEff.player0) : null)}
+                </dd>
+                <dd className="result__stat-note">平均每架从首中到击毁的步数 · 越低越高效</dd>
               </div>
             </dl>
 

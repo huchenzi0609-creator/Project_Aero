@@ -25,6 +25,10 @@
   color: var(--ink-faint);
   font-size: 12px;
 }
+/* v0.2.9：竖版窄屏隐藏操作提示，头部更紧凑、网格优先获得更多空间 */
+.placement--portrait .placement__hint {
+  display: none;
+}
 .placement__controls {
   display: flex;
   gap: 8px;
@@ -421,6 +425,15 @@
   font-weight: 400 !important;
   color: var(--ink-soft);
   margin-top: 2px !important;
+}
+/* v0.2.9 平均击杀效率对比："我方 X / 对方 Y"——允许任意位置换行，极端数值/长文案不撑破卡片 */
+.result__stat-eff {
+  font-size: 16px !important;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+.game--portrait .result__stat-eff {
+  font-size: 14px !important;
 }
 .result__actions {
   display: flex;
