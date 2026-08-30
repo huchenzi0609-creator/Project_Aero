@@ -136,8 +136,12 @@ function pushHuntNeighbors(
 
 /** hit 格被覆盖的加分（命中后围杀优先；残骸多解中的 hit 折半） */
 const HIT_WEIGHT = 16
-/** hell 的随机扰动概率（≤5%） */
+/** hard（=旧地狱）的随机扰动概率（≤5%） */
 const PERTURB_PROB = 0.01
+/** 新 hell（机头概率热图）的随机扰动概率（≤5%） */
+const PERTURB_PROB_HELL = 0.02
+/** 机头概率热图：覆盖 hit 的乘法证据强度（覆盖 k 个 hit → ×(1+BOOST)^k） */
+const HEAD_HIT_BOOST = 5
 /** 残骸多解格的降权系数 */
 const WRECKAGE_FACTOR = 0.5
 
@@ -157,7 +161,7 @@ interface HeatResult {
  * 降低其射击价值并剪掉属于已毁飞机的 hit 的围杀候选。
  * hell 额外叠加边缘/角落布阵习惯先验。
  */
-function buildHeatmap(knowledge: ShotKnowledge, hell: boolean): HeatResult {
+function buildHeatmap(knowledge: ShotKnowledge, withPrior: boolean): HeatResult {
   const variants = makeVariants(knowledge.planeShape)
   const shotMap = new Map<string, Shot>()
   for (const s of knowledge.shots) shotMap.set(cellKey(s.coord.r, s.coord.c), s)
@@ -207,12 +211,86 @@ function buildHeatmap(knowledge: ShotKnowledge, hell: boolean): HeatResult {
     if (cur !== undefined && cur > 0) scores.set(key, cur * WRECKAGE_FACTOR)
   }
 
-  if (hell) {
-    // 分散度加权：残骸四周 4 邻格大概率没有其它存活飞机（对手布阵分散），小幅降权
-    // 实测对随机布阵对手收益为负（存活机常贴近残骸），故仅保留角落/边缘先验
+  if (withPrior) {
+    // 习惯先验：角落/边缘小幅加权（hard 与 hell 共用）
     applyHabitPrior(knowledge, scores)
   }
   return { scores, wreckage }
+}
+
+interface HeadMapResult {
+  headScores: Map<string, number>
+  wreckage: Set<string>
+}
+
+/**
+ * 机头概率热图（新 hell 的 head-hunting）：
+ * 枚举单机 4 旋转的全部合法摆放，按历史反馈一致性赋权后，把权重**累加到该摆放的机头格**
+ * （而非全部占位格）——每格分数即"该格是某架存活飞机机头"的后验加权估计：
+ * - kill 机头格被覆盖 / miss 格被覆盖 → 摆放排除（沿用排除语义：miss 格必不属于存活飞机）；
+ * - 覆盖 k 个 hit → 权重 ×(1+HEAD_HIT_BOOST)^k：已命中未击杀的飞机，其机头被约束到
+ *   与已知 hit 格兼容的候选摆放头部集合，局部最可能的机头格获得最高分；
+ * - 残骸多解中的 hit 证据减半；残骸多解格 ×WRECKAGE_FACTOR 降权；习惯先验叠加。
+ */
+function buildHeadMap(knowledge: ShotKnowledge, withPrior: boolean): HeadMapResult {
+  const variants = makeVariants(knowledge.planeShape)
+  const shotMap = new Map<string, Shot>()
+  for (const s of knowledge.shots) shotMap.set(cellKey(s.coord.r, s.coord.c), s)
+  const wreckage = computeWreckageCells(knowledge, variants)
+
+  const headScores = new Map<string, number>()
+  for (const v of variants) {
+    if (v.cells.length === 0) continue
+    const r0Max = knowledge.height - 1 - v.maxR
+    const c0Max = knowledge.width - 1 - v.maxC
+    if (r0Max < 0 || c0Max < 0) continue
+    for (let r0 = 0; r0 <= r0Max; r0++) {
+      for (let c0 = 0; c0 <= c0Max; c0++) {
+        let hitCount = 0
+        let invalid = false
+        for (const cell of v.cells) {
+          const key = cellKey(cell.r + r0, cell.c + c0)
+          const s = shotMap.get(key)
+          if (!s) continue
+          if (s.outcome === 'kill' || s.outcome === 'miss') {
+            invalid = true
+            break
+          }
+          // hit：残骸多解中的 hit 证据减半（可能属已毁飞机）
+          hitCount += wreckage.has(key) ? 0.5 : 1
+        }
+        if (invalid) continue
+        const weight = (1 + HEAD_HIT_BOOST) ** hitCount
+        const headKey = cellKey(v.head.r + r0, v.head.c + c0)
+        headScores.set(headKey, (headScores.get(headKey) ?? 0) + weight)
+      }
+    }
+  }
+
+  // 残骸多解降权（可能属已毁飞机的机头候选价值降低）
+  for (const key of wreckage) {
+    const cur = headScores.get(key)
+    if (cur !== undefined && cur > 0) headScores.set(key, cur * WRECKAGE_FACTOR)
+  }
+  if (withPrior) applyHabitPrior(knowledge, headScores)
+  return { headScores, wreckage }
+}
+
+/** 在候选池中取机头概率最高格，同分随机破平（head-hunting：每次报点都倾向局部最可能的机头） */
+function pickHeadByScore(candidates: Cell[], headScores: Map<string, number>, rng: Rng): Cell {
+  let bestCells: Cell[] = []
+  let bestScore = -Infinity
+  for (const cell of candidates) {
+    const score = headScores.get(cellKey(cell.r, cell.c)) ?? 0
+    if (score > bestScore) {
+      bestScore = score
+      bestCells = [cell]
+    } else if (score === bestScore) {
+      bestCells.push(cell)
+    }
+  }
+  if (bestCells.length === 0) return pickRandom(candidates, rng)
+  return pickRandom(bestCells, rng)
 }
 
 /**
@@ -291,16 +369,21 @@ export function chooseShot(knowledge: ShotKnowledge, difficulty: Difficulty, rng
     return pickRandom(unshot, rng)
   }
 
-  const hell = difficulty === 'hell'
-  // 地狱：≤5% 随机扰动（拟人化）
-  if (hell && rng() < PERTURB_PROB) return pickRandom(unshot, rng)
+  if (difficulty === 'hard') {
+    // hard := 旧地狱：热图（覆盖密度）+ 残骸多解建模 + 习惯先验 + ≤5% 扰动
+    if (rng() < PERTURB_PROB) return pickRandom(unshot, rng)
+    const { scores, wreckage } = buildHeatmap(knowledge, true)
+    // 围杀优先：存在未处理 hit 时，在其 4 邻格（已排除残骸多解）中按热图得分加权抽样；
+    // 无 hit 或全部已处理时，在全部未报格中按热图得分加权抽样（密度搜索）。
+    const hunt = huntCandidatesPruned(knowledge, wreckage)
+    if (hunt.length > 0) return pickWeightedByScore(hunt, scores, rng)
+    return pickWeightedByScore(unshot, scores, rng)
+  }
 
-  const { scores, wreckage } = buildHeatmap(knowledge, hell)
-  // 围杀优先：存在未处理 hit 时，在其 4 邻格（已排除残骸多解）中按热图得分加权抽样；
-  // 无 hit 或全部已处理时，在全部未报格中按热图得分加权抽样（密度搜索）。
-  const hunt = huntCandidatesPruned(knowledge, wreckage)
-  if (hunt.length > 0) return pickWeightedByScore(hunt, scores, rng)
-  return pickWeightedByScore(unshot, scores, rng)
+  // 新 hell：机头概率热图（head-hunting）——每枪都射向当前局部最可能的机头位置，减少无效报点
+  if (rng() < PERTURB_PROB_HELL) return pickRandom(unshot, rng)
+  const { headScores } = buildHeadMap(knowledge, true)
+  return pickHeadByScore(unshot, headScores, rng)
 }
 
 /* ---------------- generateFleet ---------------- */

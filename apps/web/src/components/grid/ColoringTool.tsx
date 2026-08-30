@@ -290,6 +290,17 @@ export function useRefPlanes(input: RefPlanesInput): RefPlanesState {
     e: React.PointerEvent,
     opts: { id: number; rotation: Rotation; source: 'ref' | 'placed'; fromOrigin?: Cell },
   ) => {
+    // v0.2.7：仅【飞机本体占位格】命中才响应（旋转/拖拽/批量着色）；
+    // 包围盒空白格点击不消耗事件（穿透给下方棋盘：着色/报点等交互不受阻断）
+    const hitKey = (e.target as HTMLElement).closest('[data-cell]')?.getAttribute('data-cell')
+    const hitMatch = hitKey ? /^(\d+),(\d+)$/.exec(hitKey) : null
+    const hitCell = hitMatch ? { r: Number(hitMatch[1]), c: Number(hitMatch[2]) } : null
+    const bodyCells = occupiedCells(
+      { id: opts.id, rotation: opts.rotation, origin: opts.fromOrigin ?? { r: 0, c: 0 } },
+      shape,
+    )
+    if (!hitCell || !bodyCells.some((c) => c.r === hitCell.r && c.c === hitCell.c)) return
+
     e.preventDefault()
     e.stopPropagation()
     const el = (e.target as HTMLElement).closest('.paper-grid__plane')

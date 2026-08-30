@@ -311,12 +311,10 @@ export function PaperGrid({
                       top: b.r0 * cellSize,
                       width: (b.c1 - b.c0 + 1) * cellSize,
                       height: (b.r1 - b.r0 + 1) * cellSize,
+                      // v0.2.7：交互时容器不接收指针，命中由【本体占位格命中片】承担，
+                      // 包围盒空白格点击穿透给下方棋盘（着色/报点等交互不受阻断）
+                      pointerEvents: interactive ? 'none' : undefined,
                     }}
-                    onPointerDown={
-                      interactive
-                        ? (e) => planesLayer?.onPlanePointerDown?.(plane, e)
-                        : undefined
-                    }
                   >
                     <PlaneGlyph
                       shape={shape}
@@ -325,6 +323,27 @@ export function PaperGrid({
                       ghost={ghost}
                     />
                     {overlaid ? <div className="paper-grid__plane-overlay" aria-hidden="true" /> : null}
+                    {/* 本体命中片：仅实际占据格触发旋转/拖拽/批量着色 */}
+                    {interactive
+                      ? abs.map((c) => (
+                          <div
+                            key={`hit-${plane.id}-${c.r}-${c.c}`}
+                            data-cell={`${c.r},${c.c}`}
+                            className="paper-grid__plane-hit"
+                            style={{
+                              position: 'absolute',
+                              left: (c.c - b.c0) * cellSize,
+                              top: (c.r - b.r0) * cellSize,
+                              width: cellSize,
+                              height: cellSize,
+                              pointerEvents: 'auto',
+                              cursor: 'grab',
+                              touchAction: 'none',
+                            }}
+                            onPointerDown={(e) => planesLayer?.onPlanePointerDown?.(plane, e)}
+                          />
+                        ))
+                      : null}
                   </div>
                 )
               })

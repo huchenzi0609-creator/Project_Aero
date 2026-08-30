@@ -178,6 +178,14 @@ export function FleetPlacementBoard({ config, planes, onPlanesChange }: FleetBoa
   const isInRect = (x: number, y: number, rect: DOMRect) =>
     x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom
 
+  /** 从事件目标的 data-cell（'r,c'）读取命中格（飞机本体命中片自带） */
+  const hitCellFromEvent = (e: React.PointerEvent): Cell | null => {
+    const key = (e.target as HTMLElement).closest('[data-cell]')?.getAttribute('data-cell')
+    if (!key) return null
+    const m = /^(\d+),(\d+)$/.exec(key)
+    return m ? { r: Number(m[1]), c: Number(m[2]) } : null
+  }
+
   const rotateTrayItem = (id: number) => {
     setTrayRot((prev) => ({ ...prev, [id]: (((prev[id] ?? 0) + 1) % 4) as Rotation }))
   }
@@ -212,6 +220,14 @@ export function FleetPlacementBoard({ config, planes, onPlanesChange }: FleetBoa
     rotation: Rotation,
     source: 'tray' | 'grid',
   ) => {
+    // v0.2.7：网格飞机仅【本体占位格】命中才响应（点击旋转 / 拖拽移动）；
+    // 包围盒内的空白格不响应（事件不消耗，穿透给棋盘层）
+    if (source === 'grid') {
+      const plane = planes.find((p) => p.id === id)
+      const hitCell = hitCellFromEvent(e)
+      const cells = plane ? occupiedCells(plane, shape) : []
+      if (!plane || !hitCell || !cells.some((c) => c.r === hitCell.r && c.c === hitCell.c)) return
+    }
     e.preventDefault()
     e.stopPropagation()
     const boardRect = boardRef.current?.getBoundingClientRect()
@@ -418,7 +434,8 @@ export function FleetPlacementBoard({ config, planes, onPlanesChange }: FleetBoa
               {planes.map((p) => {
                 const isDragged = drag?.id === p.id && drag.source === 'grid'
                 const shown = isDragged && drag?.origin ? { ...p, origin: drag.origin } : p
-                const b = cellsBBox(occupiedCells(shown, shape))
+                const abs = occupiedCells(shown, shape)
+                const b = cellsBBox(abs)
                 if (!b) return null
                 const invalid =
                   invalidFlags.outOfBoundsIds.has(p.id) || invalidFlags.overlapIds.has(p.id)
@@ -439,14 +456,34 @@ export function FleetPlacementBoard({ config, planes, onPlanesChange }: FleetBoa
                       top: b.r0 * cellSize,
                       width: (b.c1 - b.c0 + 1) * cellSize,
                       height: (b.r1 - b.r0 + 1) * cellSize,
+                      // 容器不接收指针：命中仅由下方【本体占位格命中片】承担，包围盒空白格穿透
+                      pointerEvents: 'none',
                     }}
-                    onPointerDown={(e) => startDrag(e, p.id, p.rotation, 'grid')}
                     title="点击旋转 90°，拖拽移动，拖回托盘回收"
                     role="button"
                     aria-label={`第 ${p.id + 1} 号飞机，点击旋转，拖拽移动`}
                   >
                     <PlaneGlyph shape={shape} rotation={shown.rotation} />
                     {invalid ? <div className="placement__plane-overlay" aria-hidden="true" /> : null}
+                    {/* 本体命中片：仅实际占据格可点击旋转 / 拖拽 */}
+                    {abs.map((c) => (
+                      <div
+                        key={`hit-${p.id}-${c.r}-${c.c}`}
+                        data-cell={`${c.r},${c.c}`}
+                        className="placement__plane-hit"
+                        style={{
+                          position: 'absolute',
+                          left: (c.c - b.c0) * cellSize,
+                          top: (c.r - b.r0) * cellSize,
+                          width: cellSize,
+                          height: cellSize,
+                          pointerEvents: 'auto',
+                          cursor: 'grab',
+                          touchAction: 'none',
+                        }}
+                        onPointerDown={(e) => startDrag(e, p.id, p.rotation, 'grid')}
+                      />
+                    ))}
                   </div>
                 )
               })}

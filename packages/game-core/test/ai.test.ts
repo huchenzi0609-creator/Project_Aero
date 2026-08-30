@@ -5,7 +5,7 @@
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_PLANE_SHAPE, type Cell, type Difficulty, type PlacedPlane, type PlaneShape } from '@aero/shared'
 import { chooseShot, generateFleet, mulberry32, type Rng, type ShotKnowledge } from '@aero/game-core/ai'
-import { applyShot, createGame, occupiedCells, setFleet, validateFleet } from '@aero/game-core'
+import { applyShot, createGame, occupiedCells, rotateShape, setFleet, validateFleet } from '@aero/game-core'
 
 describe('mulberry32', () => {
   it('同种子同序列，输出在 [0,1)', () => {
@@ -105,7 +105,7 @@ describe('chooseShot 合法性（100 局随机模拟）', () => {
 })
 
 describe('难度梯度（同一批固定种子，≥300 局）', () => {
-  it('平均终局回合数 easy > normal > hard > hell（允许 hell≈hard）', { timeout: 120_000 }, () => {
+  it('平均终局回合数 easy > normal > hard(旧地狱) > hell(新·机头猎杀)', { timeout: 120_000 }, () => {
     const GAMES = 320
     const results: Record<Difficulty, number[]> = { easy: [], normal: [], hard: [], hell: [] }
     for (const diff of ['easy', 'normal', 'hard', 'hell'] as Difficulty[]) {
@@ -127,10 +127,10 @@ describe('难度梯度（同一批固定种子，≥300 局）', () => {
     )
     expect(e).toBeGreaterThan(n)
     expect(n).toBeGreaterThan(h)
-    // hell ≈ hard：v0.2.0 后 hard/hell 机队改为「局部密铺 + 整体分散」，rng 消耗路径变化使
-    // 同批种子下对局整体重排，hell 相对 hard 存在 0~3 回合统计波动（SE≈1.4），容差 ±3
-    expect(x).toBeLessThanOrEqual(h + 3.0)
-    expect(x).toBeGreaterThanOrEqual(h - 4.0)
+    // v0.2.7：hard := 旧地狱（≈58~60 回合）；新 hell = 机头概率热图（head-hunting），
+    // 实测显著低于 hard（约 35 vs 59，差约 24 回合），断言 ≥3 回合量级
+    expect(h).toBeGreaterThan(x)
+    expect(h - x).toBeGreaterThanOrEqual(3)
   })
 })
 
@@ -393,5 +393,151 @@ describe('generateFleet v0.2.0：局部密铺 + 整体分散', () => {
     expect(generateFleet(15, 15, 5, CUSTOM_SHAPE_T, 'hell', mulberry32(556))).toEqual(
       generateFleet(15, 15, 5, CUSTOM_SHAPE_T, 'hell', mulberry32(556)),
     )
+  })
+})
+
+/* ---------------- v0.2.7：新 hell = 机头概率热图（head-hunting） ---------------- */
+
+/** 飞机机头绝对格位（旋转 + 平移） */
+function absoluteHead(p: PlacedPlane, shape: PlaneShape): Cell {
+  const h = rotateShape(shape, p.rotation).head
+  return { r: h.r + p.origin.r, c: h.c + p.origin.c }
+}
+
+/**
+ * head-hunting 效率测量：AI 独自击毁一个 easy 随机机队（真实反馈、残骸=miss），统计
+ * - hitsPerKill：每击杀一架前对该机落下的命中数（不含击杀枪），越低说明越直接找机头；
+ * - headshotRatio：首命中即击杀（一发入魂）的飞机占比，越高说明直接命中机头越多。
+ */
+function measureHeadHunting(
+  diff: 'hard' | 'hell',
+  aiRng: Rng,
+  fleetRng: Rng,
+): { hits: number; headshots: number } {
+  const fleet = generateFleet(10, 10, 3, DEFAULT_PLANE_SHAPE, 'easy', fleetRng)
+  const cellMap = new Map<string, number>()
+  for (const p of fleet) {
+    for (const c of occupiedCells(p, DEFAULT_PLANE_SHAPE)) cellMap.set(`${c.r},${c.c}`, p.id)
+  }
+  const heads = new Map(fleet.map((p) => [`${absoluteHead(p, DEFAULT_PLANE_SHAPE).r},${absoluteHead(p, DEFAULT_PLANE_SHAPE).c}`, p.id]))
+  const alive = new Set(fleet.map((p) => p.id))
+  const hitsBeforeKill = new Map<number, number>()
+  const headshot = new Set<number>()
+  const shots: ShotKnowledge['shots'] = []
+  let count = 0
+  while (alive.size > 0 && count < 3000) {
+    const cell = chooseShot({ width: 10, height: 10, shots, planeShape: DEFAULT_PLANE_SHAPE }, diff, aiRng)
+    const key = `${cell.r},${cell.c}`
+    const pid = cellMap.get(key)
+    let outcome: 'miss' | 'hit' | 'kill' = 'miss'
+    if (pid !== undefined && alive.has(pid)) {
+      outcome = heads.get(key) === pid ? 'kill' : 'hit'
+      if (outcome === 'kill') {
+        alive.delete(pid)
+        if (!hitsBeforeKill.has(pid)) headshot.add(pid)
+      } else {
+        hitsBeforeKill.set(pid, (hitsBeforeKill.get(pid) ?? 0) + 1)
+      }
+    }
+    shots.push({ coord: cell, outcome })
+    count++
+  }
+  const hits = [...hitsBeforeKill.values()].reduce((a, b) => a + b, 0)
+  return { hits, headshots: headshot.size }
+}
+
+/** 1v1 对抗：0 号 = 新 hell，1 号 = hard（代表旧地狱），交替先手 */
+function duelHellVsHard(hellFirst: boolean, hellRng: Rng, hardRng: Rng): { turns: number; winner: 0 | 1 } {
+  const hellFleet = generateFleet(10, 10, 3, DEFAULT_PLANE_SHAPE, 'hell', hellRng)
+  const hardFleet = generateFleet(10, 10, 3, DEFAULT_PLANE_SHAPE, 'hard', hardRng)
+  const first = hellFirst ? 0 : 1
+  let g = createGame(10, 10, DEFAULT_PLANE_SHAPE, 3, first)
+  const s0 = setFleet(g, 0, hellFirst ? hellFleet : hardFleet)
+  const s1 = setFleet(s0.ok ? s0.state : g, 1, hellFirst ? hardFleet : hellFleet)
+  if (!s1.ok) throw new Error('setFleet failed')
+  g = s1.state
+  let turns = 0
+  while (g.phase !== 'ended' && turns < 5000) {
+    const shooter = g.turn
+    const b = g.players[shooter]
+    const isHell = shooter === 0 ? hellFirst : !hellFirst
+    const cell = chooseShot(
+      { width: 10, height: 10, shots: b.shotsFired, planeShape: DEFAULT_PLANE_SHAPE },
+      isHell ? 'hell' : 'hard',
+      shooter === 0 ? hellRng : hardRng,
+    )
+    const res = applyShot(g, cell)
+    if (!res.ok) throw new Error('illegal shot')
+    g = res.state!
+    turns++
+  }
+  return { turns, winner: g.winner! }
+}
+
+describe('v0.2.7：新 hell 机头猎杀（head-hunting）', () => {
+  it('每击杀命中数显著更低，一发入魂占比显著更高（vs hard=旧地狱）', { timeout: 120_000 }, () => {
+    const G = 300
+    const stats: Record<string, { hits: number; headshots: number }> = { hard: { hits: 0, headshots: 0 }, hell: { hits: 0, headshots: 0 } }
+    for (let i = 0; i < G; i++) {
+      for (const d of ['hard', 'hell'] as const) {
+        const r = measureHeadHunting(d, mulberry32(5000 + i), mulberry32(700_000 + i))
+        stats[d]!.hits += r.hits
+        stats[d]!.headshots += r.headshots
+      }
+    }
+    const hitsPerKill = (d: 'hard' | 'hell'): number => stats[d]!.hits / G / 3
+    const headshotRatio = (d: 'hard' | 'hell'): number => stats[d]!.headshots / G / 3
+    console.log(
+      `[v0.2.7] head-hunting(${G}局): hard hits/击杀=${hitsPerKill('hard').toFixed(2)} 一发入魂=${(headshotRatio('hard') * 100).toFixed(1)}%` +
+        ` | hell hits/击杀=${hitsPerKill('hell').toFixed(2)} 一发入魂=${(headshotRatio('hell') * 100).toFixed(1)}%`,
+    )
+    expect(hitsPerKill('hell')).toBeLessThan(hitsPerKill('hard'))
+    expect(headshotRatio('hell')).toBeGreaterThan(headshotRatio('hard'))
+  })
+
+  it('1v1 对抗（新 hell vs hard=旧地狱，200 局交替先手）：胜局更多', { timeout: 120_000 }, () => {
+    const G = 200
+    let hellWins = 0
+    let hardWins = 0
+    let totalTurns = 0
+    for (let i = 0; i < G; i++) {
+      const hellFirst = i % 2 === 0
+      const r = duelHellVsHard(hellFirst, mulberry32(30_000 + i), mulberry32(40_000 + i))
+      if (r.winner === (hellFirst ? 0 : 1)) hellWins++
+      else hardWins++
+      totalTurns += r.turns
+    }
+    console.log(
+      `[v0.2.7] 1v1 对抗(${G}局交替先手): 新hell胜 ${hellWins} / hard(旧地狱)胜 ${hardWins} / 平均回合 ${(totalTurns / G).toFixed(2)}`,
+    )
+    expect(hellWins).toBeGreaterThan(hardWins)
+  })
+
+  it('性能：26×26 新 hell 单次 chooseShot < 50ms', { timeout: 30_000 }, () => {
+    const rng = mulberry32(7)
+    const cells: Cell[] = []
+    for (let r = 0; r < 26; r++) {
+      for (let c = 0; c < 26; c++) cells.push({ r, c })
+    }
+    for (let i = cells.length - 1; i > 0; i--) {
+      const j = Math.floor(rng() * (i + 1))
+      ;[cells[i], cells[j]] = [cells[j]!, cells[i]!]
+    }
+    const shots = cells.slice(0, 300).map((coord, i) => ({
+      coord,
+      outcome: (i % 3 === 0 ? 'miss' : i % 3 === 1 ? 'hit' : 'kill') as ShotKnowledge['shots'][number]['outcome'],
+    }))
+    const knowledge: ShotKnowledge = { width: 26, height: 26, shots, planeShape: DEFAULT_PLANE_SHAPE }
+    const t0 = performance.now()
+    for (let i = 0; i < 20; i++) {
+      const cell = chooseShot(knowledge, 'hell', rng)
+      expect(cell.r).toBeGreaterThanOrEqual(0)
+      expect(cell.r).toBeLessThan(26)
+      expect(cell.c).toBeGreaterThanOrEqual(0)
+      expect(cell.c).toBeLessThan(26)
+    }
+    const avgMs = (performance.now() - t0) / 20
+    console.log(`[v0.2.7] 26×26 新 hell 单次 chooseShot: ${avgMs.toFixed(3)}ms`)
+    expect(avgMs).toBeLessThan(50)
   })
 })

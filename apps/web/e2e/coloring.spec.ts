@@ -125,7 +125,17 @@ test.describe('对局着色工具', () => {
     expect(pb.x >= ob.x && pb.x + pb.width <= ob.x + ob.width + 1).toBeTruthy()
     expect(pb.y >= ob.y && pb.y + pb.height <= ob.y + ob.height + 1).toBeTruthy()
 
-    // 点击放置副本 → 旋转 90°（默认形状 5×4 → 4×5，宽高互换）
+    // v0.2.7：点击包围盒内【空白格】（默认形状左上角格为空）→ 不旋转（宽高不变）
+    const beforeMiss = await placed.boundingBox()
+    if (beforeMiss) {
+      await page.mouse.click(beforeMiss.x + 3, beforeMiss.y + 3)
+      await page.waitForTimeout(200)
+      const afterMiss = await placed.boundingBox()
+      expect(afterMiss?.width).toBe(beforeMiss.width)
+      expect(afterMiss?.height).toBe(beforeMiss.height)
+    }
+
+    // 点击放置副本【本体】中心 → 旋转 90°（默认形状 5×4 → 4×5，宽高互换）
     const before = await placed.boundingBox()
     await placed.click()
     await page.waitForTimeout(200)
@@ -185,5 +195,46 @@ test.describe('对局着色工具', () => {
 
     expect(errs()).toEqual([])
     await ctx.close()
+  })
+
+  test('摆阵飞机本体命中：包围盒空白格不旋转、本体格旋转', async ({ page }) => {
+    const errs = watchErrors(page)
+    await page.goto('/')
+    await page.getByRole('button', { name: '单人对局' }).click()
+    await page.getByRole('button', { name: /小型 · 10×10/ }).click()
+    await expect(page.getByRole('heading', { name: '摆阵 · 单人对局' })).toBeVisible()
+
+    // 拖第一张待选卡（rotation 0）到棋盘中央
+    const card = page.locator('.placement__deck-card').first()
+    const board = page.locator('.placement__board')
+    const cb = await card.boundingBox()
+    const bb = await board.boundingBox()
+    if (!cb || !bb) throw new Error('待选卡/棋盘不可见')
+    await page.mouse.move(cb.x + cb.width / 2, cb.y + cb.height / 2)
+    await page.mouse.down()
+    await page.mouse.move(bb.x + bb.width / 2, bb.y + bb.height / 2, { steps: 10 })
+    await page.mouse.up()
+    await expect(page.locator('.placement__plane')).toHaveCount(1)
+    const plane = page.locator('.placement__plane').first()
+
+    // 旋转前：默认形状 5×4（宽 > 高）
+    const p0 = await plane.boundingBox()
+    if (!p0) throw new Error('飞机不可见')
+    expect(p0.width > p0.height).toBe(true)
+
+    // v0.2.7：点击包围盒左上角空白格（默认形状 (0,0) 为空）→ 不旋转（宽高不变）
+    await page.mouse.click(p0.x + 3, p0.y + 3)
+    await page.waitForTimeout(200)
+    const p1 = await plane.boundingBox()
+    expect(p1?.width).toBe(p0.width)
+    expect(p1?.height).toBe(p0.height)
+
+    // 点击本体中心（默认形状 (2,2) 为机身格）→ 旋转 90°（4×5，宽 < 高）
+    await page.mouse.click(p0.x + p0.width / 2, p0.y + p0.height / 2)
+    await page.waitForTimeout(200)
+    const p2 = await plane.boundingBox()
+    expect(p2?.width < p2?.height).toBe(true)
+
+    expect(errs()).toEqual([])
   })
 })
