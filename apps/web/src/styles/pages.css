@@ -903,37 +903,37 @@
   .rules .paper-card {
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-    gap: 6px 12px;
+    gap: 5px 10px;
     align-items: start;
-    padding: 8px;
+    padding: 6px;
   }
   .rules__section {
     margin-bottom: 0;
   }
   .rules__h {
-    font-size: 11.5px;
+    font-size: 11px;
     margin-bottom: 1px;
     gap: 4px;
   }
   .rules__no {
-    font-size: 10px;
+    font-size: 9.5px;
   }
   .rules__p {
-    font-size: 9.5px;
-    margin-bottom: 2px;
-    line-height: 1.22;
+    font-size: 8.5px;
+    margin-bottom: 1px;
+    line-height: 1.18;
   }
   .rules__ul {
-    font-size: 9.5px;
-    margin-bottom: 2px;
-    padding-left: 12px;
+    font-size: 8.5px;
+    margin-bottom: 1px;
+    padding-left: 11px;
   }
   .rules__li {
     margin-bottom: 1px;
-    line-height: 1.22;
+    line-height: 1.18;
   }
   .rules__table {
-    font-size: 8.5px;
+    font-size: 8px;
     margin-top: 3px;
   }
   .rules__table th,
@@ -955,65 +955,64 @@
     overflow-wrap: anywhere;
   }
   .rules__fig-caption {
-    font-size: 8.5px;
-    line-height: 1.2;
+    font-size: 8px;
+    line-height: 1.18;
   }
   .rules__legend {
     gap: 8px;
     padding: 3px 2px 0;
   }
   .rules__legend-item {
-    font-size: 9.5px;
+    font-size: 8.5px;
     gap: 4px;
   }
 
-  /* ---- OnlineMenu：竖版纵向堆叠（局域网在上 → 公网在下 → 自定义房），卡片内部紧凑 ---- */
+  /* ---- OnlineMenu：竖版纵向堆叠（局域网在上 → 公网在下 → 自定义房），疏朗易用 ---- */
   .online__grid {
     grid-template-columns: 1fr;
-    gap: 8px;
+    gap: 14px;
   }
   .online__span2 {
     grid-column: 1 / -1;
   }
   .online__card-title {
-    font-size: 13px;
-    margin-bottom: 2px;
-  }
-  .online__card-desc {
-    font-size: 11px;
-    margin-bottom: 4px;
-    line-height: 1.35;
+    font-size: 15px;
+    margin-bottom: 10px;
   }
   .online__tiers {
     display: flex;
     flex-wrap: wrap;
-    gap: 5px;
+    gap: 8px;
   }
   .online__tiers .paper-btn {
-    font-size: 12px;
-    padding: 4px 8px;
+    font-size: 13px;
+    padding: 8px 10px;
     line-height: 1.25;
   }
   .online__form {
-    gap: 5px;
+    gap: 8px;
+    margin-top: 12px;
   }
   .online__form .paper-btn {
-    font-size: 12px;
-    padding: 4px 8px;
+    font-size: 13px;
+    padding: 8px 12px;
   }
   .online__codeinput {
-    flex: 1 1 90px;
-    min-width: 90px;
-    max-width: 140px;
-    font-size: 14px;
-    padding: 6px 8px;
+    flex: 1 1 100px;
+    min-width: 100px;
+    max-width: 160px;
+    font-size: 15px;
+    padding: 8px 10px;
   }
   .online__matching {
-    padding: 6px 2px;
-    gap: 6px;
+    padding: 10px 2px;
+    gap: 8px;
+  }
+  .online__span2 .paper-btn {
+    width: 100%;
   }
   .online .paper-card {
-    padding: 8px 10px;
+    padding: 14px 16px;
   }
 }
 

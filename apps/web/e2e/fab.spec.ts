@@ -96,7 +96,7 @@ test.describe('回到未完成对局浮窗', () => {
     await A.getByRole('button', { name: '确认退出' }).click()
     await expect(A.locator('.online__card-title').first()).toBeVisible({ timeout: 10000 })
     await A.getByRole('button', { name: '← 返回主页' }).click()
-    await expect(A.getByRole('heading', { name: '方格空袭' })).toBeVisible({ timeout: 10000 })
+    await expect(A.getByRole('heading', { name: '飞机杀' })).toBeVisible({ timeout: 10000 })
     await expect(fab).toHaveCount(0)
 
     // ---- 双方就绪进入对局 → A 刷新 → 浮窗出现 → 单击回到联机对局 ----

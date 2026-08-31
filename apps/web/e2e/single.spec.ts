@@ -30,7 +30,8 @@ test.describe('单机全流程', () => {
 
     // ---- 对战 ----
     const status = page.locator('.game__status-text')
-    await expect(status).toContainText(/轮到我方报点|等待对方报点/, { timeout: 10000 })
+    // AI 先手且已报点时状态条为"对方报点 X：…"，三种回合状态均可确认已进入对局
+    await expect(status).toContainText(/轮到我方报点|等待对方报点|对方报点/, { timeout: 10000 })
     const coordInput = page.getByLabel('报点坐标，如 A5')
     const result = page.locator('.result')
 

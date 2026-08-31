@@ -57,7 +57,7 @@ export function Home() {
       <main className="home__main">
         <section className="home__title-block">
           <PaperPlaneDoodle />
-          <h1 className="home__title">方格空袭</h1>
+          <h1 className="home__title">飞机杀</h1>
           <PencilUnderline />
         </section>
         <nav className="home__menu" aria-label="主菜单">
@@ -77,7 +77,7 @@ export function Home() {
         <button type="button" className="link-btn" onClick={() => setView('rules')}>
           规则说明
         </button>
-        <span className="home__version">v0.2.9 · 方格空袭</span>
+        <span className="home__version">v0.2.10</span>
       </footer>
     </div>
   )

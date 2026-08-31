@@ -23,7 +23,7 @@ for (const [name, page] of [['A', A], ['B', B]]) {
 const click = (page, name) => page.getByRole('button', { name }).click()
 
 await A.goto(BASE)
-await A.waitForSelector('text=方格空袭', { timeout: 10000 })
+await A.waitForSelector('text=飞机杀', { timeout: 10000 })
 await click(A, '联机对战')
 await click(A, '创建房间')
 await A.waitForTimeout(1200)

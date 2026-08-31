@@ -127,9 +127,13 @@
   top: -38px;
   right: 0;
 }
-/* 竖版：底部输入栏附近（由页面插入 footer 内） */
+/* 竖版：底部输入栏附近（由页面插入 footer 内）；v0.2.10 行优先——按钮略缩，输入栏单行更稳 */
 .game--portrait .coloring-stage__btn {
   display: none;
+}
+.game--portrait .coloring-inputbar__btn .coloring-btn {
+  width: 34px;
+  height: 34px;
 }
 .game--landscape .coloring-inputbar__btn {
   display: none;

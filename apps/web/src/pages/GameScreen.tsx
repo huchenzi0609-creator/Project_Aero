@@ -163,12 +163,14 @@ export function GameScreen({ mode = 'single' }: { mode?: 'single' | 'online' }) 
   }, [state, screen, session?.nonce])
 
   /* ---------- 尺寸 ---------- */
-  // 竖版 9:16 无滚动：状态条 + 参考/我方行 + 中央棋盘 + 输入栏 全部收进舞台
-  // （常量由 390×667 实测校准：主区高度基准 172、行预算 128、各卡固定开销）
-  const PORTRAIT_MAIN_BASE = 172
-  const PORTRAIT_ROW_BUDGET = 128 // 参考/我方行的最小预留（行完整显示优先，网格让位）
-  const REF_CARD_CHROME = 81 // 参考卡：标题+列标+边框+内边距（实测校准）
-  const MINE_CARD_CHROME = 58 // 我方卡：标题+边框+内边距（实测校准；原 53 低估 6px 有重叠风险）
+  // 竖版 9:16 无滚动：状态条 + 参考/我方行 + 中央棋盘 + 输入栏 全部收进舞台。
+  // v0.2.10 行优先重设计：参考/我方行实际显示大小为最高优先度——压缩状态条/输入栏/卡片
+  // chrome（m4.css 竖版覆盖）后，行分配纵向预算（refCell≥18 / miniCell≥8 目标），
+  // 中央空网格保持满宽（≥85% 舞台宽）、高度取剩余。常量按压缩后实测校准。
+  const PORTRAIT_MAIN_BASE = 121 // 最坏情况：状态条两行 54 + 输入栏 38 + 边距 16 + 间距 8 + 余量 5
+  const PORTRAIT_ROW_BUDGET = 163 // 行目标预算：refCell≥18（73+5*18）与 miniCell≥8（49+10*8）取大
+  const REF_CARD_CHROME = 73 // 参考卡：内边距+标题+列标+边框（压缩后实测校准）
+  const MINE_CARD_CHROME = 49 // 我方卡：内边距+标题+边框（压缩后实测校准）
   const OPP_CARD_CHROME = 27 // 中央棋盘：列标+边框
   const ROW_GAP = 8
 
@@ -190,30 +192,30 @@ export function GameScreen({ mode = 'single' }: { mode?: 'single' | 'online' }) 
 
   const portraitSizes = useMemo(() => {
     if (!config) return null
-    const availW = frozenViewport.width - 16
+    const availW = frozenViewport.width - 24 // 舞台 − 页面内边距20 − 主区内边距4
     const mainAvailH = frozenViewport.height - PORTRAIT_MAIN_BASE
-    // 空网格 ≥85% 舞台宽（任务契约下限）对应的格宽
+    // 空网格 ≥85% 舞台宽（任务硬下限）对应的格宽
     const mainFloor = Math.ceil((frozenViewport.width * 0.85) / config.width)
-    // 行预算约束下的网格格宽上限（行完整显示优先）
-    const heightBound = Math.floor((mainAvailH - PORTRAIT_ROW_BUDGET - OPP_CARD_CHROME) / config.height)
-    // 宽度上限取格（≤34），再与行预算约束取较小者
+    // 宽度上限取格（≤34）；行优先：行预算内网格让位（高度约束）
     const gridCap = clamp(Math.floor(availW / config.width), 8, 34)
-    let mainCell = Math.min(gridCap, heightBound)
-    // 行利用率（v0.2.9）：在 ≥85% 约束内把网格压缩到下限，释放的纵向空间全部给参考/我方行
-    if (mainCell >= mainFloor) mainCell = mainFloor
+    const heightBound = Math.floor(
+      (mainAvailH - PORTRAIT_ROW_BUDGET - ROW_GAP - OPP_CARD_CHROME) / config.height,
+    )
+    // 85% 为硬下限（行预算与网格冲突时网格下限优先）；否则网格取宽度上限，行拿剩余
+    const mainCell = Math.max(mainFloor, Math.min(gridCap, heightBound))
     const oppH = mainCell * config.height + OPP_CARD_CHROME
     const rowH = mainAvailH - oppH - ROW_GAP
     const halfW = Math.floor((availW - ROW_GAP) / 2)
-    // 行取满剩余空间：先按高度取格，再受半宽约束（卡片内边距 24 + 行标列 20），上限放宽
+    // 行取满剩余空间：高度优先，受半宽约束（卡片内边距 20 + 行标列 20），上限放宽
     const refCell = clamp(
-      Math.min(Math.floor((rowH - REF_CARD_CHROME) / 5), Math.floor((halfW - 24 - 20) / 5)),
+      Math.min(Math.floor((rowH - REF_CARD_CHROME) / 5), Math.floor((halfW - 20 - 20) / 5)),
       6,
       34,
     )
     const miniCell = clamp(
       Math.min(
         Math.floor((rowH - MINE_CARD_CHROME) / config.height),
-        Math.floor((halfW - 24) / config.width),
+        Math.floor((halfW - 20) / config.width),
       ),
       2,
       26,
@@ -630,7 +632,7 @@ export function GameScreen({ mode = 'single' }: { mode?: 'single' | 'online' }) 
                 <dd className="result__stat-eff">
                   我方 {fmtEff(killEff?.player0)} / 对方 {fmtEff(killEff?.player1)}
                 </dd>
-                <dd className="result__stat-note">平均每架从首中到击毁的步数 · 越低越高效</dd>
+                <dd className="result__stat-note">平均每架从首中到击毁的步数</dd>
               </div>
             </dl>
 

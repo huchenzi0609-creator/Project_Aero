@@ -19,8 +19,8 @@ export function Rules() {
   const setView = useAppStore((s) => s.setView)
   const orientation = useEffectiveOrientation()
   // 竖版 9:16 舞台内示意图缩小格位（紧凑双栏排版），横版保持原尺寸
-  const cellA = orientation === 'portrait' ? 9 : 26
-  const cellB = orientation === 'portrait' ? 8 : 24
+  const cellA = orientation === 'portrait' ? 7 : 26
+  const cellB = orientation === 'portrait' ? 6 : 24
 
   return (
     <div className="page rules">
@@ -82,7 +82,8 @@ export function Rules() {
               <span className="rules__no">②</span> 报点与反馈
             </h2>
             <p className="rules__p">
-              双方轮流报点，格式“字母+数字”，大小写与空格均容错。已报点格不可重复报点。
+              双方轮流报点，格式“字母+数字”，大小写与空格均容错。
+              重复报点或非法坐标判<strong>无效打击</strong>，该次不消耗回合。
             </p>
             <ul className="rules__ul">
               <li className="rules__li">无飞机 → <strong>击空</strong>（✗ 黑叉）</li>
@@ -148,44 +149,40 @@ export function Rules() {
             <h2 className="rules__h">
               <span className="rules__no">⑤</span> 数值配置
             </h2>
-            <table className="rules__table">
-              <thead>
-                <tr>
-                  <th>档位</th>
-                  <th>网格</th>
-                  <th>飞机数</th>
-                  <th>密度</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td>小型</td>
-                  <td>10×10</td>
-                  <td>3</td>
-                  <td>30.0%</td>
-                </tr>
-                <tr>
-                  <td>中型</td>
-                  <td>15×15</td>
-                  <td>5</td>
-                  <td>22.2%</td>
-                </tr>
-                <tr>
-                  <td>大型</td>
-                  <td>20×20</td>
-                  <td>7</td>
-                  <td>17.5%</td>
-                </tr>
-              </tbody>
-            </table>
-            <p className="rules__p" style={{ marginTop: 10 }}>
+            <p className="rules__p">
+              小型 10×10·3 架（密度 30.0%）；中型 15×15·5 架（22.2%）；大型 20×20·7 架（17.5%）。
+            </p>
+            <p className="rules__p" style={{ marginTop: 6 }}>
               自定义：飞机数 n ∈ [1, ⌊宽×高÷25⌋]；校验清单常驻（连通性 / 格数 / 机头数），全部满足才可确认。
+            </p>
+          </section>
+
+          <section className="rules__section">
+            <h2 className="rules__h">
+              <span className="rules__no">⑥</span> 联机计时
+            </h2>
+            <p className="rules__p">
+              联机采用围棋读秒制：每步默认 30 秒，共 3 次超时机会；机会耗尽后降为 10 秒，
+              再超时由电脑（正常难度）接管代打。自定义房间可另选 10/20/30/60 秒或不限。
+            </p>
+          </section>
+
+          <section className="rules__section">
+            <h2 className="rules__h">
+              <span className="rules__no">⑦</span> 辅助工具与结算
+            </h2>
+            <p className="rules__p">
+              着色工具：点按开启着色，长按（约 0.5 秒）调出黄/蓝/绿调色板，点按或拖拽为棋盘格染色。
+              样式参考飞机可拖拽到对手棋盘上辅助推演，旋转与批量着色可用，可在设置中关闭。
+            </p>
+            <p className="rules__p">
+              结算显示双方平均击杀效率：从首次命中到击毁的平均报点步数，越低越高效。
             </p>
           </section>
 
           <section className="rules__section" style={{ marginBottom: 0 }}>
             <h2 className="rules__h">
-              <span className="rules__no">⑥</span> 标记图例
+              <span className="rules__no">⑧</span> 标记图例
             </h2>
             <div className="rules__legend" aria-label="标记图例">
               <span className="rules__legend-item">

@@ -153,6 +153,17 @@
   color: var(--danger);
   animation: pulse 0.9s ease-in-out infinite;
 }
+/* v0.2.10 竖版行优先：计时条收紧（PORTRAIT_MAIN_BASE 已含其预算） */
+.game--portrait .game__timerbar {
+  padding: 0 0 2px;
+  gap: 12px;
+}
+.game--portrait .game__timer {
+  font-size: 14px;
+}
+.game--portrait .game__chances {
+  font-size: 12px;
+}
 @keyframes pulse {
   0%,
   100% {

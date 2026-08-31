@@ -19,7 +19,7 @@ test.describe('联机全流程', () => {
 
     // ---- A 建房 ----
     await A.goto('/')
-    await expect(A.getByRole('heading', { name: '方格空袭' })).toBeVisible()
+    await expect(A.getByRole('heading', { name: '飞机杀' })).toBeVisible()
     await A.getByRole('button', { name: '联机对战' }).click()
     await A.getByRole('button', { name: '创建房间' }).click()
     await expect(A.locator('.online__roomcode')).toBeVisible({ timeout: 10000 })
@@ -43,10 +43,10 @@ test.describe('联机全流程', () => {
     }
 
     // ---- 进入对局（服务端随机先手；双方就绪后由服务端开局，即双方就绪的最强证明） ----
-    await expect(A.locator('.game__status-text')).toContainText(/轮到我方报点|等待对方报点/, {
+    await expect(A.locator('.game__status-text')).toContainText(/轮到我方报点|等待对方报点|对方报点/, {
       timeout: 20000,
     })
-    await expect(B.locator('.game__status-text')).toContainText(/轮到我方报点|等待对方报点/, {
+    await expect(B.locator('.game__status-text')).toContainText(/轮到我方报点|等待对方报点|对方报点/, {
       timeout: 20000,
     })
 
@@ -165,7 +165,7 @@ test.describe('联机全流程', () => {
     await expect(A.locator('.game__timerbar')).toHaveCount(0)
     await expect(B.locator('.game__timerbar')).toHaveCount(0)
     // 状态条仍在（回合信息正常）
-    await expect(A.locator('.game__status-text')).toContainText(/轮到我方报点|等待对方报点/)
+    await expect(A.locator('.game__status-text')).toContainText(/轮到我方报点|等待对方报点|对方报点/)
 
     expect(errsA()).toEqual([])
     await ctxA.close()

@@ -268,6 +268,49 @@
   padding-bottom: 0;
 }
 
+/* ============ v0.2.10 竖版行优先重设计：压缩状态条/输入栏/卡片 chrome，纵向预算让给参考/我方行 ============
+   原则：参考/我方行实际显示大小为最高优先度；中央空网格保持满宽（≥85% 舞台宽）、高度取剩余。
+   全部为竖版专用覆盖，横版不动。 */
+
+/* 页面收边与行距收紧（.game 与 .game--portrait 为同一元素双类） */
+.game--portrait {
+  padding: 6px 10px 10px;
+  gap: 4px;
+}
+/* 状态条：按钮/状态文字更紧凑（.paper-btn 有 min-height:40px，须一并覆盖） */
+.game--portrait .game__statusbar .paper-btn,
+.game--portrait .game__inputbar .paper-btn {
+  padding: 5px 10px;
+  font-size: 12px;
+  min-height: 32px;
+}
+.game--portrait .game__status-text {
+  font-size: 14px;
+}
+/* 玩家名：竖版缩字号+省略号，状态条单行（联机内容较长曾换行成两行） */
+.game--portrait .game__names {
+  font-size: 12px;
+  max-width: 46%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* 输入栏：竖版隐藏操作提示，着色按钮+输入框+确认单行化（原 5 元素换行成两行） */
+.game--portrait .game__hint {
+  display: none;
+}
+.game--portrait .game__input {
+  padding: 6px 10px;
+}
+/* 卡片：内边距/标题收紧（参考与我方卡 chrome 降低，行内网格更大） */
+.game--portrait .game__card {
+  padding: 8px 10px;
+}
+.game--portrait .game__card-title {
+  font-size: 11px;
+  margin-bottom: 4px;
+}
+
 .game__card-head {
   display: flex;
   align-items: center;

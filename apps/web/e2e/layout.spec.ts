@@ -94,12 +94,13 @@ async function runPortraitChecks(
     // v0.2.8 空网格优先：宽度吃满舞台可用宽度（≥ 舞台宽 85%）
     expect(oppBoard.width >= stage.width * 0.85).toBe(true)
   }
-  // v0.2.9 参考/我方行利用率提升：行内格宽不低于阈值（390×667 下 ref ≥ 11 / mini ≥ 8）
+  // v0.2.10 行优先重设计：参考/我方行实际显示大小为最高优先度——
+  // 390×667 目标 refCell ≥18 / miniCell ≥8（实测 19/12），390×844 下更大（24/14）
   const refCellW = (await page.locator('.game__ref .paper-grid__cell').first().boundingBox())?.width
   const mineCellW = (await page.locator('.game__mine .paper-grid__cell').first().boundingBox())?.width
   if (refCellW !== undefined && mineCellW !== undefined) {
-    expect(refCellW).toBeGreaterThanOrEqual(10)
-    expect(mineCellW).toBeGreaterThanOrEqual(7)
+    expect(refCellW).toBeGreaterThanOrEqual(18)
+    expect(mineCellW).toBeGreaterThanOrEqual(8)
   }
   expect(await noVerticalScroll(page, '.game')).toBe(true)
   expect(await noHorizontalOverflow(page)).toBe(true)

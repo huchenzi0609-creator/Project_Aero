@@ -10,7 +10,7 @@ test.describe('主页', () => {
     const errs = watchErrors(page)
 
     await page.goto('/')
-    await expect(page.getByRole('heading', { name: '方格空袭' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: '飞机杀' })).toBeVisible()
 
     // 三入口
     await expect(page.getByRole('button', { name: '单人对局' })).toBeVisible()

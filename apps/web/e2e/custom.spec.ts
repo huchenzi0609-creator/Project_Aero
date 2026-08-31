@@ -92,7 +92,7 @@ test.describe('自定义模式', () => {
     // 摆阵 → 随机 → 确认 → 对局
     await page.getByRole('button', { name: '随机摆阵' }).click()
     await page.getByRole('button', { name: '确认布阵' }).click()
-    await expect(page.locator('.game__status-text')).toContainText(/轮到我方报点|等待对方报点/, {
+    await expect(page.locator('.game__status-text')).toContainText(/轮到我方报点|等待对方报点|对方报点/, {
       timeout: 15000,
     })
 
