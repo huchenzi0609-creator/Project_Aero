@@ -69,4 +69,4 @@
 - 仓库：`/Users/huchenzi/Ready4AI/Project_Aero/Aero`（pnpm monorepo；部署相关：`docs/deploy.md`、本手册、`ecosystem.config.cjs`、`Dockerfile`、`scripts/pub-smoke.mjs`）。
 - pnpm：`/Users/huchenzi/Ready4AI/Project_Aero/.tools/bin/pnpm`（PATH 前置使用）。
 - 域名解析检查：`nslookup feijisha.online`；端口探测：`nc -z -G 4 116.62.121.70 <port>`。
-- 访问分析工具（2026-09-01 新增）：`/Users/huchenzi/Ready4AI/Project_Aero/Analyze`（独立目录，不在 Aero git 仓库内）。SSH 增量抓取服务器 nginx 访问日志（时间/IP/IP 属地）入本地 SQLite，仪表盘可视化（时间-次数柱状图、属地饼图，支持筛选），地址 `http://127.0.0.1:3100`。启动：`npm install && npm run setup && npm start`；单次抓取 CLI：`npm run fetch`；配置见 `Analyze/config.json` 与 README。注意：私钥仅按路径引用（config.json `sshKey`），不复制密钥。
+- 访问分析工具（2026-09-01 新增）：`/Users/huchenzi/Ready4AI/Project_Aero/Analyze`（**独立 git 仓库**，main 分支，与 Aero 仓库无关）。SSH 增量抓取服务器 nginx 访问日志（时间/IP/IP 属地）入本地 SQLite，仪表盘可视化（时间-次数柱状图、属地饼图、灰度期统计白名单分类，支持筛选），地址 `http://127.0.0.1:3100`。启动：`npm install && npm run setup && npm start`；单次抓取 CLI：`npm run fetch`；白名单变更后 `node scripts/reclassify.js` 重算历史分类；配置见 `Analyze/config.json` 与 README。注意：私钥仅按路径引用（config.json `sshKey`），不复制密钥。
