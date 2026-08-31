@@ -155,3 +155,12 @@ Nginx 配置同上（反代 127.0.0.1:3001）；HTTPS 同 §6。
 我没有你的服务器访问权限。两种方式：
 1. 你按本手册操作（推荐先试，遇到报错把输出发我）；
 2. 给我 SSH 访问（建议用部署公钥：我生成密钥对，你把我提供的公钥加到服务器 `~/.ssh/authorized_keys`，并告知服务器 IP），我可远程执行全部部署步骤并验证。
+
+## 14. 本次线上部署纪要（2026-08-31，阿里云轻量 + 宝塔）
+
+- 服务器：Anolis 3 x86_64，2C/2G；Node v24.20.0（/opt/node，二进制安装）、pnpm 11.24、PM2 7（npm 全局，registry=registry.npmmirror.com）；nginx 1.24（dnf 需 `--disableexcludes=all`）；SELinux 已禁用。
+- 应用：代码 /opt/aero（v0.2.10），数据库 /opt/aero-data；PM2 进程 aero-server（`script: apps/server/node_modules/.bin/tsx` + `interpreter: bash`）；开机自启 = systemd `aero.service`（以 admin 用户 `pm2 resurrect`）。
+- Nginx：站点 feijisha.conf（80 + 8080 双监听），静态 /opt/aero/apps/web/dist + `/api/`、`/socket.io/`、`/health` 反代 127.0.0.1:3001。
+- **ICP 备案拦截（重要）**：域名 `feijisha.online` 备案未通过前，阿里云对**该域名的任何端口**HTTP 访问都返回备案拦截页（403）；期间可经 **IP 直连**（http://<服务器IP>:8080）正常游玩。备案通过后恢复 80/443 并申请 Let's Encrypt（acme.sh 经 Gitee 镜像安装，默认 CA 已设 letsencrypt）。
+- 证书（备案通过后执行）：`~/.acme.sh/acme.sh --issue -d feijisha.online -d www.feijisha.online -w /opt/aero/apps/web/dist --server letsencrypt`，安装到 /etc/nginx/certs 并启用 443 + 80→443 跳转。
+- 冒烟脚本：`scripts/pub-smoke.mjs <baseUrl>`（线上页面/摆阵/控制台错误检查）。

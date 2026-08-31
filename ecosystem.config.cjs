@@ -7,7 +7,8 @@ module.exports = {
     {
       name: 'aero-server',
       cwd: __dirname,
-      script: 'node_modules/.bin/tsx',
+      script: 'apps/server/node_modules/.bin/tsx',
+      interpreter: 'bash',
       args: 'apps/server/src/index.ts',
       env: {
         NODE_ENV: 'production',
