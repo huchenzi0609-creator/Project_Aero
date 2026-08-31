@@ -6,7 +6,9 @@
  *   例：PORT=3001 DATA_DIR=./data pnpm --filter @aero/server dev
  */
 import { createServer, type Server as HttpServer } from 'node:http'
+import { existsSync } from 'node:fs'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import express, { type Express } from 'express'
 import { Server } from 'socket.io'
 import type { ClientToServerEvents, RoomSummary, ServerToClientEvents } from '@aero/shared'
@@ -70,6 +72,19 @@ function buildApp(store: Store, identityService: IdentityService): Express {
       res.status(500).json({ error: err instanceof Error ? err.message : '身份创建失败' })
     }
   })
+
+  // 生产静态托管：存在前端构建产物（apps/web/dist）时，同端口直接服务页面。
+  // /api 与 /socket.io 不受影响；未构建前端时此段自动跳过（开发/测试无感）。
+  const webDist = fileURLToPath(new URL('../../web/dist', import.meta.url))
+  if (existsSync(webDist)) {
+    app.use(express.static(webDist))
+    app.use((req, res, next) => {
+      if (req.method !== 'GET') return next()
+      if (req.path.startsWith('/api') || req.path.startsWith('/socket.io')) return next()
+      if (!req.accepts('html')) return next()
+      res.sendFile(join(webDist, 'index.html'))
+    })
+  }
 
   return app
 }
