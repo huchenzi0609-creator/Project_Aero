@@ -42,7 +42,7 @@
 
 - 状态：`pm2 list`、`pm2 logs aero-server`、`curl http://127.0.0.1:3001/health`、`systemctl status nginx aero.service`
 - 重启：`pm2 reload aero-server`；整机重启后 systemd 会自动 `pm2 resurrect`。**待办：首次整机重启后必查** `pm2 list` 确认 aero-server 恢复 online；若未恢复（dump 缺失或 unit 未触发），手动 `pm2 resurrect` 并排查 journalctl -u aero.service
-- 备份：`cp /opt/aero-data/aero.db /home/admin/backup/aero-$(date +%F).db`。**截至 2026-08-31 实况：未配置**——`/home/admin/backup` 目录不存在、无 DB 备份 crontab（服务器 crontab 仅有 acme.sh 续期）。建议尽快：`mkdir -p /home/admin/backup` + 每日 crontab（如 `0 3 * * * cp …`）
+- 备份：**已配置（2026-08-31）**——admin 用户 crontab 每日 04:00 执行 `cp /opt/aero-data/aero.db /home/admin/backup/aero-$(date +%F).db && find /home/admin/backup -name "aero-*.db" -mtime +30 -delete`（保留约 30 份），日志追加至 `/home/admin/backup/backup.log`。手动执行验证通过：`aero-2026-08-31.db` 为 SQLite 3.x 且 md5 与源库一致。手动备份：`cp /opt/aero-data/aero.db /home/admin/backup/aero-$(date +%F).db`
 - 本机冒烟：`PLAYWRIGHT_CHROMIUM_EXECUTABLE='/Users/huchenzi/Library/Caches/ms-playwright/chromium-1234/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing' pnpm exec node scripts/pub-smoke.mjs <baseUrl>`
 
 ## 5. 更新/回滚流程（服务器端非 git 仓库）
