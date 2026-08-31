@@ -30,7 +30,7 @@
   ```bash
   cd /www/wwwroot
   git clone https://github.com/<你的仓库地址>.git aero
-  cd aero && git checkout release/v0.2.6   # 或 main（v0.2.10 所在）
+  cd aero && git checkout release/v0.2.6   # v0.2.10 所在分支（或用 git checkout v0.2.10 检出标签）
   ```
 - **压缩包**：本地执行
   ```bash
