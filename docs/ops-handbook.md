@@ -20,7 +20,7 @@
 | 应用代码 | `/opt/aero`（v0.2.10；**注意：服务器端非 git 仓库**，由 tar 上传，见 §5） |
 | 数据库 | `/opt/aero-data/aero.db`（node:sqlite；游客账号/战绩持久化） |
 | 进程 | PM2 `aero-server`：cwd=/opt/aero，script=`apps/server/node_modules/.bin/tsx`，**interpreter=bash**，args=`apps/server/src/index.ts`，env `NODE_ENV=production PORT=3001 DATA_DIR=/opt/aero-data` |
-| 开机自启 | systemd `aero.service`（admin 用户执行 `pm2 resurrect`，已 enable） |
+| 开机自启 | systemd `aero.service`（admin 用户执行 `pm2 resurrect`，已 enable；**注意：2026-08-31 部署后未整机重启，开机 resurrect 尚未实测**——pm2 守护进程实为 21:08 手动启动，见 §4 重启条目） |
 | Nginx | 站点 `/etc/nginx/conf.d/feijisha.conf`：`listen 80; listen 8080;`，root=`/opt/aero/apps/web/dist`，反代 `/api/`、`/socket.io/`（WebSocket 头）、`/health` → 127.0.0.1:3001 |
 | 环境 | Node v24.20.0（`/opt/node`，软链 `/usr/local/bin/{node,npm,npx}`）、pnpm 11.24、PM2 7（npm 全局，registry=registry.npmmirror.com）、nginx 1.24（dnf `--disableexcludes=all`）、git 2.43；SELinux **disabled**；iptables/nftables 全 ACCEPT |
 
@@ -41,8 +41,8 @@
 ## 4. 日常运维
 
 - 状态：`pm2 list`、`pm2 logs aero-server`、`curl http://127.0.0.1:3001/health`、`systemctl status nginx aero.service`
-- 重启：`pm2 reload aero-server`；整机重启后 systemd 会自动 `pm2 resurrect`
-- 备份：`cp /opt/aero-data/aero.db /home/admin/backup/aero-$(date +%F).db`（建议加 crontab）
+- 重启：`pm2 reload aero-server`；整机重启后 systemd 会自动 `pm2 resurrect`。**待办：首次整机重启后必查** `pm2 list` 确认 aero-server 恢复 online；若未恢复（dump 缺失或 unit 未触发），手动 `pm2 resurrect` 并排查 journalctl -u aero.service
+- 备份：`cp /opt/aero-data/aero.db /home/admin/backup/aero-$(date +%F).db`。**截至 2026-08-31 实况：未配置**——`/home/admin/backup` 目录不存在、无 DB 备份 crontab（服务器 crontab 仅有 acme.sh 续期）。建议尽快：`mkdir -p /home/admin/backup` + 每日 crontab（如 `0 3 * * * cp …`）
 - 本机冒烟：`PLAYWRIGHT_CHROMIUM_EXECUTABLE='/Users/huchenzi/Library/Caches/ms-playwright/chromium-1234/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing' pnpm exec node scripts/pub-smoke.mjs <baseUrl>`
 
 ## 5. 更新/回滚流程（服务器端非 git 仓库）
