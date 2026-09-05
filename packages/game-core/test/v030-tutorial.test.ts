@@ -45,7 +45,7 @@ function newBigGame(firstMover: 0 | 1 = 0): GameState {
     { r: 9, c: 10 },
     { r: 4, c: 10 },
   ])
-  let g = createGame(15, 15, DEFAULT_PLANE_SHAPE, 3, firstMover)
+  const g = createGame(15, 15, DEFAULT_PLANE_SHAPE, 3, firstMover)
   const s0 = setFleet(g, 0, MY_FLEET)
   if (!s0.ok) throw new Error('setFleet p0 失败')
   const s1 = setFleet(s0.state, 1, opponent)
