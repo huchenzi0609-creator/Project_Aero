@@ -24,7 +24,7 @@ const click = (page, name) => page.getByRole('button', { name }).click()
 
 await A.goto(BASE)
 await A.waitForSelector('text=飞机杀', { timeout: 10000 })
-await click(A, '联机对战')
+await click(A, '对战模式')
 await click(A, '创建房间')
 await A.waitForTimeout(1200)
 const code = await A.evaluate(() => {
@@ -35,7 +35,7 @@ if (!code) throw new Error('未找到 6 位房码')
 console.log('房码:', code)
 
 await B.goto(BASE)
-await click(B, '联机对战')
+await click(B, '对战模式')
 await B.locator('input[aria-label="房码输入"]').fill(code)
 await click(B, '加入房间')
 await B.waitForTimeout(1200)
