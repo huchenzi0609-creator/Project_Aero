@@ -64,13 +64,10 @@ apps/web/src/tutorial/
 
 注册方式：`TutorialProvider` 提供 `registerTarget(name, getRect)`；组件挂载时注册、卸载时注销。
 
-## 5. 核心层前置依赖（M1 已交付 commit 86b4ace，M8 直接引用）
+## 5. 核心层前置依赖（M1 已交付 86b4ace + 8daee40，M8 直接引用）
 
 1. **教学 AI（避开机头报点）**：`chooseTutorialShot(knowledge: ShotKnowledge, options: { avoidHeads: Cell[] }, rng: Rng): Cell`（自 packages/game-core 导出；normal 档行为为基底，候选剔除全部我方机头格，可命中机翼/机身、可击空；异常教学阵退化 normal）。单元2/3 的对手报点一律走此函数，`avoidHeads` 传入我方阵型全部机头坐标。
-2. **残局状态注入**（单元3 开局）：`createGame` 时双方飞机尚未就位，注入须在 `setFleet` 之后用两个原语：
-   - `markPlaneDestroyed(state, victim: PlayerId, planeIndex: number): GameState`——整机标记已击毁（入 destroyedPlaneIds，其全部占位格补记历史：非头格 hit / 头格 kill，同步双方 receivedShots/shotsFired；幂等、越界安全 no-op、纯函数）。
-   - `setActiveTurn(state, player: PlayerId): GameState`——覆盖 state.turn 把首回合交给对方，不改 phase/firstMover/winner。
-   - 单元3 开局序列：双方 setFleet → `markPlaneDestroyed(g, 0, idx)`（我方毁一架）→ `setActiveTurn(g, 1)`（对方先手）。
+2. **残局状态注入**（单元3 开局，一步工厂，推荐）：`createEndgameState(width, height, shape, planeCount, myPlanes, opponentPlanes, seed: EndgameSeed)`，`EndgameSeed = { preKill: { side: 'me'|'them'; planeIndex: number }; firstTurn: 'me'|'them' }`——双方摆阵就绪 + 指定一架整机已毁（destroyedPlaneIds + 我方网格补记 9 hit + 机头 1 kill；对手射击历史保持干净，后续打残骸任意格均返回 miss）+ 当前行动方设定；非法摆阵/越界返回 `{ ok: false, errors }`。低阶原语（备选）：`markPlaneDestroyed(state, victim, planeIndex)` 与 `setActiveTurn(state, player)`（setFleet 后调用，语义同上）。
 3. 单元1 结束需把玩家摆的阵型直接带入单元2：现有"确认布阵→开局"流程已支持，无需新能力。
 
 ## 6. 气泡规则（实现要点）
