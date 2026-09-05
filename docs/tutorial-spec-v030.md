@@ -64,10 +64,13 @@ apps/web/src/tutorial/
 
 注册方式：`TutorialProvider` 提供 `registerTarget(name, getRect)`；组件挂载时注册、卸载时注销。
 
-## 5. 核心层前置依赖（需 M1 补，M8 开始前必须就绪）
+## 5. 核心层前置依赖（M1 已交付 commit 86b4ace，M8 直接引用）
 
-1. **教学 AI（避开机头报点）**：单元2/单元3 的对手 AI 必须"避开我方所有机头位置进行报点"（可命中机翼/机身，但绝不报我机头格）。需要 game-core 提供一个 AI 策略选项（如 `avoidHeads: true`）或专用教学 AI；难度可复用 normal 档的其余行为。
-2. **残局状态注入**：单元3 开局要求"我方阵型随机生成，已被对手击毁一架，对方先手"。需要 game-core 支持从给定阵型构造状态时：将我方某一架飞机的全部格标记为已击中/击毁（等效对手已完成击毁）、并把当前回合设为对方。建议暴露 `createGame(config, { preKillMyPlane: true, firstTurn: 'them' })` 之类的能力（实现自由，签名由 M1 定）。
+1. **教学 AI（避开机头报点）**：`chooseTutorialShot(knowledge: ShotKnowledge, options: { avoidHeads: Cell[] }, rng: Rng): Cell`（自 packages/game-core 导出；normal 档行为为基底，候选剔除全部我方机头格，可命中机翼/机身、可击空；异常教学阵退化 normal）。单元2/3 的对手报点一律走此函数，`avoidHeads` 传入我方阵型全部机头坐标。
+2. **残局状态注入**（单元3 开局）：`createGame` 时双方飞机尚未就位，注入须在 `setFleet` 之后用两个原语：
+   - `markPlaneDestroyed(state, victim: PlayerId, planeIndex: number): GameState`——整机标记已击毁（入 destroyedPlaneIds，其全部占位格补记历史：非头格 hit / 头格 kill，同步双方 receivedShots/shotsFired；幂等、越界安全 no-op、纯函数）。
+   - `setActiveTurn(state, player: PlayerId): GameState`——覆盖 state.turn 把首回合交给对方，不改 phase/firstMover/winner。
+   - 单元3 开局序列：双方 setFleet → `markPlaneDestroyed(g, 0, idx)`（我方毁一架）→ `setActiveTurn(g, 1)`（对方先手）。
 3. 单元1 结束需把玩家摆的阵型直接带入单元2：现有"确认布阵→开局"流程已支持，无需新能力。
 
 ## 6. 气泡规则（实现要点）
