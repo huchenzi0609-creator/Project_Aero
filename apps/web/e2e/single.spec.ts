@@ -1,24 +1,25 @@
 /**
- * single.spec —— 单机小型档全流程：
+ * single.spec —— 单机小型档全流程（v0.3.0，经练习模式 → 经典模式）：
  * 摆阵（随机摆阵→确认）→ 先后手横幅 → 对局（轮到我方时报点：双点报点/输入框报点交替）
  * → 结算（胜负文案+统计卡+阵型公开）→ 再来一局回到摆阵。
  */
 import { expect, test } from '@playwright/test'
-import { allCoords, oppCell, watchErrors } from './helpers'
+import { allCoords, oppCell, practiceToPlacement, watchErrors } from './helpers'
 
 test.describe('单机全流程', () => {
-  test.setTimeout(180_000)
+  test.setTimeout(240_000)
 
-  test('小型档：摆阵→横幅→对局→结算→再来一局', async ({ page }) => {
+  test('经典模式小型档：摆阵→横幅→对局→结算→再来一局', async ({ page }) => {
     const errs = watchErrors(page)
+    // 地狱 AI 更快结束对局：无论我方先手后手，双方任一方胜出都在更少步数内收敛（避免全量并行下的长尾）
+    await page.addInitScript(() => {
+      localStorage.setItem('aero-settings', JSON.stringify({ state: { difficulty: 'hell' }, version: 0 }))
+    })
 
-    // 进入单机小型档摆阵页
-    await page.goto('/')
-    await page.getByRole('button', { name: '单人对局' }).click()
-    await page.getByRole('button', { name: /小型 · 10×10/ }).click()
+    // 练习模式 → 经典模式 → 小型档 → 摆阵页
+    await practiceToPlacement(page, '经典模式')
 
     // ---- 摆阵：随机摆阵 → 校验通过 → 确认 ----
-    await expect(page.getByRole('heading', { name: '摆阵 · 单人对局' })).toBeVisible()
     await page.getByRole('button', { name: '随机摆阵' }).click()
     await expect(page.locator('.placement__status')).toContainText('校验通过')
     await page.getByRole('button', { name: '确认布阵' }).click()
@@ -36,36 +37,42 @@ test.describe('单机全流程', () => {
     const result = page.locator('.result')
 
     // ---- 报点循环：双点报点（2/3）与输入框报点（1/3）交替，直至结算 ----
+    // 用轮询等待回合翻转（非硬编码步长），兼容全量并行下的调度抖动
     const shotCoords = allCoords(10, 10)
     const shotSet = new Set<string>()
     let shotIndex = 0
     let rounds = 0
-    while (rounds < 100 && !(await result.isVisible().catch(() => false))) {
+    let inputShot = 0
+    while (rounds < 300 && !(await result.isVisible().catch(() => false))) {
       rounds += 1
-      // 我方回合的标志：坐标输入框可用
-      if (!(await coordInput.isEnabled())) {
-        await page.waitForTimeout(250)
-        continue
+      // 等 AI 走完 → 我方回合（或已结算）
+      for (let i = 0; i < 60; i++) {
+        if (await result.isVisible().catch(() => false)) break
+        if (await coordInput.isEnabled()) break
+        await page.waitForTimeout(150)
       }
+      if (!(await coordInput.isEnabled())) continue
       // 取下一个未报点坐标（报点由本测试发起，追踪精确）
       while (shotSet.has(shotCoords[shotIndex] ?? '')) shotIndex += 1
       const coord = shotCoords[shotIndex] ?? 'A1'
       shotSet.add(coord)
 
+      // 每 3 枪用一次双点报点覆盖该交互，其余走输入框（回车），避免点击竞态拖慢收敛
       if (rounds % 3 === 0) {
-        // 输入框报点：填坐标 + 回车
+        const cell = oppCell(page, coord)
+        await cell.click({ timeout: 1500 }).catch(() => {})
+        if (await result.isVisible().catch(() => false)) break
+        await page.waitForTimeout(140)
+        if (await result.isVisible().catch(() => false)) break
+        await cell.click({ timeout: 1500 }).catch(() => {})
+      } else {
+        inputShot += 1
         await coordInput.fill(coord)
         await coordInput.press('Enter')
-      } else {
-        // 双点报点：点格高亮 → 再点同一格
-        const cell = oppCell(page, coord)
-        await cell.click()
-        await page.waitForTimeout(120)
-        await cell.click()
+        await expect(coordInput).toHaveValue('', { timeout: 3000 }).catch(() => {})
       }
-      // 等 AI 报点（300~900ms 思考 + 0.8s 高亮动画）并回到我方回合
-      await page.waitForTimeout(950)
     }
+    expect(inputShot + Math.floor(rounds / 3)).toBeGreaterThanOrEqual(5) // 确实进行过报点循环
 
     // ---- 结算：胜负文案 + 统计卡 + 双方真实阵型公开 ----
     await expect(result).toBeVisible({ timeout: 20000 })

@@ -60,36 +60,42 @@ test.describe('设置', () => {
     expect(errs()).toEqual([])
   })
 
-  test('「允许移动参考飞机」开关：默认开，关闭/再开均持久化（刷新保持）', async ({ page }) => {
+  test('「允许移动参考飞机」与「快捷着色」开关：默认开，关闭/再开均持久化（刷新保持）', async ({ page }) => {
     const errs = watchErrors(page)
 
     await page.goto('/')
     await page.getByRole('button', { name: '设置' }).click()
 
     const section = page.locator('.settings__section').filter({ hasText: '对局' })
-    const toggle = () =>
+    const toggle = (label: string) =>
       section
         .locator('.paper-toggle')
-        .filter({ hasText: '允许移动参考飞机' })
+        .filter({ hasText: label })
         .locator('input[type="checkbox"]')
 
-    // 默认开
+    // 默认均开
     await expect(section).toBeVisible()
-    await expect(toggle()).toBeChecked()
+    await expect(toggle('允许移动参考飞机')).toBeChecked()
+    // v0.3.0 快捷着色：默认开，含说明文案
+    await expect(toggle('快捷着色')).toBeChecked()
+    await expect(section.locator('.paper-toggle').filter({ hasText: '快捷着色' })).toContainText('批量着色')
 
-    // 关闭 → 刷新后仍关闭
-    await toggle().uncheck()
-    await expect(toggle()).not.toBeChecked()
+    // 关闭快捷着色 → 刷新后仍关闭
+    await toggle('快捷着色').uncheck()
+    await expect(toggle('快捷着色')).not.toBeChecked()
     await page.reload()
     await page.getByRole('button', { name: '设置' }).click()
-    await expect(toggle()).not.toBeChecked()
+    await expect(toggle('快捷着色')).not.toBeChecked()
 
-    // 再开回 → 刷新后仍开启
-    await toggle().check()
-    await expect(toggle()).toBeChecked()
+    // 再开回 → 刷新后仍开启；允许移动参考飞机同步回归
+    await toggle('快捷着色').check()
+    await toggle('允许移动参考飞机').uncheck()
+    await expect(toggle('快捷着色')).toBeChecked()
+    await expect(toggle('允许移动参考飞机')).not.toBeChecked()
     await page.reload()
     await page.getByRole('button', { name: '设置' }).click()
-    await expect(toggle()).toBeChecked()
+    await expect(toggle('快捷着色')).toBeChecked()
+    await expect(toggle('允许移动参考飞机')).not.toBeChecked()
 
     expect(errs()).toEqual([])
   })

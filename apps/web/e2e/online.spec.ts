@@ -1,15 +1,24 @@
 /**
- * online.spec —— 双 context 联机全流程（复用 scripts/online-smoke.mjs 选择器思路）：
+ * online.spec —— 双 context 联机全流程（v0.3.0 导航，复用 helpers）：
  * 建房 → 房码 → 入房 → 双摆阵 → 就绪 → 对局若干轮 → 结算；
- * 另加：非当前回合报点被拒（UI 禁点 + Toast 提示）。
+ * v0.3.0：非当前回合点击空网格 = 创建「?」预报点（纯客户端）；回合外缘随回合变色。
+ * 另：经典房间对局显示回合读秒条（byo-yomi，.game__timerbar）。
  */
 import { expect, test } from '@playwright/test'
-import { allCoords, oppCell, watchErrors } from './helpers'
+import {
+  allCoords,
+  bothReadyOnline,
+  createRoomHost,
+  joinRoomByCode,
+  openOnline,
+  oppCell,
+  watchErrors,
+} from './helpers'
 
 test.describe('联机全流程', () => {
   test.setTimeout(150_000)
 
-  test('建房→入房→双摆阵→就绪→对局→结算；非当前回合禁点', async ({ browser }) => {
+  test('建房→入房→双摆阵→就绪→对局→结算；非当前回合=预报点', async ({ browser }) => {
     const ctxA = await browser.newContext({ viewport: { width: 1280, height: 800 } })
     const ctxB = await browser.newContext({ viewport: { width: 1280, height: 800 } })
     const A = await ctxA.newPage()
@@ -17,43 +26,32 @@ test.describe('联机全流程', () => {
     const errsA = watchErrors(A)
     const errsB = watchErrors(B)
 
-    // ---- A 建房 ----
-    await A.goto('/')
-    await expect(A.getByRole('heading', { name: '飞机杀' })).toBeVisible()
-    await A.getByRole('button', { name: '联机对战' }).click()
-    await A.getByRole('button', { name: '创建房间' }).click()
-    await expect(A.locator('.online__roomcode')).toBeVisible({ timeout: 10000 })
-    const code = (await A.locator('.online__roomcode').innerText()).trim()
-    expect(code).toMatch(/^[A-Z0-9]{6}$/)
+    // ---- A 建房（对战模式 · 自定义房间） ----
+    const code = await createRoomHost(A)
 
     // ---- B 凭房码入房 ----
-    await B.goto('/')
-    await B.getByRole('button', { name: '联机对战' }).click()
-    await B.getByLabel('房码输入').fill(code)
-    await B.getByRole('button', { name: '加入房间' }).click()
-    await expect(B.locator('.online__roomcode')).toHaveText(code, { timeout: 10000 })
+    await joinRoomByCode(B, code)
     await expect(A.getByRole('heading', { name: '摆阵 · 联机对局' })).toBeVisible()
     await expect(B.getByRole('heading', { name: '摆阵 · 联机对局' })).toBeVisible()
 
     // ---- 双摆阵并就绪 ----
-    for (const p of [A, B]) {
-      await p.getByRole('button', { name: '随机摆阵' }).click()
-      await expect(p.getByRole('button', { name: '确认布阵并就绪' })).toBeEnabled({ timeout: 10000 })
-      await p.getByRole('button', { name: '确认布阵并就绪' }).click()
-    }
+    await bothReadyOnline(A, B)
 
-    // ---- 进入对局（服务端随机先手；双方就绪后由服务端开局，即双方就绪的最强证明） ----
-    await expect(A.locator('.game__status-text')).toContainText(/轮到我方报点|等待对方报点|对方报点/, {
+    // ---- 进入对局（服务端随机先手；双方就绪后由服务端开局） ----
+    await expect(A.locator('.game__status-text')).toContainText(/轮到我方报点|等待对方报点/, {
       timeout: 20000,
     })
-    await expect(B.locator('.game__status-text')).toContainText(/轮到我方报点|等待对方报点|对方报点/, {
+    await expect(B.locator('.game__status-text')).toContainText(/轮到我方报点|等待对方报点/, {
       timeout: 20000,
     })
 
-    // ---- 非当前回合报点被拒（UI 禁点） ----
+    // ---- 非当前回合禁报点：点击空网格 = 创建「?」预报点（无"还没轮到"提示） ----
     const aText = await A.locator('.game__status-text').innerText()
     const active = aText.includes('轮到我方报点') ? A : B
     const inactive = active === A ? B : A
+    await expect(inactive.locator('.game__opp .paper-grid__stamp .prefire-mark')).toHaveCount(0)
+    await inactive.locator('.game__opp .paper-grid__board button[aria-label="A1"]').click()
+    await expect(inactive.locator('.game__opp .paper-grid__stamp .prefire-mark')).toHaveCount(1)
 
     // ---- v0.2.9 空网格外缘随回合变色：回合方=深绿（mine）、非回合方=深红（theirs），恰一方轮到 ----
     const aIsMine = ((await A.locator('.game__opp').getAttribute('class')) ?? '').includes('game__opp--mine')
@@ -66,14 +64,6 @@ test.describe('联机全流程', () => {
     expect(aIsMine ? aColor : bColor).toBe(mineColor)
     expect(aIsMine ? bColor : aColor).toBe(theirsColor)
 
-    // 非回合方：坐标输入与确认按钮禁用
-    await expect(inactive.getByLabel('报点坐标，如 A5')).toBeDisabled()
-    await expect(inactive.getByRole('button', { name: '确认报点' })).toBeDisabled()
-    // 点击棋盘格 → Toast 提示「还没轮到您报点」
-    await inactive.locator('.game__opp .paper-grid__cell--clickable').first().click()
-    await expect(inactive.locator('.toast').filter({ hasText: '还没轮到您报点' })).toBeVisible()
-    await inactive.waitForTimeout(300)
-
     // ---- 对局若干轮（回合方报点，双点式） ----
     const shotCoords = allCoords(10, 10)
     const shotSets: Record<'A' | 'B', Set<string>> = { A: new Set(), B: new Set() }
@@ -83,7 +73,7 @@ test.describe('联机全流程', () => {
       ['B', B],
     ]
     let rounds = 0
-    while (rounds < 30 && !(await A.locator('.result').isVisible().catch(() => false))) {
+    while (rounds < 40 && !(await A.locator('.result').isVisible().catch(() => false))) {
       rounds += 1
       for (const [name, p] of pages) {
         if (await p.locator('.result').isVisible().catch(() => false)) break
@@ -92,10 +82,12 @@ test.describe('联机全流程', () => {
         const coord = shotCoords[shotIdx[name]] ?? 'A1'
         shotSets[name].add(coord)
         const cell = oppCell(p, coord)
-        await cell.click()
+        await cell.click({ timeout: 2000 }).catch(() => {})
+        if (await p.locator('.result').isVisible().catch(() => false)) break
         await p.waitForTimeout(120)
-        await cell.click()
-        await p.waitForTimeout(700)
+        if (await p.locator('.result').isVisible().catch(() => false)) break
+        await cell.click({ timeout: 2000 }).catch(() => {})
+        await p.waitForTimeout(600)
       }
     }
 
@@ -112,7 +104,6 @@ test.describe('联机全流程', () => {
       await expect(p.locator('.result')).toContainText('我方真实阵型')
       await expect(p.locator('.result')).toContainText('对方真实阵型')
       await expect(p.locator('.result__stats')).toContainText('总报点数')
-      // v0.2.9 平均击杀效率对比："我方 X / 对方 Y"
       await expect(p.locator('.result__stats')).toContainText('平均击杀效率')
       await expect(p.locator('.result__stat-eff')).toContainText('/')
       await expect(p.getByRole('button', { name: '返回联机菜单' })).toBeVisible()
@@ -128,7 +119,7 @@ test.describe('联机全流程', () => {
     await ctxB.close()
   })
 
-  test('不限时房间（每步限时=不限）：对局不显示倒计时条', async ({ browser }) => {
+  test('经典自定义房间对局：显示回合读秒条（byo-yomi）与状态文案', async ({ browser }) => {
     test.setTimeout(150_000)
     const ctxA = await browser.newContext({ viewport: { width: 1280, height: 800 } })
     const ctxB = await browser.newContext({ viewport: { width: 1280, height: 800 } })
@@ -136,36 +127,15 @@ test.describe('联机全流程', () => {
     const B = await ctxB.newPage()
     const errsA = watchErrors(A)
 
-    // ---- A 建房（联机自定义：每步限时=不限）----
-    await A.goto('/')
-    await A.getByRole('button', { name: '联机对战' }).click()
-    await A.getByRole('button', { name: '自定义房间' }).click()
-    await A.getByLabel('每步限时').selectOption({ label: '不限' })
-    await A.getByRole('button', { name: '确认 · 创建房间' }).click()
-    await expect(A.locator('.online__roomcode')).toBeVisible({ timeout: 10000 })
-    const code = (await A.locator('.online__roomcode').innerText()).trim()
+    // ---- A 建房（自定义房间默认小型经典）----
+    const code = await createRoomHost(A)
+    await joinRoomByCode(B, code)
+    await bothReadyOnline(A, B)
 
-    // ---- B 凭房码入房 ----
-    await B.goto('/')
-    await B.getByRole('button', { name: '联机对战' }).click()
-    await B.getByLabel('房码输入').fill(code)
-    await B.getByRole('button', { name: '加入房间' }).click()
-    await expect(B.locator('.online__roomcode')).toHaveText(code, { timeout: 10000 })
-
-    // ---- 双摆阵就绪 → 进入对局 ----
-    for (const p of [A, B]) {
-      await p.getByRole('button', { name: '随机摆阵' }).click()
-      await expect(p.getByRole('button', { name: '确认布阵并就绪' })).toBeEnabled({ timeout: 10000 })
-      await p.getByRole('button', { name: '确认布阵并就绪' }).click()
-    }
+    // ---- 经典 byo-yomi：进入对局后双方看到回合读秒条 ----
     await expect(A.locator('.game__opp .paper-grid__board')).toBeVisible({ timeout: 20000 })
-    await expect(B.locator('.game__opp .paper-grid__board')).toBeVisible({ timeout: 20000 })
-
-    // ---- v0.2.9 不限时：turnStart.deadline === 0 → 不显示倒计时条 ----
-    await expect(A.locator('.game__timerbar')).toHaveCount(0)
-    await expect(B.locator('.game__timerbar')).toHaveCount(0)
-    // 状态条仍在（回合信息正常）
-    await expect(A.locator('.game__status-text')).toContainText(/轮到我方报点|等待对方报点|对方报点/)
+    await expect(A.locator('.game__status-text')).toContainText(/轮到我方报点|等待对方报点/, { timeout: 10000 })
+    await expect(A.locator('.game__timerbar').first()).toBeVisible({ timeout: 10000 })
 
     expect(errsA()).toEqual([])
     await ctxA.close()

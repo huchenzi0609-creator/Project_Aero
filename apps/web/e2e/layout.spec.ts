@@ -11,7 +11,7 @@
  */
 import { expect, test } from '@playwright/test'
 import type { BrowserContext, Page } from '@playwright/test'
-import { allCoords, oppCell, watchErrors } from './helpers'
+import { allCoords, openOnline, oppCell, practiceToPlacement, watchErrors } from './helpers'
 
 interface Rect {
   x: number
@@ -59,9 +59,7 @@ async function runPortraitChecks(
   expect(Math.abs(ratio - 16 / 9)).toBeLessThan(0.03)
 
   // ---- 单机摆阵：待选牌组（托盘）与棋盘不重叠、无内部滚动、无横向溢出 ----
-  await page.getByRole('button', { name: '单人对局' }).click()
-  await page.getByRole('button', { name: /小型 · 10×10/ }).click()
-  await expect(page.getByRole('heading', { name: '摆阵 · 单人对局' })).toBeVisible()
+  await practiceToPlacement(page, '经典模式')
   const tray = await page.locator('.placement__tray').boundingBox()
   const board = await page.locator('.placement__board').boundingBox()
   expect(overlap(tray, board)).toBe(false)
@@ -155,8 +153,10 @@ test.describe('竖版 9:16 舞台布局', () => {
       )
     })
     await page.goto('/')
-    await page.getByRole('button', { name: '单人对局' }).click()
+    await page.getByRole('button', { name: '练习模式' }).click()
+    await page.getByRole('button', { name: '经典模式' }).click()
     await page.getByRole('button', { name: /小型 · 10×10/ }).click()
+    await page.getByRole('button', { name: '开始摆阵' }).click()
     await expect(page.getByRole('heading', { name: '摆阵 · 单人对局' })).toBeVisible()
     await page.getByRole('button', { name: '随机摆阵' }).click()
     await page.getByRole('button', { name: '确认布阵' }).click()
@@ -180,10 +180,12 @@ test.describe('竖版 9:16 舞台布局', () => {
       const coord = shotCoords[shotIndex] ?? 'A1'
       shotSet.add(coord)
       const cell = oppCell(page, coord)
-      await cell.click()
+      await cell.click({ timeout: 2000 }).catch(() => {})
+      if (await result.isVisible().catch(() => false)) break
       await page.waitForTimeout(120)
-      await cell.click()
-      await page.waitForTimeout(900)
+      if (await result.isVisible().catch(() => false)) break
+      await cell.click({ timeout: 2000 }).catch(() => {})
+      await page.waitForTimeout(600)
     }
     await expect(result).toBeVisible({ timeout: 30000 })
 
@@ -248,7 +250,7 @@ test.describe('竖版 9:16 舞台布局', () => {
       const page = await ctx.newPage()
       const errs = watchErrors(page)
       await page.goto('/')
-      await page.getByRole('button', { name: '联机对战' }).click()
+      await page.getByRole('button', { name: '对战模式' }).click()
       await page
         .getByRole('group', { name: '创建房间档位' })
         .getByRole('button', { name: /大型/ })

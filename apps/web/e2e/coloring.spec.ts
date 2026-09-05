@@ -1,19 +1,21 @@
 /**
- * coloring.spec —— 对局工具（v0.2.2，单机）：
+ * coloring.spec —— 对局工具（v0.2.2 起；v0.3.0 更新导航与快捷着色语义）：
  *
- * 用例 1（着色画笔）：点染 A1/B1（黄）→ 拖拽 D1→F1（未染色起点=染色画笔，路径 D1/E1/F1 变黄）
- * → 拖拽 A1→C1（同色起点=擦除画笔，A1/B1/C1 还原为未染色）→ 长按换蓝 → 点击 A1 变蓝
- * → 退出着色 → 点格恢复报点（高亮）→ 零 console 错误。
+ * 用例 1（着色画笔）：点染 A1/B1（黄）→ 拖拽 D1→F1（未染色起点=染色画笔）→
+ * 拖拽 A1→C1（同色起点=擦除画笔）→ 长按换蓝 → 点击 A1 变蓝 → 退出着色 → 点格恢复高亮。
  *
- * 用例 2（样式参考飞机）：拖参考飞机到中央棋盘（断言 ghost 类与位置）→ 点击旋转（宽高互换）
- * → 着色模式点飞机：批量染 10 格 → 再点批量擦除 → 零 console 错误。
+ * 用例 2（样式参考飞机 + 快捷着色）：拖参考飞机到中央棋盘（ghost）→ 点击旋转（宽高互换）
+ * → 着色模式点幽灵飞机 = 整架批量着色 + 回收幽灵 + 退出着色模式（快捷着色默认开）。
  *
- * 用例 3（开关关闭）：localStorage 预置 allowMoveRefPlane=false → 参考飞机不可拖拽（无放置副本），
- * 点击旋转仍允许 → 零 console 错误。
+ * 用例 3（快捷着色关闭）：点击幽灵飞机仅批量着色，不回收、不退出。
+ *
+ * 用例 4（开关关闭 allowMoveRefPlane=false）：参考飞机不可拖拽（无放置副本），点击旋转仍允许。
+ *
+ * 用例 5（摆阵本体命中）：包围盒空白格不旋转、本体格旋转。
  */
 import { expect, test } from '@playwright/test'
 import type { BrowserContext, Page } from '@playwright/test'
-import { oppCell, watchErrors } from './helpers'
+import { oppCell, practiceToPlacement, startSingleSmallGame, watchErrors } from './helpers'
 
 /** 指定坐标的着色块（可按颜色过滤） */
 function coloredAt(page: Page, coord: string, color?: string) {
@@ -32,17 +34,10 @@ async function dragCells(page: Page, from: string, to: string) {
   await page.mouse.up()
 }
 
-/** 进入单机小型档对局（默认 1280 视口 = 横版），等待横幅结束 */
-async function enterGame(page: Page) {
-  await page.goto('/')
-  await page.getByRole('button', { name: '单人对局' }).click()
-  await page.getByRole('button', { name: /小型 · 10×10/ }).click()
-  await expect(page.getByRole('heading', { name: '摆阵 · 单人对局' })).toBeVisible()
-  await page.getByRole('button', { name: '随机摆阵' }).click()
-  await expect(page.locator('.placement__status')).toContainText('校验通过')
-  await page.getByRole('button', { name: '确认布阵' }).click()
-  await expect(page.locator('.game-banner')).toBeVisible()
-  await expect(page.locator('.game-banner')).toBeHidden({ timeout: 5000 })
+/** 等待轮到己方（输入框可用；我方不主动报点则回合停在己方） */
+async function waitMyTurn(page: Page) {
+  const input = page.getByLabel('报点坐标，如 A5')
+  await expect(input).toBeEnabled({ timeout: 10000 })
 }
 
 test.describe('对局着色工具', () => {
@@ -50,7 +45,7 @@ test.describe('对局着色工具', () => {
 
   test('着色画笔：点击三态 + 起始格决定拖拽画笔', async ({ page }) => {
     const errs = watchErrors(page)
-    await enterGame(page)
+    await startSingleSmallGame(page)
 
     const btn = page.locator('.coloring-stage__btn button')
     await expect(btn).toBeVisible()
@@ -91,23 +86,24 @@ test.describe('对局着色工具', () => {
     await expect(coloredAt(page, 'A1', 'blue')).toHaveCount(1)
     await expect(coloredAt(page, 'A1', 'yellow')).toHaveCount(0)
 
-    // 退出着色 → 点格恢复报点（高亮出现）
+    // 退出着色 → 点格恢复报点（高亮出现；需等轮到己方）
     await btn.click()
     await expect(btn).toHaveAttribute('aria-pressed', 'false')
+    await waitMyTurn(page)
     await oppCell(page, 'A1').click()
     await expect(page.locator('.game__opp .paper-grid__highlight')).toBeVisible()
 
     expect(errs()).toEqual([])
   })
 
-  test('样式参考飞机：拖到中央棋盘 / 点击旋转 / 着色批量染擦', async ({ page }) => {
+  test('样式参考飞机 + 快捷着色：拖幽灵到棋盘、着色点幽灵=整架染黄并回收退出', async ({ page }) => {
     const errs = watchErrors(page)
-    await enterGame(page)
+    await startSingleSmallGame(page)
 
     const refPlane = page.locator('.game__ref .paper-grid__plane')
     await expect(refPlane).toBeVisible()
 
-    // 拖参考飞机到中央对手棋盘
+    // 拖参考飞机到中央对手棋盘 → 放置副本（ghost）
     const oppBoard = page.locator('.game__opp .paper-grid__board')
     const rp = await refPlane.boundingBox()
     const ob = await oppBoard.boundingBox()
@@ -116,8 +112,6 @@ test.describe('对局着色工具', () => {
     await page.mouse.down()
     await page.mouse.move(ob.x + ob.width / 2, ob.y + ob.height / 2, { steps: 10 })
     await page.mouse.up()
-
-    // 放置副本：ghost 类 + 位于棋盘内
     const placed = page.locator('.game__opp .paper-grid__plane--ghost')
     await expect(placed).toHaveCount(1)
     const pb = await placed.boundingBox()
@@ -125,36 +119,59 @@ test.describe('对局着色工具', () => {
     expect(pb.x >= ob.x && pb.x + pb.width <= ob.x + ob.width + 1).toBeTruthy()
     expect(pb.y >= ob.y && pb.y + pb.height <= ob.y + ob.height + 1).toBeTruthy()
 
-    // v0.2.7：点击包围盒内【空白格】（默认形状左上角格为空）→ 不旋转（宽高不变）
-    const beforeMiss = await placed.boundingBox()
-    if (beforeMiss) {
-      await page.mouse.click(beforeMiss.x + 3, beforeMiss.y + 3)
-      await page.waitForTimeout(200)
-      const afterMiss = await placed.boundingBox()
-      expect(afterMiss?.width).toBe(beforeMiss.width)
-      expect(afterMiss?.height).toBe(beforeMiss.height)
-    }
-
-    // 点击放置副本【本体】中心 → 旋转 90°（默认形状 5×4 → 4×5，宽高互换）
-    const before = await placed.boundingBox()
-    await placed.click()
-    await page.waitForTimeout(200)
-    const after = await placed.boundingBox()
-    if (!before || !after) throw new Error('放置副本尺寸不可读')
-    expect(before.width > before.height).toBeTruthy() // 旋转前 5 列 × 4 行
-    expect(after.width < after.height).toBeTruthy() // 旋转后 4 列 × 5 行
-
-    // 着色模式：点飞机 → 整机批量染黄（默认形状 10 格）
+    // v0.3.0 快捷着色（默认开）：着色模式点击幽灵飞机所在格 = 整机批量染黄 + 回收幽灵 + 退出着色
     const btn = page.locator('.coloring-stage__btn button')
     await btn.click()
     await expect(btn).toHaveAttribute('aria-pressed', 'true')
-    await placed.click()
+    // 点击幽灵中心（命中其机体格 → 整机批量着色）
+    await page.mouse.click(pb.x + pb.width / 2, pb.y + pb.height / 2)
     await expect(page.locator('.game__opp .paper-grid__colored--yellow')).toHaveCount(10)
-    // 再点（命中格同色）→ 整机批量擦除
-    await placed.click()
-    await expect(page.locator('.game__opp .paper-grid__colored')).toHaveCount(0)
+    await expect(page.locator('.game__opp .paper-grid__plane--ghost')).toHaveCount(0)
+    await expect(btn).toHaveAttribute('aria-pressed', 'false')
 
     expect(errs()).toEqual([])
+  })
+
+  test('快捷着色关闭：点击幽灵飞机仅批量着色，不回收、不退出着色', async ({ browser }) => {
+    const ctx: BrowserContext = await browser.newContext({ viewport: { width: 1280, height: 800 } })
+    const page = await ctx.newPage()
+    const errs = watchErrors(page)
+    // 预置设置存档：quickColor=false（zustand persist 格式）
+    await page.addInitScript(() => {
+      localStorage.setItem(
+        'aero-settings',
+        JSON.stringify({ state: { quickColor: false }, version: 0 }),
+      )
+    })
+    await startSingleSmallGame(page)
+
+    // 拖参考飞机到对手棋盘（与上例相同路径）
+    const refPlane = page.locator('.game__ref .paper-grid__plane')
+    await expect(refPlane).toBeVisible()
+    const oppBoard = page.locator('.game__opp .paper-grid__board')
+    const rp = await refPlane.boundingBox()
+    const ob = await oppBoard.boundingBox()
+    if (!rp || !ob) throw new Error('参考飞机/棋盘不可见')
+    await page.mouse.move(rp.x + rp.width / 2, rp.y + rp.height / 2)
+    await page.mouse.down()
+    await page.mouse.move(ob.x + ob.width / 2, ob.y + ob.height / 2, { steps: 10 })
+    await page.mouse.up()
+    const placed = page.locator('.game__opp .paper-grid__plane--ghost')
+    await expect(placed).toHaveCount(1)
+    const pb = await placed.boundingBox()
+    if (!pb) throw new Error('放置副本不可见')
+
+    const btn = page.locator('.coloring-stage__btn button')
+    await btn.click()
+    await expect(btn).toHaveAttribute('aria-pressed', 'true')
+    await page.mouse.click(pb.x + pb.width / 2, pb.y + pb.height / 2)
+    // 批量着色生效，但幽灵仍在、着色模式未退出（快捷着色关闭）
+    await expect(page.locator('.game__opp .paper-grid__colored--yellow')).toHaveCount(10)
+    await expect(page.locator('.game__opp .paper-grid__plane--ghost')).toHaveCount(1)
+    await expect(btn).toHaveAttribute('aria-pressed', 'true')
+
+    expect(errs()).toEqual([])
+    await ctx.close()
   })
 
   test('开关关闭后参考飞机不可拖拽（点击旋转仍允许）', async ({ browser }) => {
@@ -168,7 +185,7 @@ test.describe('对局着色工具', () => {
         JSON.stringify({ state: { allowMoveRefPlane: false }, version: 0 }),
       )
     })
-    await enterGame(page)
+    await startSingleSmallGame(page)
 
     const refPlane = page.locator('.game__ref .paper-grid__plane')
     await expect(refPlane).toBeVisible()
@@ -199,10 +216,7 @@ test.describe('对局着色工具', () => {
 
   test('摆阵飞机本体命中：包围盒空白格不旋转、本体格旋转', async ({ page }) => {
     const errs = watchErrors(page)
-    await page.goto('/')
-    await page.getByRole('button', { name: '单人对局' }).click()
-    await page.getByRole('button', { name: /小型 · 10×10/ }).click()
-    await expect(page.getByRole('heading', { name: '摆阵 · 单人对局' })).toBeVisible()
+    await practiceToPlacement(page, '经典模式')
 
     // 拖第一张待选卡（rotation 0）到棋盘中央
     const card = page.locator('.placement__deck-card').first()

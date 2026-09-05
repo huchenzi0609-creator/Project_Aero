@@ -1,15 +1,15 @@
 /**
- * custom.spec —— 自定义编辑器校验清单逐条触发 + 26×26 对局页性能冒烟（无横向溢出）。
+ * custom.spec —— 自定义模式（v0.3.0，经 练习模式 → 自定义模式）：
+ * 校验清单逐条触发 + 26×26 对局页性能冒烟 + 单机自定义规则开关（超快棋/盲棋）+ 对战模式菜单默认勾选。
  */
 import { expect, test } from '@playwright/test'
-import { watchErrors } from './helpers'
+import { openPractice, openOnline, watchErrors } from './helpers'
 
 test.describe('自定义模式', () => {
-  /** 进入自定义配置页并关闭「使用默认飞机形状」 */
+  /** 进入单机自定义配置页并关闭「使用默认飞机形状」 */
   async function openCustomEditor(page: import('@playwright/test').Page) {
-    await page.goto('/')
-    await page.getByRole('button', { name: '单人对局' }).click()
-    await page.getByRole('button', { name: /自定义/ }).click()
+    await openPractice(page)
+    await page.getByRole('button', { name: '自定义模式' }).click()
     await expect(page.getByRole('heading', { name: '自定义配置' })).toBeVisible()
     await page.locator('.paper-toggle').filter({ hasText: '使用默认飞机形状' }).locator('input').uncheck()
   }
@@ -80,8 +80,8 @@ test.describe('自定义模式', () => {
     // 竖版视口进入
     await page.setViewportSize({ width: 390, height: 844 })
     await page.goto('/')
-    await page.getByRole('button', { name: '单人对局' }).click()
-    await page.getByRole('button', { name: /自定义/ }).click()
+    await page.getByRole('button', { name: '练习模式' }).click()
+    await page.getByRole('button', { name: '自定义模式' }).click()
 
     // 26×26、1 架飞机，默认形状
     await page.locator('#cfg-width').fill('26')
@@ -109,44 +109,85 @@ test.describe('自定义模式', () => {
     expect(errs()).toEqual([])
   })
 
-  test('自定义页存在「允许移动参考飞机」开关（默认开）；联机自定义房间为「允许对战双方移动参考飞机」（默认开）', async ({
-    page,
-  }) => {
+  test('单机自定义页含「允许移动参考飞机」（默认开）与超快棋/盲棋开关（默认关、可独立开启）', async ({ page }) => {
     const errs = watchErrors(page)
 
-    // 单机自定义配置页
-    await page.goto('/')
-    await page.getByRole('button', { name: '单人对局' }).click()
-    await page.getByRole('button', { name: /自定义/ }).click()
+    await openPractice(page)
+    await page.getByRole('button', { name: '自定义模式' }).click()
     await expect(page.getByRole('heading', { name: '自定义配置' })).toBeVisible()
-    const singleToggle = page
+
+    // 参考飞机开关默认开
+    const refToggle = page
       .locator('.paper-toggle')
       .filter({ hasText: '允许移动参考飞机' })
       .locator('input')
-    await expect(singleToggle).toBeChecked()
+    await expect(refToggle).toBeChecked()
 
-    // 单机自定义模式不显示「每步限时」选单
-    await expect(page.getByLabel('每步限时')).toHaveCount(0)
+    // v0.3.0 规则开关：默认关；可各自独立开启
+    const blitzToggle = page.locator('.paper-toggle').filter({ hasText: '超快棋模式' }).locator('input')
+    const blindToggle = page.locator('.paper-toggle').filter({ hasText: '盲棋模式' }).locator('input')
+    await expect(blitzToggle).not.toBeChecked()
+    await expect(blindToggle).not.toBeChecked()
 
-    // 联机自定义房间页
-    await page.getByRole('button', { name: '← 返回单人对局' }).click()
-    await page.getByRole('button', { name: '← 返回主页' }).click()
-    await page.getByRole('button', { name: '联机对战' }).click()
-    await page.getByRole('button', { name: '自定义…' }).click()
-    await expect(page.getByRole('heading', { name: '自定义房间' })).toBeVisible()
-    const onlineToggle = page
-      .locator('.paper-toggle')
-      .filter({ hasText: '允许对战双方移动参考飞机' })
-      .locator('input')
-    await expect(onlineToggle).toBeChecked()
+    await blitzToggle.check()
+    await expect(blitzToggle).toBeChecked()
+    await expect(blindToggle).not.toBeChecked()
 
-    // 联机自定义房间「每步限时」：默认 30 秒、共 5 档（10/20/30/60 秒 + 不限）
-    const turnSelect = page.getByLabel('每步限时')
-    await expect(turnSelect).toBeVisible()
-    await expect(turnSelect).toHaveValue('30000')
-    await expect(turnSelect.locator('option')).toHaveCount(5)
-    await expect(turnSelect.locator('option').first()).toHaveAttribute('value', '10000')
-    await expect(turnSelect.locator('option').last()).toHaveAttribute('value', '0')
+    await blindToggle.check()
+    await expect(blindToggle).toBeChecked()
+    await expect(blitzToggle).toBeChecked() // 双开不互斥
+
+    // 盲棋 + 允许移动参考飞机 → 提示将自动失效
+    await expect(page.getByText('盲棋模式下「允许移动参考飞机」将自动失效。')).toBeVisible()
+
+    expect(errs()).toEqual([])
+  })
+
+  test('对战模式菜单：三板块默认勾选（经典小/中/大）、多选组合汇总、开始匹配与等待态、自定义房间板块', async ({ page }) => {
+    const errs = watchErrors(page)
+    await openOnline(page)
+
+    // 三板块标题
+    for (const t of ['经典模式', '超快棋模式', '盲棋模式']) {
+      await expect(page.locator('.online__card-title').filter({ hasText: t })).toBeVisible()
+    }
+
+    const group = (title: string) => page.getByRole('group', { name: `${title}档位勾选` })
+    const classicChecks = group('经典模式').locator('input[type="checkbox"]')
+    const blitzChecks = group('超快棋模式').locator('input[type="checkbox"]')
+    const blindChecks = group('盲棋模式').locator('input[type="checkbox"]')
+
+    // 每板块 3 档；默认仅经典三档勾选
+    for (const checks of [classicChecks, blitzChecks, blindChecks]) await expect(checks).toHaveCount(3)
+    for (let i = 0; i < 3; i++) await expect(classicChecks.nth(i)).toBeChecked()
+    for (let i = 0; i < 3; i++) await expect(blitzChecks.nth(i)).not.toBeChecked()
+    for (let i = 0; i < 3; i++) await expect(blindChecks.nth(i)).not.toBeChecked()
+    await expect(page.getByText('已勾选 3 组组合')).toBeVisible()
+
+    // 取消经典·大型 + 勾选超快棋·中型 → 汇总更新为 3
+    await classicChecks.nth(2).uncheck()
+    await expect(page.getByText('已勾选 2 组组合')).toBeVisible()
+    await blitzChecks.nth(1).check()
+    await expect(page.getByText('已勾选 3 组组合')).toBeVisible()
+
+    // 开始匹配 → 等待态（真实服务器；无对手时保持等待）→ 取消匹配
+    const startBtn = page.getByRole('button', { name: '开始匹配' })
+    await expect(startBtn).toBeEnabled({ timeout: 10000 })
+    await startBtn.click()
+    await expect(page.getByText('正在匹配对手…')).toBeVisible({ timeout: 8000 })
+    await expect(page.getByRole('button', { name: '取消匹配' })).toBeVisible()
+    await page.getByRole('button', { name: '取消匹配' }).click()
+    await expect(page.getByText('正在匹配对手…')).toBeHidden()
+
+    // 自定义房间板块渲染：档位 + 超快棋/盲棋开关 + 房码输入 + 加入已有对局
+    const customCard = page.locator('.paper-card').filter({ hasText: '自定义房间' })
+    await expect(customCard).toBeVisible()
+    await expect(customCard.getByRole('group', { name: '创建房间档位' }).getByRole('button')).toHaveCount(3)
+    await expect(customCard.locator('label', { hasText: '超快棋（' })).toBeVisible()
+    await expect(customCard.locator('label', { hasText: '盲棋（' })).toBeVisible()
+    await expect(page.getByLabel('房码输入')).toBeVisible()
+    await expect(page.getByRole('button', { name: '加入已有对局' })).toBeVisible()
+    await expect(customCard.getByRole('button', { name: '创建房间' })).toBeVisible()
 
     expect(errs()).toEqual([])
   })
