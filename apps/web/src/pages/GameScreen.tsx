@@ -1129,7 +1129,8 @@ export function GameScreen({ mode = 'single', onGameEvent, aiShotSelector, hideS
               variant="danger"
               onClick={() => {
                 resetGame()
-                setView(mode === 'online' ? 'online' : 'single')
+                // v0.3.3：单机退出统一回主页（旧 'single' 视图已废弃；教程 free 模式同走此路径）
+                setView(mode === 'online' ? 'online' : 'home')
               }}
             >
               确认退出

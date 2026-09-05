@@ -118,7 +118,8 @@ export function Placement({ onGameEvent }: PlacementProps) {
   }
 
   const back = () => {
-    setView(placementOrigin === 'custom' ? 'custom' : 'single')
+    // v0.3.3：单机摆阵返回统一回主页（PracticeMenu 面板内嵌于主页；custom 分支保留）
+    setView(placementOrigin === 'custom' ? 'custom' : 'home')
   }
 
   const checkItems = [
