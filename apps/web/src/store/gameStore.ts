@@ -16,12 +16,13 @@ import {
   advanceBlitzClock,
   applyShot,
   cancelPreFire,
+  createEndgameState,
   createGame,
   queuePreFire,
   setFleet,
   takePreFireTurn,
 } from '@aero/game-core'
-import type { GameState, ShotResult } from '@aero/game-core'
+import type { EndgameSeed, GameState, ShotResult } from '@aero/game-core'
 import { generateFleet, mulberry32 } from '@aero/game-core/ai'
 import type { Rng } from '@aero/game-core/ai'
 import { useSettingsStore } from './settingsStore'
@@ -51,6 +52,18 @@ interface GameStoreState {
   begin: (
     config: GridConfig,
     myPlanes: PlacedPlane[],
+  ) => { ok: true } | { ok: false; errors: string[] }
+  /** 教程单元2：沿用玩家阵型开局，强制【我方先手】（经典模式，无 blitz/blind） */
+  beginTutorialBattle: (
+    config: GridConfig,
+    myPlanes: PlacedPlane[],
+  ) => { ok: true } | { ok: false; errors: string[] }
+  /** 教程单元3：残局开局（我方随机阵型已被击毁一架 + 对方先手），封装 game-core createEndgameState */
+  beginTutorialEndgame: (
+    config: GridConfig,
+    myPlanes: PlacedPlane[],
+    opponentPlanes: PlacedPlane[],
+    seed: EndgameSeed,
   ) => { ok: true } | { ok: false; errors: string[] }
   /** 以【当前回合方】的身份报点（我方回合/电脑回合均走这里），返回 game-core 原始结果 */
   applyShotAt: (coord: Cell) => ShotResult | null
@@ -106,6 +119,61 @@ export const useGameStore = create<GameStoreState>()((set, get) => ({
         nonce: nonceSeq++,
         config,
         state: theirs.state,
+        me: 0,
+        ai: 1,
+        aiRng,
+      },
+    })
+    return { ok: true }
+  },
+
+  // 教程单元2：与 begin 同流程，仅强制先手 = 我方（createGame firstMover 0），经典模式
+  beginTutorialBattle: (config, myPlanes) => {
+    let state = createGame(config.width, config.height, config.shape, config.planeCount, 0)
+    const mine = setFleet(state, 0, myPlanes)
+    if (!mine.ok) return { ok: false, errors: mine.errors }
+    state = mine.state
+    const difficulty = useSettingsStore.getState().difficulty
+    const aiRng = mulberry32(((Date.now() ^ Math.floor(Math.random() * 0xffffffff)) >>> 0) || 1)
+    let aiFleet: PlacedPlane[]
+    try {
+      aiFleet = generateFleet(config.width, config.height, config.planeCount, config.shape, difficulty, aiRng)
+    } catch (err) {
+      return { ok: false, errors: [err instanceof Error ? err.message : 'AI 摆阵失败'] }
+    }
+    const theirs = setFleet(state, 1, aiFleet)
+    if (!theirs.ok) return { ok: false, errors: theirs.errors }
+    set({
+      session: {
+        nonce: nonceSeq++,
+        config,
+        state: theirs.state,
+        me: 0,
+        ai: 1,
+        aiRng,
+      },
+    })
+    return { ok: true }
+  },
+
+  // 教程单元3：残局开局（我方一架已被击毁 + 对方先手），规则标记一律经典
+  beginTutorialEndgame: (config, myPlanes, opponentPlanes, seed) => {
+    const aiRng = mulberry32(((Date.now() ^ Math.floor(Math.random() * 0xffffffff)) >>> 0) || 1)
+    const res = createEndgameState(
+      config.width,
+      config.height,
+      config.shape,
+      config.planeCount,
+      myPlanes,
+      opponentPlanes,
+      seed,
+    )
+    if (!res.ok) return { ok: false, errors: res.errors }
+    set({
+      session: {
+        nonce: nonceSeq++,
+        config,
+        state: res.state,
         me: 0,
         ai: 1,
         aiRng,

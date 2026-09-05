@@ -28,7 +28,7 @@ import {
 } from '@aero/game-core'
 import type { GameState, ShotResult } from '@aero/game-core'
 import { chooseShot } from '@aero/game-core/ai'
-import type { ShotKnowledge } from '@aero/game-core/ai'
+import type { Rng, ShotKnowledge } from '@aero/game-core/ai'
 import { useAppStore } from '../store/appStore'
 import { useGameStore } from '../store/gameStore'
 import { useGuestStore } from '../store/guestStore'
@@ -71,9 +71,12 @@ interface GameScreenProps {
   mode?: 'single' | 'online'
   /** 教程事件钩子（v0.3.0 预留，M8 TutorialProvider 注入；为空零开销） */
   onGameEvent?: (e: TutorialGameEvent) => void
+  /** 教程 AI 注入（v0.3.0）：替代默认 chooseShot 的出手决策；
+   *  返回 null = 本帧不出手（教程用它暂停 AI），此后由本组件轮询直至放行。缺省用默认 AI。 */
+  aiShotSelector?: (knowledge: ShotKnowledge, rng: Rng) => Cell | null
 }
 
-export function GameScreen({ mode = 'single', onGameEvent }: GameScreenProps) {
+export function GameScreen({ mode = 'single', onGameEvent, aiShotSelector }: GameScreenProps) {
   const session = useGameStore((s) => s.session)
   const applyShotAt = useGameStore((s) => s.applyShotAt)
   const advanceBlitz = useGameStore((s) => s.advanceBlitz)
@@ -191,34 +194,54 @@ export function GameScreen({ mode = 'single', onGameEvent }: GameScreenProps) {
     return () => window.clearTimeout(t)
   }, [state, screen, me, onGameEvent])
 
-  /* ---------- AI 回合驱动：300~900ms 后 chooseShot 报点 ---------- */
+  /* ---------- AI 回合驱动：300~900ms 后出手；教程注入 aiShotSelector 时按其决策轮询（null=暂停） ---------- */
   useEffect(() => {
     if (!state || !session || screen !== 'battle') return
     if (state.phase === 'ended' || state.turn !== ai) return
-    const t = window.setTimeout(
-      () => {
-        const aiBoardNow = state.players[ai]
-        const knowledge: ShotKnowledge = {
-          width: aiBoardNow.width,
-          height: aiBoardNow.height,
-          shots: aiBoardNow.shotsFired,
-          planeShape: aiBoardNow.shape,
+    const aiBoardNow = state.players[ai]
+    const knowledge: ShotKnowledge = {
+      width: aiBoardNow.width,
+      height: aiBoardNow.height,
+      shots: aiBoardNow.shotsFired,
+      planeShape: aiBoardNow.shape,
+    }
+    /** AI 出手（两路径共用）：应用结果、渲染、发事件 */
+    const fireAiShot = (cell: Cell) => {
+      const res = applyShotAt(cell)
+      if (!res || !res.ok || !res.outcome) return
+      setAiFlash(cell)
+      setMyMsg(null)
+      setAiMsg(`对方报点 ${formatCoord(cell)}：${OUTCOME_TEXT[res.outcome] ?? '无效'}！`)
+      window.setTimeout(() => setAiFlash(null), 800)
+      // 对方报点结果音：击中盖章 / 击毁重章
+      audioService.playSfx(res.outcome === 'kill' ? 'kill' : 'stamp')
+      if (res.outcome === 'kill') onGameEvent?.({ type: 'planeKilled', side: me })
+    }
+
+    // 教程注入：按 selector 决策轮询；返回 null（暂停）则稍后再询，直至放行
+    if (aiShotSelector) {
+      let pollTimer = 0
+      const poll = () => {
+        const cell = aiShotSelector(knowledge, session.aiRng)
+        if (cell === null) {
+          pollTimer = window.setTimeout(poll, 400)
+          return
         }
-        const cell = chooseShot(knowledge, difficulty, session.aiRng)
-        const res = applyShotAt(cell)
-        if (!res || !res.ok || !res.outcome) return
-        setAiFlash(cell)
-        setMyMsg(null)
-        setAiMsg(`对方报点 ${formatCoord(cell)}：${OUTCOME_TEXT[res.outcome] ?? '无效'}！`)
-        window.setTimeout(() => setAiFlash(null), 800)
-        // 对方报点结果音：击中盖章 / 击毁重章
-        audioService.playSfx(res.outcome === 'kill' ? 'kill' : 'stamp')
-        if (res.outcome === 'kill') onGameEvent?.({ type: 'planeKilled', side: me })
-      },
-      300 + Math.random() * 600,
-    )
+        fireAiShot(cell)
+      }
+      const t = window.setTimeout(poll, 300 + Math.random() * 600)
+      return () => {
+        window.clearTimeout(t)
+        window.clearTimeout(pollTimer)
+      }
+    }
+
+    // 默认 AI：单发延时（300~900ms 思考）
+    const t = window.setTimeout(() => {
+      fireAiShot(chooseShot(knowledge, difficulty, session.aiRng))
+    }, 300 + Math.random() * 600)
     return () => window.clearTimeout(t)
-  }, [state, screen, session?.nonce, onGameEvent])
+  }, [state, screen, session?.nonce, onGameEvent, aiShotSelector])
 
   // 我方回合开始：清掉对方回合遗留的预报点选中；若有预报点待报则再清提示让「轮到你了…」可读
   useEffect(() => {
