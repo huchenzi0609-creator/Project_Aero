@@ -271,7 +271,7 @@ export function OnlineMenu() {
         <PaperCard className="online__span2" pin>
           <h2 className="online__card-title">自定义房间</h2>
           <p className="online__card-desc">
-            选择棋盘尺寸与模式开关创建房间（仅局域网/邀请）；或输入房主分享的 6 位房码加入已有对局。
+            选择棋盘尺寸与模式开关创建房间；或输入房主分享的 6 位房码加入已有对局。
           </p>
 
           <div className="online__tiers" role="group" aria-label="创建房间档位">
