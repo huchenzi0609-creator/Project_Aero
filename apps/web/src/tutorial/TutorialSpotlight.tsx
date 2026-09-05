@@ -1,12 +1,16 @@
 /**
- * TutorialSpotlight —— 遮罩突显（v0.3.0 / v0.3.2）。
- * - 半透明遮罩铺满窗口，对每个突显目标"开洞"（上/下/左/右四块暗层，洞即目标外扩区）；
- * - 支持同时突显多个目标（target: string | string[]，如单元3 T3-3 参考网格 + 空网格）；
- *   多目标各自独立开洞层渲染（目标不相交时不互相覆盖）。
- * - z-index 低于教程弹窗（.paper-modal），弹窗为豁免对象不被压暗。
+ * TutorialSpotlight —— 遮罩突显（v0.3.3 重写）。
+ *
+ * 实现要点：
+ * - **无突显目标时渲染 null**（页面完全不被压暗）；"取消当前突显"= 目标 null → 全亮。
+ * - **单层遮罩 + 多开洞**：一个铺满视口的半透明 SVG path（fill-rule=evenodd）——
+ *   外圈整屏矩形 + 每个突显目标一个洞子路径，多目标（如单元3 T3-3 双目标）
+ *   亮度与单目标一致、绝不叠加。
+ * - **开洞随目标变化**：对每个目标元素挂 ResizeObserver（气泡分段/锚点变化即时重测）
+ *   并保留 window resize 监听。
+ * - z-index 低于教程弹窗（.paper-modal 60），弹窗为豁免对象不被压暗。
  */
 import { useEffect, useRef, useState } from 'react'
-import type { CSSProperties } from 'react'
 
 export interface TargetRect {
   left: number
@@ -15,31 +19,16 @@ export interface TargetRect {
   height: number
 }
 
-/** 根据 DOM selector 求目标矩形（全屏 fixed 层与页面同坐标系）；隐藏目标返回 null */
+const PAD = 6 // 开洞外扩（目标呼吸空间）
+const DARK = 'rgba(58, 46, 28, 0.5)'
+
+/** 求目标矩形；隐藏目标返回 null */
 function targetRectOf(selector: string): TargetRect | null {
   const el = document.querySelector(selector)
   if (!el) return null
   const b = el.getBoundingClientRect()
   if (b.width === 0 || b.height === 0) return null
   return { left: b.left, top: b.top, width: b.width, height: b.height }
-}
-
-const PAD = 6 // 开洞外扩（目标呼吸空间）
-
-function HoleLayer({ rect }: { rect: TargetRect }) {
-  const L = Math.max(0, rect.left - PAD)
-  const T = Math.max(0, rect.top - PAD)
-  const R = Math.min(window.innerWidth, rect.left + rect.width + PAD)
-  const B = Math.min(window.innerHeight, rect.top + rect.height + PAD)
-  const band = (s: CSSProperties): CSSProperties => s
-  return (
-    <div className="tutorial-spotlight" aria-hidden="true">
-      <div style={band({ position: 'absolute', left: 0, top: 0, right: 0, height: T })} />
-      <div style={band({ position: 'absolute', left: 0, top: B, right: 0, bottom: 0 })} />
-      <div style={band({ position: 'absolute', left: 0, top: T, width: L, height: B - T })} />
-      <div style={band({ position: 'absolute', right: 0, top: T, width: Math.max(0, window.innerWidth - R), height: B - T })} />
-    </div>
-  )
 }
 
 export function TutorialSpotlight({ target }: { target?: string | string[] | null }) {
@@ -57,26 +46,46 @@ export function TutorialSpotlight({ target }: { target?: string | string[] | nul
       }
       setRects(out)
     }
+
+    // 直接测量 + 延迟再测（目标可能晚一帧就位）+ 目标尺寸/位置变化即时跟随
     measure()
-    const t = window.setTimeout(measure, 80) // 目标可能晚一帧就位
-    const t2 = window.setTimeout(measure, 400)
+    const timers = [window.setTimeout(measure, 80), window.setTimeout(measure, 400)]
+    const observed = new Set<Element>()
+    const ro = new ResizeObserver(() => measure())
+    for (const sel of targetsRef.current) {
+      const el = document.querySelector(sel)
+      if (el && !observed.has(el)) {
+        observed.add(el)
+        ro.observe(el)
+      }
+    }
     window.addEventListener('resize', measure)
     return () => {
-      window.clearTimeout(t)
-      window.clearTimeout(t2)
+      timers.forEach((t) => window.clearTimeout(t))
+      ro.disconnect()
       window.removeEventListener('resize', measure)
     }
   }, [target])
 
-  if (targets.length === 0) {
-    return <div className="tutorial-spotlight tutorial-spotlight--dim" aria-hidden="true" />
-  }
-  if (rects.length === 0) return null
+  if (targets.length === 0 || rects.length === 0) return null
+
+  // 单层 SVG：外圈矩形 + evenodd 挖洞（多洞不叠加亮度）
+  const W = window.innerWidth
+  const H = window.innerHeight
+  const frame = `M0 0 H${W} V${H} H0 Z`
+  const holes = rects
+    .map((r) => {
+      const l = Math.max(0, r.left - PAD)
+      const t = Math.max(0, r.top - PAD)
+      const rr = Math.min(W, r.left + r.width + PAD)
+      const b = Math.min(H, r.top + r.height + PAD)
+      return `M${l} ${t} H${rr} V${b} H${l} Z`
+    })
+    .join(' ')
+
   return (
-    <>
-      {rects.map((r, i) => (
-        <HoleLayer key={i} rect={r} />
-      ))}
-    </>
+    <svg className="tutorial-spotlight" width={W} height={H} aria-hidden="true">
+      <path d={`${frame} ${holes}`} fillRule="evenodd" fill={DARK} />
+    </svg>
   )
 }

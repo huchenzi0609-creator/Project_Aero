@@ -3,21 +3,16 @@
    ============================================================ */
 
 /* ---------- 遮罩 ---------- */
-/* v0.3.2：z-index 压到弹窗（.paper-modal 系 60）之下 —— 教程内 P3/P5/跳过确认等弹窗
-   是突显遮罩的豁免对象：弹窗完整可见可点、不被压暗（背景弱化由弹窗 backdrop 承担） */
+/* v0.3.3：单层 SVG evenodd 挖洞遮罩（z 低于弹窗 .paper-modal 60 → 弹窗豁免不被压暗）；
+   无突显目标时组件渲染 null，页面全亮（不再有 --dim 常驻压暗层） */
 .tutorial-spotlight {
   position: fixed;
-  inset: 0;
+  left: 0;
+  top: 0;
   z-index: 56;
   pointer-events: none;
 }
-.tutorial-spotlight > div {
-  background: rgba(58, 46, 28, 0.52);
-}
-/* 整层暗化（无洞/对话步） */
-.tutorial-spotlight--dim {
-  background: rgba(58, 46, 28, 0.18);
-}
+
 
 /* ---------- 纸感气泡 ---------- */
 
