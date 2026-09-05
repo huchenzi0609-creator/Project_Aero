@@ -7,7 +7,7 @@
  * - machineTakeover 横幅；对手断线 60s 倒计时横幅与恢复；我方断线自动重连横幅；
  * - 投降按钮（二次确认）；gameEnd 结算页复用 M4 布局（胜负+双方真实阵型+stats）。
  */
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Cell, PlaneShape, PlacedPlane, Shot } from '@aero/shared'
 import { DEFAULT_PLANE_SHAPE } from '@aero/shared'
 import { boundingBox, formatCoord, inBounds, killEfficiencyStats, parseCoord, rotateShape } from '@aero/game-core'
@@ -16,7 +16,11 @@ import { useOnlineStore } from '../store/onlineStore'
 import { useGuestStore } from '../store/guestStore'
 import { useSettingsStore } from '../store/settingsStore'
 import { useToastStore } from '../store/toastStore'
-import { onlineApi } from '../net/socket'
+import { connectClient, onV030, v030Api } from '../online/client'
+import type { GridConfigV030 } from '../online/protocol'
+import { BlitzClock } from '../online/BlitzClock'
+import { PreFireMark } from '../online/PreFireMark'
+import { prefireAdd, prefireRemove, prefireShift, sameCell } from '../online/prefire'
 import { useEffectiveOrientation, useViewport } from '../hooks/useOrientation'
 import type { Viewport } from '../hooks/useOrientation'
 import { audioService } from '../lib/audioService'
@@ -25,6 +29,7 @@ import { PaperCard } from '../components/ui/PaperCard'
 import { PaperModal } from '../components/ui/PaperModal'
 import { PaperGrid } from '../components/grid/PaperGrid'
 import { PlaneGlyph } from '../components/grid/PlaneGlyph'
+import { StampMark } from '../components/grid/StampMark'
 import type { GameState } from '@aero/game-core'
 import {
   ColoringToolButton,
@@ -89,6 +94,60 @@ export function OnlineGame() {
   const socketStatus = useOnlineStore((s) => s.socketStatus)
   const sessionError = useOnlineStore((s) => s.sessionError)
 
+  // v0.3 模式（房间 config 携带；经典 = 双 false）
+  const modeCfg = config as GridConfigV030 | null
+  const modeBlitz = modeCfg?.blitz === true
+  const modeBlind = modeCfg?.blind === true
+  const roomCode = room?.code ?? ''
+
+  /* ---------- v0.3 连接 / 时钟 / 预报点 / 快捷着色 ---------- */
+  const [clock, setClock] = useState<Partial<Record<0 | 1, number>>>({})
+  const [prefire, setPrefire] = useState<Cell[]>([])
+  const [selectedPrefire, setSelectedPrefire] = useState<Cell | null>(null)
+  // 无完整结构的 gameOver（如仅有 reason 的兜底事件）→ 本地提示
+  const [blitzLoseNotice, setBlitzLoseNotice] = useState(false)
+
+  // 本页会话必须由 v0.3 客户端连接承载（旧连接不 join 房间）
+  useEffect(() => connectClient(), [])
+
+  // 超快棋时钟（服务端权威 clock:update）
+  useEffect(() => {
+    return onV030('clock:update', ({ player, ms }) =>
+      setClock((prev) => ({ ...prev, [player]: ms })),
+    )
+  }, [])
+  useEffect(() => {
+    setClock({})
+  }, [roomCode])
+
+  // gameOver（快速匹配房间的结算事件；含完整结构时 client 已桥接 store gameEnd）
+  useEffect(() => {
+    return onV030('gameOver', (p) => {
+      if (p.reason !== 'blitz-timeout' && p.reason !== 'blitz-opp-timeout') return
+      const storeEnd = useOnlineStore.getState().gameEnd
+      if (!storeEnd && p.winner !== undefined) {
+        // 兜底：仅有 winner/reason（无阵型）时本地提示，避免结算页访问缺失 layouts
+        setBlitzLoseNotice(true)
+        audioService.playSfx(p.winner === you ? 'win' : 'lose')
+      }
+    })
+  }, [you])
+
+  // 新房间：清空本地预报点/选中态
+  useEffect(() => {
+    setPrefire([])
+    setSelectedPrefire(null)
+    setBlitzLoseNotice(false)
+  }, [roomCode])
+
+  // 快捷着色开关（设置项由「设置」侧新增并持久化，default true；落地前读取缺省）
+  interface SettingsV030Like {
+    quickColor?: boolean
+  }
+  const quickColor = useSettingsStore(
+    (s) => (s as unknown as SettingsV030Like).quickColor ?? true,
+  )
+
   const [highlight, setHighlight] = useState<Cell | null>(null)
   const [input, setInput] = useState('')
   const [flash, setFlash] = useState<Cell | null>(null)
@@ -106,7 +165,6 @@ export function OnlineGame() {
   /* ---------- 着色工具（每局独立：新房间 / 终局时清空） ---------- */
   const coloring = useColoring()
   const isColoring = coloring.coloringMode
-  const roomCode = room?.code ?? ''
   useEffect(() => {
     coloring.reset()
   }, [roomCode])
@@ -270,8 +328,20 @@ export function OnlineGame() {
 
   /* ---------- 样式参考飞机拖拽（config 开关优先，回退设置，默认 true；每局独立） ---------- */
   const settingsAllowMove = useSettingsStore((s) => s.allowMoveRefPlane)
-  const allowMoveRefPlane = config?.allowMoveRefPlane ?? settingsAllowMove ?? true
-  const refPlanes = useRefPlanes({
+  const allowMoveRefPlane = (config?.allowMoveRefPlane ?? settingsAllowMove ?? true) && !modeBlind
+
+  // 着色入口在盲棋下禁用；进入盲棋房间时若已在着色模式则退出
+  const blindColorLocked = modeBlind
+  useEffect(() => {
+    if (blindColorLocked && coloring.coloringMode) coloring.toggleMode()
+  }, [blindColorLocked])
+
+  // v0.3 快捷着色：向参考飞机拖拽层传递 quickColor / onGhostBatch（M3 落地 ColoringTool 后生效；
+  // 组件支持前多余字段被忽略，无副作用）。onGhostBatch = 完成整架批量着色 → 退出着色模式。
+  const refInput: import('../components/grid/ColoringTool').RefPlanesInput & {
+    quickColor?: boolean
+    onGhostBatch?: (id: number) => void
+  } = {
     width: config?.width ?? 10,
     height: config?.height ?? 10,
     shape: config?.shape ?? DEFAULT_PLANE_SHAPE,
@@ -285,7 +355,12 @@ export function OnlineGame() {
       coloredCells: coloring.coloredCells,
       paintPlane: coloring.paintPlane,
     },
-  })
+    quickColor,
+    onGhostBatch: () => {
+      if (coloring.coloringMode) coloring.toggleMode()
+    },
+  }
+  const refPlanes = useRefPlanes(refInput)
 
   // 新房间 / 终局：清空参考飞机放置副本
   useEffect(() => {
@@ -344,6 +419,76 @@ export function OnlineGame() {
     return killEfficiencyStats(synth)
   }, [gameEnd, config, you, myShots, oppShots, mineLayout, oppLayout])
 
+  /* ---------- 盲棋：对手网格可见报点 = 击毁永存 + 最近 3 个非击毁（FIFO） ---------- */
+  const visibleShots = useMemo(() => {
+    if (!modeBlind) return myShots
+    const kills = myShots.filter((s) => s.outcome === 'kill')
+    const recent = myShots.filter((s) => s.outcome !== 'kill').slice(-3)
+    return [...recent, ...kills]
+  }, [modeBlind, myShots])
+
+  // 可见标记格集合（预报点不可置于其上；盲棋按可见集判定，非盲棋按全量）
+  const visibleMarkedKeys = useMemo(() => {
+    const src = modeBlind ? visibleShots : myShots
+    return new Set(src.map((s) => `${s.coord.r},${s.coord.c}`))
+  }, [modeBlind, visibleShots, myShots])
+
+  // 预报点渲染：伪 shot（outcome:'miss' 仅占位，不进统计）走 renderShot 画「?」
+  const prefireKeys = useMemo(
+    () => new Set(prefire.map((c) => `${c.r},${c.c}`)),
+    [prefire],
+  )
+  const renderShots = useMemo<Shot[]>(
+    () => [
+      ...visibleShots,
+      ...prefire.map((c) => ({ coord: c, outcome: 'miss' as const })),
+    ],
+    [visibleShots, prefire],
+  )
+  const invertMarks = useSettingsStore((s) => s.invertMarks)
+  const renderPreFireShot = useCallback(
+    (shot: Shot, size: number) => {
+      if (prefireKeys.has(`${shot.coord.r},${shot.coord.c}`)) {
+        return (
+          <PreFireMark
+            coord={shot.coord}
+            cellSize={size}
+            selected={selectedPrefire !== null && sameCell(selectedPrefire, shot.coord)}
+          />
+        )
+      }
+      return <StampMark outcome={shot.outcome} size={size * 0.82} cell={shot.coord} inverted={invertMarks} />
+    },
+    [prefireKeys, selectedPrefire, invertMarks],
+  )
+
+  // 我方回合开始：预报点 FIFO 自动上报（每回合一个，队列空则恢复手动）
+  const autoFiredTurnRef = useRef<{ turnNo: number; count: number }>({ turnNo: 0, count: 0 })
+  const phaseInGame = phase === 'playing' || phase === 'counterattack'
+  useEffect(() => {
+    if (!phaseInGame || !yourTurn) return
+    const fired = autoFiredTurnRef.current
+    if (fired.turnNo === turnNo) return
+    const { list, head } = prefireShift(prefire)
+    if (!head) {
+      autoFiredTurnRef.current = { turnNo, count: 0 }
+      return
+    }
+    autoFiredTurnRef.current = { turnNo, count: fired.count + 1 }
+    setPrefire(list)
+    setSelectedPrefire(null)
+    setHighlight(null)
+    setInput('')
+    audioService.playSfx('shoot')
+    void v030Api.shoot(head).then((res) => {
+      if (!res.ok) {
+        toast(res.error ?? '自动上报失败', 'error')
+        // 失败回填队首，下一回合重试
+        setPrefire((prev) => [head, ...prev])
+      }
+    })
+  }, [phaseInGame, yourTurn, turnNo, prefire])
+
   if (!room || !config) {
     return (
       <div className="page" style={{ alignItems: 'center', gap: 16 }}>
@@ -359,6 +504,7 @@ export function OnlineGame() {
   const oppName = oppSeat?.name ?? '对手'
 
   const isPlaying = phase === 'playing' || phase === 'counterattack'
+  // v0.3：非我方回合不再拦截报点（改预报点机制），故禁点条件移除 !yourTurn
   const canShoot = isPlaying && yourTurn && socketStatus === 'connected' && !isColoring
 
   const alreadyShot = (cell: Cell) =>
@@ -370,17 +516,56 @@ export function OnlineGame() {
     shakeTimer.current = window.setTimeout(() => setShake(false), 420)
   }
 
+  /* ---------- 预报点（v0.3）：非我方回合点击/输入创建；再次点击选中，确认取消 ---------- */
+
+  const markedKey = (cell: Cell) => `${cell.r},${cell.c}`
+
+  const tryAddPrefire = (cell: Cell): void => {
+    const { list, ok, full } = prefireAdd(prefire, cell)
+    if (full) {
+      toast('预报点已达上限（10 个），请先取消部分预报点。', 'error')
+      return
+    }
+    if (!ok) {
+      setSelectedPrefire(cell) // 已是预报点：转移选中
+      setInput(formatCoord(cell))
+      return
+    }
+    setPrefire(list)
+    setSelectedPrefire(null)
+    setInput(formatCoord(cell))
+  }
+
+  const togglePrefire = (cell: Cell): void => {
+    // 已选中的预报点 → 再次确认 = 取消
+    if (selectedPrefire && sameCell(selectedPrefire, cell)) {
+      setPrefire((prev) => prefireRemove(prev, cell))
+      setSelectedPrefire(null)
+      setInput('')
+      toast('预报点已取消。', 'info')
+      return
+    }
+    if (prefire.some((c) => sameCell(c, cell))) {
+      setSelectedPrefire(cell)
+      setInput(formatCoord(cell))
+      return
+    }
+    tryAddPrefire(cell)
+  }
+
+  const handlePrefireTap = (cell: Cell): void => {
+    // 已有可见标记格不可设预报点（盲棋按可见集，常规按全量）
+    if (visibleMarkedKeys.has(markedKey(cell))) {
+      setSelectedPrefire(null)
+      return
+    }
+    if (selectedPrefire && !sameCell(selectedPrefire, cell)) setSelectedPrefire(null)
+    togglePrefire(cell)
+  }
+
   const doShot = (cell: Cell) => {
-    if (!canShoot) {
-      toast('还没轮到您报点', 'error')
-      return
-    }
-    if (alreadyShot(cell)) {
-      toast('该格已经报过点了', 'error')
-      shakeInput()
-      return
-    }
-    void onlineApi.shoot(cell).then((res) => {
+    if (!canShoot) return
+    void v030Api.shoot(cell).then((res) => {
       if (!res.ok) {
         toast(res.error ?? '报点被拒绝', 'error')
         shakeInput()
@@ -394,20 +579,23 @@ export function OnlineGame() {
 
   const onOppCellClick = (cell: Cell) => {
     if (!isPlaying) return
-    if (!yourTurn) {
-      toast('还没轮到您报点', 'error')
+    if (isColoring) return // 着色模式接管棋盘指针（PaperGrid 已屏蔽，此处兜底）
+    if (canShoot) {
+      // 我方回合：盲棋允许重复报点（服务端裁决返回击空），常规拒绝已报格
+      if (!modeBlind && alreadyShot(cell)) {
+        toast('该格已经报过点了', 'error')
+        return
+      }
+      if (highlight && highlight.r === cell.r && highlight.c === cell.c) {
+        doShot(cell)
+      } else {
+        setHighlight(cell)
+        setInput(formatCoord(cell))
+      }
       return
     }
-    if (alreadyShot(cell)) {
-      toast('该格已经报过点了', 'error')
-      return
-    }
-    if (highlight && highlight.r === cell.r && highlight.c === cell.c) {
-      doShot(cell)
-    } else {
-      setHighlight(cell)
-      setInput(formatCoord(cell))
-    }
+    // 非我方回合 → 预报点（取代原「还没轮到您报点」提示）
+    handlePrefireTap(cell)
   }
 
   const commitInput = () => {
@@ -423,7 +611,28 @@ export function OnlineGame() {
       shakeInput()
       return
     }
-    doShot(cell)
+    if (canShoot) {
+      if (!modeBlind && alreadyShot(cell)) {
+        toast('该格已经报过点了', 'error')
+        shakeInput()
+        return
+      }
+      doShot(cell)
+      return
+    }
+    // 非我方回合：选中预报点 + 再次确认（点击或坐标输入）可取消
+    if (selectedPrefire && sameCell(selectedPrefire, cell)) {
+      setPrefire((prev) => prefireRemove(prev, cell))
+      setSelectedPrefire(null)
+      setInput('')
+      toast('预报点已取消。', 'info')
+      return
+    }
+    if (visibleMarkedKeys.has(markedKey(cell))) {
+      setSelectedPrefire(null)
+      return
+    }
+    togglePrefire(cell)
   }
 
   /* ---------- 计时 ---------- */
@@ -443,10 +652,12 @@ export function OnlineGame() {
       statusThem = true
     } else if (myMsg) {
       statusText = myMsg
+    } else if (yourTurn && prefire.length > 0) {
+      statusText = `轮到你了——预报点将自动上报（${prefire.length} 个）`
     } else if (yourTurn) {
       statusText = `轮到我方报点 · 第 ${turnNo} 回合`
     } else {
-      statusText = '等待对方报点…'
+      statusText = prefire.length > 0 ? `等待对方报点… 已预排 ${prefire.length} 个预报点` : '等待对方报点…'
       statusThem = true
     }
   }
@@ -454,24 +665,31 @@ export function OnlineGame() {
   /* ---------- 结算 ---------- */
 
   const iWin = gameEnd ? gameEnd.winner === you : false
+  // v0.3：超快棋超时判负（gameEnd.reason 扩展 / gameOver blitz-timeout，服务端契约 M5）
+  const gameEndReason = (gameEnd?.reason as string | undefined) ?? ''
+  const blitzTimeoutEnd = gameEndReason === 'blitz-timeout' || gameEndReason === 'blitz-opp-timeout'
   const reasonText = gameEnd
-    ? gameEnd.reason === 'all-destroyed'
+    ? blitzTimeoutEnd
       ? iWin
-        ? '对手全部飞机被击毁'
-        : '您的全部飞机被击毁'
-      : gameEnd.reason === 'counterattack'
-        ? '绝地反击定胜负'
-        : gameEnd.reason === 'resign'
-          ? iWin
-            ? '对手认输'
-            : '您认输了'
-          : gameEnd.reason === 'disconnect'
+        ? '对方超时，您获胜。'
+        : '您超时，本局判负。'
+      : gameEnd.reason === 'all-destroyed'
+        ? iWin
+          ? '对手全部飞机被击毁'
+          : '您的全部飞机被击毁'
+        : gameEnd.reason === 'counterattack'
+          ? '绝地反击定胜负'
+          : gameEnd.reason === 'resign'
             ? iWin
-              ? '对手断线超时'
-              : '您断线超时'
-            : iWin
-              ? '对手超时被机器接管后落败'
-              : '您超时被机器接管后落败'
+              ? '对手认输'
+              : '您认输了'
+            : gameEnd.reason === 'disconnect'
+              ? iWin
+                ? '对手断线超时'
+                : '您断线超时'
+              : iWin
+                ? '对手超时被机器接管后落败'
+                : '您超时被机器接管后落败'
     : ''
 
   const myHits = myShots.filter((s) => s.outcome !== 'miss').length
@@ -488,6 +706,16 @@ export function OnlineGame() {
   const takeoverOpp = takeovers.includes((1 - you) as 0 | 1)
   const oppDisconnSec = oppDisconnect ? Math.max(0, oppDisconnect.graceMs - (now - oppDisconnect.since)) : 0
 
+  /* ---------- v0.3 输入栏可用性 / 提示（非我方回合改为预报点输入，不再禁用） ---------- */
+  const inputDisabled = !isPlaying || socketStatus !== 'connected' || isColoring
+  let hintText = ''
+  if (isColoring) hintText = '着色模式：点按染色 · 按住拖动画线 · 再点同色擦除'
+  else if (modeBlind) hintText = '盲棋：不记旧报点，参考飞机与着色已禁用'
+  else if (canShoot) hintText = '点击棋盘选格，再点一次报点 · 或输入坐标回车'
+  else if (isPlaying)
+    hintText = '等待对方报点：可点击空格预排「?」预报点（≤10），轮到自动上报'
+  else hintText = '点击棋盘选格，再点一次报点 · 或输入坐标回车'
+
   return (
     <div className={`game game--${orientation}`}>
       <header className="game__statusbar">
@@ -503,8 +731,21 @@ export function OnlineGame() {
         </span>
       </header>
 
-      {/* 计时条（v0.2.9：turnStart.deadline === 0 表示不限时/机器回合 → 不显示倒计时） */}
-      {isPlaying && deadline > 0 ? (
+      {/* 计时条：超快棋（blitz）→ 双方时钟（服务端 clock:update 权威驱动，byo-yomi 不生效）；
+          否则沿用 v0.2 读秒（turnStart.deadline === 0 表示不限时/机器回合 → 不显示） */}
+      {modeBlitz && isPlaying ? (
+        <div className="game__timerbar">
+          <span className="game__timer" style={{ color: 'var(--ink-soft)' }}>
+            我方{' '}
+            <BlitzClock ms={clock[you] ?? config.planeCount * 10_000} active={yourTurn && socketStatus === 'connected'} />
+          </span>
+          <span className="game__timer" style={{ color: 'var(--ink-soft)' }}>
+            对方{' '}
+            <BlitzClock ms={clock[((1 - you) as 0 | 1)] ?? config.planeCount * 10_000} active={!yourTurn && socketStatus === 'connected'} />
+          </span>
+          <span className="game__chances">超时立即判负</span>
+        </div>
+      ) : isPlaying && deadline > 0 ? (
         <div className={['game__timerbar', remainingSec <= 5 ? 'game__timerbar--urgent' : ''].filter(Boolean).join(' ')}>
           <span className="game__timer">
             {yourTurn ? '我方' : '对方'}剩余 {remainingSec}s
@@ -558,7 +799,8 @@ export function OnlineGame() {
         </section>
 
         {/* 对手网格（居中）：只渲染我方报点标记，绝不显示对方阵型；可放置参考飞机副本；
-            外缘随回合变色（轮到我方=深绿 / 轮到对方=深红，v0.2.9；着色模式/结算下隐藏） */}
+            外缘随回合变色（轮到我方=深绿 / 轮到对方=深红，v0.2.9；着色模式/结算下隐藏）；
+            v0.3：盲棋时仅显示最近 3 个报点 + 击毁标记；预报点「?」叠加渲染 */}
         <section
           className={[
             'game__opp',
@@ -574,7 +816,8 @@ export function OnlineGame() {
               cellSize={mainCell}
               showLabels
               onCellClick={onOppCellClick}
-              shots={myShots}
+              shots={renderShots}
+              renderShot={renderPreFireShot}
               highlight={highlight}
               coloredCells={coloring.coloredCells}
               coloring={
@@ -595,33 +838,37 @@ export function OnlineGame() {
               }}
               ariaLabel="对手棋盘"
             />
-            <ColoringToolButton
-              className="coloring-stage__btn"
-              active={isColoring}
-              color={coloring.currentColor}
-              paletteOpen={coloring.paletteOpen}
-              paletteDir="down"
-              onToggle={coloring.toggleMode}
-              onOpenPalette={() => coloring.setPaletteOpen(true)}
-              onClosePalette={() => coloring.setPaletteOpen(false)}
-              onSelectColor={coloring.selectColor}
-            />
+            {!blindColorLocked ? (
+              <ColoringToolButton
+                className="coloring-stage__btn"
+                active={isColoring}
+                color={coloring.currentColor}
+                paletteOpen={coloring.paletteOpen}
+                paletteDir="down"
+                onToggle={coloring.toggleMode}
+                onOpenPalette={() => coloring.setPaletteOpen(true)}
+                onClosePalette={() => coloring.setPaletteOpen(false)}
+                onSelectColor={coloring.selectColor}
+              />
+            ) : null}
           </div>
         </section>
       </main>
 
       <footer className="game__inputbar">
-        <ColoringToolButton
-          className="coloring-inputbar__btn"
-          active={isColoring}
-          color={coloring.currentColor}
-          paletteOpen={coloring.paletteOpen}
-          paletteDir="up"
-          onToggle={coloring.toggleMode}
-          onOpenPalette={() => coloring.setPaletteOpen(true)}
-          onClosePalette={() => coloring.setPaletteOpen(false)}
-          onSelectColor={coloring.selectColor}
-        />
+        {!blindColorLocked ? (
+          <ColoringToolButton
+            className="coloring-inputbar__btn"
+            active={isColoring}
+            color={coloring.currentColor}
+            paletteOpen={coloring.paletteOpen}
+            paletteDir="up"
+            onToggle={coloring.toggleMode}
+            onOpenPalette={() => coloring.setPaletteOpen(true)}
+            onClosePalette={() => coloring.setPaletteOpen(false)}
+            onSelectColor={coloring.selectColor}
+          />
+        ) : null}
         <label className="visually-hidden" htmlFor="online-coord">
           报点坐标
         </label>
@@ -630,7 +877,7 @@ export function OnlineGame() {
           className={['paper-select__control game__input', shake ? 'shake' : ''].filter(Boolean).join(' ')}
           style={{ width: 130, textAlign: 'center', letterSpacing: '0.08em' }}
           value={input}
-          disabled={!canShoot}
+          disabled={inputDisabled}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Enter') commitInput()
@@ -639,12 +886,10 @@ export function OnlineGame() {
           aria-label="报点坐标，如 A5"
           autoComplete="off"
         />
-        <PaperButton variant="primary" onClick={commitInput} disabled={!canShoot}>
+        <PaperButton variant="primary" onClick={commitInput} disabled={inputDisabled}>
           确认报点
         </PaperButton>
-        <span className="game__hint">
-          {isColoring ? '着色模式：点按染色 · 按住拖动画线 · 再点同色擦除' : '点击棋盘选格，再点一次报点 · 或输入坐标回车'}
-        </span>
+        <span className="game__hint">{hintText}</span>
       </footer>
 
       {/* 机器接管横幅 */}
@@ -668,12 +913,12 @@ export function OnlineGame() {
         </div>
       ) : null}
 
-      {/* 结算界面（复用 M4 布局） */}
+      {/* 结算界面（复用 M4 布局；v0.3 超时判负用「超时判负」主标题） */}
       {gameEnd ? (
         <div className="result">
           <div className="result__card paper-card" role="status" aria-live="assertive">
-            <h1 className={`result__title ${iWin ? 'result__title--win' : 'result__title--lose'}`}>
-              {iWin ? '恭喜您，您赢了！' : '您输了，下次一定！'}
+            <h1 className={`result__title ${blitzTimeoutEnd || !iWin ? 'result__title--lose' : 'result__title--win'}`}>
+              {blitzTimeoutEnd ? '超时判负' : iWin ? '恭喜您，您赢了！' : '您输了，下次一定！'}
             </h1>
             <p className="result__sub">{reasonText}</p>
 
@@ -747,7 +992,7 @@ export function OnlineGame() {
               <PaperButton
                 variant="ghost"
                 onClick={() => {
-                  useOnlineStore.getState().resetSession()
+                  v030Api.leaveRoom()
                   setView('home')
                 }}
               >
@@ -756,7 +1001,7 @@ export function OnlineGame() {
               <PaperButton
                 variant="primary"
                 onClick={() => {
-                  useOnlineStore.getState().resetSession()
+                  v030Api.leaveRoom()
                   setView('online')
                 }}
               >
@@ -803,7 +1048,7 @@ export function OnlineGame() {
               variant="danger"
               onClick={() => {
                 setResignOpen(false)
-                onlineApi.resign()
+                v030Api.resign()
                 toast('已投降，等待对局结束', 'info')
               }}
             >
@@ -813,6 +1058,39 @@ export function OnlineGame() {
         }
       >
         投降后本局立即判负，双方阵型将公开。
+      </PaperModal>
+
+      {/* v0.3 盲棋规则提示条（局内一次性） */}
+      {modeBlind && isPlaying && !gameEnd ? (
+        <div className="online__banner online__banner--info" role="status">
+          盲棋：报点记录对双方隐藏，参考飞机与着色已禁用；仅最近 3 个报点可见。
+        </div>
+      ) : null}
+
+      {/* v0.3 兜底：无完整结构的 gameOver（如纯 blitz-timeout 广播）→ 本地结算提示 */}
+      <PaperModal
+        open={blitzLoseNotice}
+        title="超时判负"
+        onClose={() => setBlitzLoseNotice(false)}
+        footer={
+          <>
+            <PaperButton variant="ghost" onClick={() => setBlitzLoseNotice(false)}>
+              知道了
+            </PaperButton>
+            <PaperButton
+              variant="danger"
+              onClick={() => {
+                setBlitzLoseNotice(false)
+                v030Api.leaveRoom()
+                setView('online')
+              }}
+            >
+              返回联机菜单
+            </PaperButton>
+          </>
+        }
+      >
+        对局因超时结束，正在返回联机菜单…
       </PaperModal>
     </div>
   )

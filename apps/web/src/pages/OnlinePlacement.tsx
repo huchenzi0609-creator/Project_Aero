@@ -1,11 +1,13 @@
 /**
- * OnlinePlacement —— 联机摆阵页（M6）。
+ * OnlinePlacement —— 联机摆阵页（M6 / v0.3.0）。
  *
  * 复用 FleetPlacementBoard 的托盘/拖拽/校验；确认改为 placeFleet + ready；
  * 显示房间码（+复制）、对手状态（等待加入/摆阵中/已就绪/已断线）、
- * 房间配置只读预览（加入者可见棋盘与形状）；摆阵阶段断线横幅。
+ * 房间配置只读预览（加入者可见棋盘与形状）与模式徽标（超快棋/盲棋，v0.3 透传）；
+ * 摆阵阶段断线横幅。
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
+import type { CSSProperties } from 'react'
 import type { PlacedPlane } from '@aero/shared'
 import { generateFleet, mulberry32 } from '@aero/game-core/ai'
 import { useAppStore } from '../store/appStore'
@@ -13,7 +15,8 @@ import { useOnlineStore } from '../store/onlineStore'
 import { useGuestStore } from '../store/guestStore'
 import { useSettingsStore } from '../store/settingsStore'
 import { useToastStore } from '../store/toastStore'
-import { onlineApi } from '../net/socket'
+import { connectClient, v030Api } from '../online/client'
+import type { GridConfigV030 } from '../online/protocol'
 import { useEffectiveOrientation } from '../hooks/useOrientation'
 import { PaperButton } from '../components/ui/PaperButton'
 import { PaperModal } from '../components/ui/PaperModal'
@@ -28,6 +31,22 @@ function useNow(intervalMs = 500): number {
     return () => window.clearInterval(t)
   }, [intervalMs])
   return now
+}
+
+/** 模式徽标（超快棋/盲棋）样式；styles/ 不在本任务可编辑范围，故内联 */
+function badgeStyle(extra: CSSProperties): CSSProperties {
+  return {
+    display: 'inline-block',
+    padding: '0 8px',
+    borderRadius: 999,
+    border: '1.5px solid var(--danger, #a8362f)',
+    color: 'var(--danger, #a8362f)',
+    fontSize: 11,
+    fontWeight: 600,
+    letterSpacing: '0.05em',
+    lineHeight: 1.7,
+    ...extra,
+  }
 }
 
 export function OnlinePlacement() {
@@ -51,6 +70,11 @@ export function OnlinePlacement() {
   const [localReady, setLocalReady] = useState(false)
   const [exitOpen, setExitOpen] = useState(false)
   const busyRef = useRef(false)
+
+  // 本页会话必须由 v0.3 客户端连接承载（旧连接不 join 房间，不会收到房间事件）
+  useEffect(() => {
+    connectClient()
+  }, [])
 
   // 会话错误（reconnect 失败 / 房间解散）→ 提示并回联机菜单
   useEffect(() => {
@@ -99,15 +123,21 @@ export function OnlinePlacement() {
   }, [config])
 
   if (!room || !config) {
+    // v0.3：可能是 room:joined 刚跳转、roomUpdate 尚未到达，或刷新恢复中
     return (
       <div className="page" style={{ alignItems: 'center', gap: 16 }}>
-        <p>尚未加入任何房间。</p>
+        <p>正在进入房间…（若长时间无响应，可返回联机菜单重试）</p>
         <PaperButton variant="primary" onClick={() => setView('online')}>
           返回联机菜单
         </PaperButton>
       </div>
     )
   }
+
+  // v0.3 模式透传：房间 config 的 blitz/blind（服务端回传；创建/加入后经 roomUpdate 到达）
+  const modeCfg = config as GridConfigV030
+  const modeBlitz = modeCfg.blitz === true
+  const modeBlind = modeCfg.blind === true
 
   const players = room.players
   const meSeat = players[you]
@@ -154,13 +184,13 @@ export function OnlinePlacement() {
     if (!canConfirm || busyRef.current) return
     busyRef.current = true
     try {
-      const placed = await onlineApi.placeFleet(grid)
+      const placed = await v030Api.placeFleet(grid)
       if (!placed.ok) {
         toast(placed.error ?? '摆阵提交失败', 'error')
         return
       }
       setMyFleet(grid)
-      const r = await onlineApi.ready()
+      const r = await v030Api.ready()
       if (!r.ok) {
         toast(r.error ?? '就绪失败', 'error')
         return
@@ -173,7 +203,7 @@ export function OnlinePlacement() {
   }
 
   const leave = () => {
-    onlineApi.leaveRoom()
+    v030Api.leaveRoom()
     setView('online')
   }
 
@@ -199,6 +229,16 @@ export function OnlinePlacement() {
           </h1>
           <p className="page__subtitle" style={{ fontSize: 13 }}>
             {config.width}×{config.height} · {config.planeCount} 架飞机
+            {modeBlitz || modeBlind ? (
+              <span style={{ display: 'inline-flex', gap: 6, marginLeft: 8, verticalAlign: 'middle' }}>
+                {modeBlitz ? (
+                  <span style={badgeStyle({})}>超快棋</span>
+                ) : null}
+                {modeBlind ? (
+                  <span style={badgeStyle({ borderColor: '#7a4a86', color: '#7a4a86' })}>盲棋</span>
+                ) : null}
+              </span>
+            ) : null}
             <span className="placement__hint"> 点击飞机旋转 · 拖拽摆放 · 拖回托盘回收</span>
           </p>
         </div>

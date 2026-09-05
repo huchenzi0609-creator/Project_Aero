@@ -1,77 +1,162 @@
 /**
- * OnlineMenu —— 联机菜单三入口（M6）。
+ * OnlineMenu —— 对战模式菜单（M6 / v0.3.0 重构）。
  *
- * 1) 局域网对局：选档位（三档 / 自定义）→ 建房（房码在摆阵页展示 + 复制）；输入房码加入（大小写容错）；
- * 2) 公网匹配：三档选择 → createRoom({config, match:true}) → 匹配中动画；
- *    30s 超时（服务端 matchmakingStatus 'timeout'）提示自建房间；取消走断开重连移出队列；
- * 3) 自定义房间：房主配置棋盘+形状（CustomConfig online 模式）→ 建房。
+ * 结构（docs/qa-checklist-v030.md §B）：
+ * 1) 三个板块「经典模式」「超快棋模式」「盲棋模式」，每块含小/中/大三档勾选项，
+ *    板块间与档位间相互独立可多选；默认仅经典模式三档勾选。
+ * 2) 「开始匹配」：按所有勾选项收集 combos（经典=blitz/blind 均 false，
+ *    超快棋=blitz true，盲棋=blind true）发送 match:quick { combos }；
+ *    match:waiting → 显示等待态（可取消 match:cancel）；
+ *    room:joined { roomCode, config } → 直接进入房间流程（onlinePlacement）。
+ * 3) 「自定义房间」板块：档位 + 超快棋/盲棋两开关创建房间（沿用 createRoom），
+ *    或输入房码加入已有对局。
+ *
+ * 房间流程全部走 online/v030 客户端连接（v0.3 事件不在 v0.2 net/socket 的 typed 接口内）。
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import type { CSSProperties } from 'react'
 import { PRESETS } from '@aero/shared'
-import type { GridConfig } from '@aero/shared'
 import { useAppStore } from '../store/appStore'
-import { useOnlineStore } from '../store/onlineStore'
 import { useGuestStore } from '../store/guestStore'
 import { useToastStore } from '../store/toastStore'
 import { useEffectiveOrientation } from '../hooks/useOrientation'
-import { cancelMatchmaking, onlineApi } from '../net/socket'
+import { connectClient, onV030, subscribeStatus, v030Api } from '../online/client'
+import type { ClientStatus } from '../online/client'
+import type { GridConfigV030, MatchCombo, MatchGridSize } from '../online/protocol'
 import { PaperButton } from '../components/ui/PaperButton'
 import { PaperCard } from '../components/ui/PaperCard'
 
-type MatchTier = 'small' | 'medium' | 'large'
+type Mode = 'classic' | 'blitz' | 'blind'
+type Tier = 'small' | 'medium' | 'large'
 
-const TIERS: ReadonlyArray<{ key: MatchTier; label: string; sub: string }> = [
-  { key: 'small', label: '小型', sub: '10×10 · 3 架' },
-  { key: 'medium', label: '中型', sub: '15×15 · 5 架' },
-  { key: 'large', label: '大型', sub: '20×20 · 7 架' },
+const MODES: ReadonlyArray<{ key: Mode; title: string; desc: string; blitz: boolean; blind: boolean }> = [
+  { key: 'classic', title: '经典模式', desc: '常规对局：先摆阵，再随机先后手轮流报点。', blitz: false, blind: false },
+  { key: 'blitz', title: '超快棋模式', desc: '双方合计限时 10 秒/架，报点回血，超时判负。', blitz: true, blind: false },
+  { key: 'blind', title: '盲棋模式', desc: '不记旧报点，双方禁参考飞机与着色。', blitz: false, blind: true },
 ]
 
-const TIER_LABEL: Record<MatchTier, string> = {
-  small: '小型 10×10',
-  medium: '中型 15×15',
-  large: '大型 20×20',
+const TIERS: ReadonlyArray<{ key: Tier; label: string; sub: string; gridSize: MatchGridSize; planes: number }> = [
+  { key: 'small', label: '小型', sub: '10×10 · 3 架', gridSize: 10, planes: 3 },
+  { key: 'medium', label: '中型', sub: '15×15 · 5 架', gridSize: 15, planes: 5 },
+  { key: 'large', label: '大型', sub: '20×20 · 7 架', gridSize: 20, planes: 7 },
+]
+
+const DEFAULT_CHECKS: Record<Mode, Record<Tier, boolean>> = {
+  classic: { small: true, medium: true, large: true },
+  blitz: { small: false, medium: false, large: false },
+  blind: { small: false, medium: false, large: false },
 }
+
+const switchStyle: CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer' }
+const checkboxStyle: CSSProperties = { accentColor: 'var(--kill-red, #a8362f)', width: 16, height: 16, cursor: 'pointer' }
 
 export function OnlineMenu() {
   const setView = useAppStore((s) => s.setView)
   const toast = useToastStore((s) => s.push)
   const guestName = useGuestStore((s) => s.name)
-  const socketStatus = useOnlineStore((s) => s.socketStatus)
-  const matchmaking = useOnlineStore((s) => s.matchmaking)
   const orientation = useEffectiveOrientation()
   const isPortrait = orientation === 'portrait'
 
-  const [code, setCode] = useState('')
-  const [lanTier, setLanTier] = useState<MatchTier>('small')
-  const [matchTier, setMatchTier] = useState<MatchTier>('small')
-  const [matching, setMatching] = useState(false)
+  const [checks, setChecks] = useState<Record<Mode, Record<Tier, boolean>>>(DEFAULT_CHECKS)
+  const [waiting, setWaiting] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [conn, setConn] = useState<ClientStatus>('idle')
 
-  const connected = socketStatus === 'connected'
+  // 本页承载联机会话 → 连接 v0.3 客户端
+  useEffect(() => connectClient(), [])
 
-  // 公网匹配状态：matched → 进摆阵；timeout → 提示自建房间
-  useEffect(() => {
-    const m = matchmaking
-    if (!m || Date.now() - m.at > 8000) return
-    if (m.status === 'matched') {
-      setMatching(false)
-      setView('onlinePlacement')
-    } else if (m.status === 'timeout') {
-      setMatching(false)
-      toast('30 秒未匹配到对手，可自建房间邀请好友对战', 'info')
+  // 连接状态订阅（断线/重连后 UI 更新）
+  useEffect(() => subscribeStatus(setConn), [])
+
+  const connected = conn === 'connected'
+
+  // room:joined（快速匹配配对成功）→ 复位匹配态并进入房间流程
+  useEffect(
+    () =>
+      onV030('room:joined', () => {
+        setWaiting(false)
+        setBusy(false)
+        setView('onlinePlacement')
+      }),
+    [setView],
+  )
+  // match:waiting → 进入等待态（可取消）
+  useEffect(
+    () =>
+      onV030('match:waiting', () => {
+        setWaiting(true)
+        setBusy(false)
+      }),
+    [],
+  )
+
+  const toggle = (mode: Mode, tier: Tier) =>
+    setChecks((prev) => ({
+      ...prev,
+      [mode]: { ...prev[mode], [tier]: !prev[mode][tier] },
+    }))
+
+  /** 收集勾选项为匹配组合 */
+  const combos = useMemo<MatchCombo[]>(() => {
+    const out: MatchCombo[] = []
+    for (const mode of MODES) {
+      for (const tier of TIERS) {
+        if (!checks[mode.key][tier.key]) continue
+        out.push({
+          gridSize: tier.gridSize,
+          planes: tier.planes,
+          blitz: mode.blitz,
+          blind: mode.blind,
+        })
+      }
     }
-  }, [matchmaking, setView, toast])
+    return out
+  }, [checks])
 
-  const createRoom = async (config: GridConfig) => {
+  const startMatch = async () => {
+    if (busy || combos.length === 0) return
+    setBusy(true)
+    const res = await v030Api.matchQuick(combos)
+    if (!res.ok) {
+      setBusy(false)
+      toast(res.error ?? '发起匹配失败', 'error')
+      return
+    }
+    // ack 成功即视为已入等待池（waiting 事件会同步 UI）；若事件先行丢失，本页兜底
+    setWaiting(true)
+  }
+
+  const cancelMatch = () => {
+    setWaiting(false)
+    setBusy(false)
+    v030Api.cancelMatch()
+    toast('已退出匹配', 'info')
+  }
+
+  /* ---------- 自定义房间 ---------- */
+  const [customTier, setCustomTier] = useState<Tier>('small')
+  const [customBlitz, setCustomBlitz] = useState(false)
+  const [customBlind, setCustomBlind] = useState(false)
+  const [code, setCode] = useState('')
+
+  const createCustomRoom = async () => {
     if (busy) return
     setBusy(true)
     try {
-      const res = await onlineApi.createRoom(config, false)
+      const config: GridConfigV030 = {
+        ...PRESETS[customTier],
+        blitz: customBlitz,
+        blind: customBlind,
+      }
+      const res = await v030Api.createRoom(config)
       if (!res.ok) {
         toast(res.error ?? '创建房间失败', 'error')
         return
       }
-      toast(`房间已创建：${res.data}`, 'success')
+      toast(
+        `房间已创建：${res.data}${customBlitz ? '（超快棋）' : ''}${customBlind ? '（盲棋）' : ''}`,
+        'success',
+      )
       setView('onlinePlacement')
     } finally {
       setBusy(false)
@@ -87,7 +172,7 @@ export function OnlineMenu() {
     if (busy) return
     setBusy(true)
     try {
-      const res = await onlineApi.joinRoom(raw)
+      const res = await v030Api.joinRoom(raw)
       if (!res.ok) {
         toast(res.error ?? '加入房间失败', 'error')
         return
@@ -98,37 +183,14 @@ export function OnlineMenu() {
     }
   }
 
-  const startMatch = () => {
-    if (busy) return
-    setBusy(true)
-    void onlineApi.createRoom(PRESETS[matchTier], true).then((res) => {
-      setBusy(false)
-      if (!res.ok) {
-        toast(res.error ?? '匹配失败', 'error')
-        return
-      }
-      setMatching(true)
-      toast(`已进入匹配队列：${TIER_LABEL[matchTier]}`, 'info')
-    })
-  }
-
-  const cancelMatch = () => {
-    setMatching(false)
-    cancelMatchmaking()
-    toast('已退出匹配', 'info')
-  }
-
   const backHome = () => {
-    if (matching) cancelMatch()
+    if (waiting) cancelMatch()
     setView('home')
   }
 
   const connText =
-    socketStatus === 'connected'
-      ? '已连接服务器'
-      : socketStatus === 'connecting'
-        ? '正在连接服务器…'
-        : '未连接（将自动重连）'
+    conn === 'connected' ? '已连接服务器' : conn === 'connecting' ? '正在连接服务器…' : '未连接（将自动重连）'
+  const summary = combos.length > 0 ? `已勾选 ${combos.length} 组组合` : '请至少勾选一组（档位 × 模式）'
 
   return (
     <div className="page online">
@@ -137,7 +199,7 @@ export function OnlineMenu() {
       </PaperButton>
       <header className="page__head">
         <div>
-          <h1 className="page__title">联机对战</h1>
+          <h1 className="page__title">对战模式</h1>
           <p className="page__subtitle">
             {guestName} · {connText}
           </p>
@@ -145,35 +207,117 @@ export function OnlineMenu() {
       </header>
 
       <div className="page__body online__grid">
-        {/* 局域网对局 */}
-        <PaperCard tape>
-          <h2 className="online__card-title">局域网对局</h2>
+        {/* 匹配：三板块 × 三档勾选 */}
+        {MODES.map((mode) => (
+          <PaperCard key={mode.key} tape={mode.key === 'classic'}>
+            <h2 className="online__card-title">{mode.title}</h2>
+            <p className="online__card-desc">{mode.desc}</p>
+            <div
+              className="online__tiers"
+              role="group"
+              aria-label={`${mode.title}档位勾选`}
+              style={{ flexDirection: 'column', alignItems: 'flex-start', gap: 8 }}
+            >
+              {TIERS.map((tier) => (
+                <label key={tier.key} style={switchStyle}>
+                  <input
+                    type="checkbox"
+                    checked={checks[mode.key][tier.key]}
+                    onChange={() => toggle(mode.key, tier.key)}
+                    disabled={waiting}
+                    style={checkboxStyle}
+                  />
+                  <span>
+                    {tier.label}
+                    {isPortrait ? '' : ` · ${tier.sub}`}
+                  </span>
+                </label>
+              ))}
+            </div>
+          </PaperCard>
+        ))}
+
+        {/* 匹配发起 / 等待态 */}
+        <PaperCard className="online__span2">
+          {waiting ? (
+            <div className="online__matching" role="status">
+              <span className="online__spinner" aria-hidden="true" />
+              <span>
+                正在匹配对手…（30 秒内未匹配上，可自建房间邀请好友）
+                <br />
+                <span style={{ fontSize: 13, color: 'var(--ink-faint)' }}>{summary}</span>
+              </span>
+              <PaperButton size="sm" variant="ghost" onClick={cancelMatch}>
+                取消匹配
+              </PaperButton>
+            </div>
+          ) : (
+            <div className="online__form" style={{ justifyContent: 'space-between' }}>
+              <span style={{ color: 'var(--ink-soft)', fontSize: 14 }}>{summary}</span>
+              <PaperButton
+                variant="primary"
+                size="lg"
+                disabled={busy || !connected || combos.length === 0}
+                onClick={() => void startMatch()}
+              >
+                开始匹配
+              </PaperButton>
+            </div>
+          )}
+        </PaperCard>
+
+        {/* 自定义房间：档位 + 超快棋/盲棋开关 → 创建；或房码加入 */}
+        <PaperCard className="online__span2" pin>
+          <h2 className="online__card-title">自定义房间</h2>
+          <p className="online__card-desc">
+            选择棋盘尺寸与模式开关创建房间（仅局域网/邀请）；或输入房主分享的 6 位房码加入已有对局。
+          </p>
 
           <div className="online__tiers" role="group" aria-label="创建房间档位">
-            {TIERS.map((t) => (
+            {TIERS.map((tier) => (
               <PaperButton
-                key={t.key}
+                key={tier.key}
                 size="sm"
-                variant={lanTier === t.key ? 'primary' : 'default'}
-                aria-pressed={lanTier === t.key}
-                onClick={() => setLanTier(t.key)}
+                variant={customTier === tier.key ? 'primary' : 'default'}
+                aria-pressed={customTier === tier.key}
+                disabled={busy}
+                onClick={() => setCustomTier(tier.key)}
               >
-                {t.label}
-                {isPortrait ? '' : ` · ${t.sub}`}
+                {tier.label}
+                {isPortrait ? '' : ` · ${tier.sub}`}
               </PaperButton>
             ))}
-            <PaperButton
-              size="sm"
-              variant="ghost"
-              onClick={() => setView('onlineCustom')}
-              title="自定义棋盘与飞机形状（双方同一形状）"
-            >
-              自定义…
-            </PaperButton>
+          </div>
+
+          <div className="online__form" style={{ margin: '10px 0' }}>
+            <label style={switchStyle}>
+              <input
+                type="checkbox"
+                checked={customBlitz}
+                onChange={(e) => setCustomBlitz(e.target.checked)}
+                disabled={busy}
+                style={checkboxStyle}
+              />
+              超快棋（10 秒/架限时，报点回血，超时判负）
+            </label>
+            <label style={switchStyle}>
+              <input
+                type="checkbox"
+                checked={customBlind}
+                onChange={(e) => setCustomBlind(e.target.checked)}
+                disabled={busy}
+                style={checkboxStyle}
+              />
+              盲棋（不记旧报点，双方禁参考飞机与着色）
+            </label>
           </div>
 
           <div className="online__form">
-            <PaperButton variant="primary" disabled={busy || !connected} onClick={() => void createRoom(PRESETS[lanTier])}>
+            <PaperButton
+              variant="primary"
+              disabled={busy || !connected}
+              onClick={() => void createCustomRoom()}
+            >
               创建房间
             </PaperButton>
             <span style={{ color: 'var(--ink-faint)', fontSize: 14 }}>或</span>
@@ -191,53 +335,13 @@ export function OnlineMenu() {
                 if (e.key === 'Enter') void joinRoom()
               }}
             />
-            <PaperButton disabled={busy || !connected || code.length < 6} onClick={() => void joinRoom()}>
-              加入房间
+            <PaperButton
+              disabled={busy || !connected || code.length < 6}
+              onClick={() => void joinRoom()}
+            >
+              加入已有对局
             </PaperButton>
           </div>
-        </PaperCard>
-
-        {/* 公网匹配 */}
-        <PaperCard pin>
-          <h2 className="online__card-title">公网匹配</h2>
-          <div className="online__tiers" role="group" aria-label="匹配档位">
-            {TIERS.map((t) => (
-              <PaperButton
-                key={t.key}
-                size="sm"
-                variant={matchTier === t.key ? 'primary' : 'default'}
-                aria-pressed={matchTier === t.key}
-                disabled={matching}
-                onClick={() => setMatchTier(t.key)}
-              >
-                {t.label}
-                {isPortrait ? '' : ` · ${t.sub}`}
-              </PaperButton>
-            ))}
-          </div>
-          {matching ? (
-            <div className="online__matching" role="status">
-              <span className="online__spinner" aria-hidden="true" />
-              <span>正在匹配：{TIER_LABEL[matchTier]}…（30 秒内未匹配可自建房间）</span>
-              <PaperButton size="sm" variant="ghost" onClick={cancelMatch}>
-                取消
-              </PaperButton>
-            </div>
-          ) : (
-            <div className="online__form" style={{ marginTop: 10 }}>
-              <PaperButton variant="primary" disabled={busy || !connected} onClick={startMatch}>
-                开始匹配
-              </PaperButton>
-            </div>
-          )}
-        </PaperCard>
-
-        {/* 自定义房间 */}
-        <PaperCard className="online__span2">
-          <h2 className="online__card-title">自定义房间</h2>
-          <PaperButton variant="primary" onClick={() => setView('onlineCustom')}>
-            配置并创建自定义房间
-          </PaperButton>
         </PaperCard>
       </div>
     </div>
