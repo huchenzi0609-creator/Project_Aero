@@ -7,7 +7,6 @@ import { ToastRegion } from './components/ui/Toast'
 import { connectSocket, onlineApi } from './net/socket'
 import { audioService } from './lib/audioService'
 import { Home } from './pages/Home'
-import { SingleMenu } from './pages/SingleMenu'
 import { CustomConfig } from './pages/CustomConfig'
 import { Settings } from './pages/Settings'
 import { Rules } from './pages/Rules'
@@ -141,7 +140,6 @@ export default function App() {
         {/* key=view 触发 200ms 页面淡入切换 */}
         <div key={view} className="page-fade">
           {view === 'home' ? <Home /> : null}
-          {view === 'single' ? <SingleMenu /> : null}
           {view === 'custom' ? <CustomConfig mode="single" /> : null}
           {view === 'settings' ? <Settings /> : null}
           {view === 'rules' ? <Rules /> : null}

@@ -7,7 +7,6 @@ import { PRESETS } from '@aero/shared'
 
 export type View =
   | 'home'
-  | 'single'
   | 'custom'
   | 'settings'
   | 'rules'

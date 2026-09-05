@@ -187,8 +187,8 @@ export function CustomConfig({ mode = 'single' }: { mode?: 'single' | 'online' }
 
   return (
     <div className="page custom">
-      <PaperButton size="sm" variant="ghost" className="page__back" onClick={() => setView(isOnline ? 'online' : 'single')}>
-        ← 返回{isOnline ? '联机菜单' : '单人对局'}
+      <PaperButton size="sm" variant="ghost" className="page__back" onClick={() => setView(isOnline ? 'online' : 'home')}>
+        ← 返回{isOnline ? '联机菜单' : '主页'}
       </PaperButton>
       <header className="page__head">
         <div>
@@ -415,7 +415,7 @@ export function CustomConfig({ mode = 'single' }: { mode?: 'single' | 'online' }
           </div>
 
           <div className="custom__actions">
-            <PaperButton variant="ghost" onClick={() => setView(isOnline ? 'online' : 'single')}>
+            <PaperButton variant="ghost" onClick={() => setView(isOnline ? 'online' : 'home')}>
               取消
             </PaperButton>
             <PaperButton variant="primary" disabled={!canConfirm || busy} onClick={confirm}>
