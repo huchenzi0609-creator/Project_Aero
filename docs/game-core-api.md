@@ -12,7 +12,7 @@
 ## 导出清单（packages/game-core/src/index.ts）
 
 ```ts
-export type { Cell, PlaneShape, PlacedPlane, Rotation, Shot, ShotOutcome, GridConfig, Difficulty, PlayerId } from '@aero/shared'
+export type { Cell, PlaneShape, PlacedPlane, Rotation, Shot, ShotOutcome, GridConfig, Difficulty, PlayerId, TutorialAiOptions } from '@aero/shared'
 ```
 
 > 模式开关（shared `GridConfig`，均可选、缺省 false、互不冲突）：`blitz`（超快棋）、`blind`（盲棋）；
@@ -130,6 +130,24 @@ export function cancelPreFire(state: GameState, player: PlayerId, coord: Cell): 
 export function takePreFireTurn(state: GameState, player: PlayerId): ShotResult | null
 ```
 
+### 教程（M8）能力（v0.3.0 起）
+
+```ts
+/** 残局注入：将 victim 方第 planeIndex 架整机标记为已被对手击毁（等效对手已完成该击毁）——
+ *  该机 id 加入 destroyedPlaneIds，其全部占位格补记 receivedShots（非头格 'hit'、头格 'kill'）
+ *  与对手 shotsFired（已记录的坐标不重复）。幂等；应在对局开始前（对手尚无真实射击）调用。 */
+export function markPlaneDestroyed(state: GameState, victim: PlayerId, planeIndex: number): GameState
+
+/** 设定当前行动方：覆盖 state.turn = player（残局注入用，如把首回合交给对方）。
+ *  不改 firstMover/phase/winner；需首回合语义一致时在 createGame 指定 firstMover。 */
+export function setActiveTurn(state: GameState, player: PlayerId): GameState
+```
+
+> 教学 AI（教程单元2/3 对手，spec 见 docs/tutorial-spec-v030.md §5）在 AI 模块：
+> `chooseTutorialShot(knowledge, options, rng)`，选项类型 `TutorialAiOptions { avoidHeads: Cell[] }`
+> 由 shared 导出并在此 re-export——报点绝不落在 `avoidHeads`（我方机头位置）上，可命中机翼/机身/击空，
+> 其余行为复用 normal 档（hit 围杀邻格 / 均匀随机），不越界不重复。
+
 ### applyShot 语义（必须逐条实现）
 
 1. 仅 `playing` / `counterattack` 阶段合法。
@@ -171,6 +189,10 @@ export interface ShotKnowledge {
 
 /** 返回下一个报点坐标。硬性约束：不得越界、不得重复、只使用 knowledge。 */
 export function chooseShot(knowledge: ShotKnowledge, difficulty: Difficulty, rng: Rng): Cell
+
+/** 教程教学 AI（M8）：normal 基底 + 报点绝不落在 options.avoidHeads（我方机头）上。
+ *  选项类型 TutorialAiOptions 由 shared 导出。其余约束同 chooseShot。 */
+export function chooseTutorialShot(knowledge: ShotKnowledge, options: TutorialAiOptions, rng: Rng): Cell
 
 /** 生成合法机队（必须通过 validateFleet）。 */
 export function generateFleet(

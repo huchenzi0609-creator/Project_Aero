@@ -6,8 +6,10 @@
  * 绝不访问对方阵型；永不越界、永不重复报点。generateFleet 产物保证通过 validateFleet。
  * 性能：26×26 下单次 chooseShot 纯枚举即可 < 50ms，零第三方依赖。
  */
-import type { Cell, Difficulty, PlaneShape, PlacedPlane, Rotation, Shot } from '@aero/shared'
+import type { Cell, Difficulty, PlaneShape, PlacedPlane, Rotation, Shot, TutorialAiOptions } from '@aero/shared'
 import { normalizeShape, rotateShape, validateFleet } from '../index.js'
+
+export type { TutorialAiOptions } from '@aero/shared'
 
 export type Rng = () => number
 
@@ -384,6 +386,26 @@ export function chooseShot(knowledge: ShotKnowledge, difficulty: Difficulty, rng
   if (rng() < PERTURB_PROB_HELL) return pickRandom(unshot, rng)
   const { headScores } = buildHeadMap(knowledge, true)
   return pickHeadByScore(unshot, headScores, rng)
+}
+
+/**
+ * 教程教学 AI（M8 前置；normal 档行为为基底）：返回下一个报点坐标。
+ * 报点**绝不允许落在 options.avoidHeads 列出的格**（教学单元2/3：我方全部机头位置）——
+ * 候选（含正常档的 hit 围杀邻格）先剔除 avoidHeads，可命中机翼/机身、可击空，但不爆头。
+ * 其余约束与 chooseShot 一致：不越界、不重复、只使用 knowledge（avoidHeads 由教学方传入）。
+ */
+export function chooseTutorialShot(knowledge: ShotKnowledge, options: TutorialAiOptions, rng: Rng): Cell {
+  const unshot = allUnshotCells(knowledge)
+  if (unshot.length === 0) return { r: 0, c: 0 }
+  const avoid = new Set<string>()
+  for (const head of options.avoidHeads) avoid.add(cellKey(head.r, head.c))
+  const safe = (cells: Cell[]): Cell[] => cells.filter((c) => !avoid.has(cellKey(c.r, c.c)))
+  // normal 基底：有未处理 hit 时围杀其 4 邻格（同样避开机头），否则均匀随机
+  const hunt = safe(huntCandidates(knowledge))
+  if (hunt.length > 0) return pickRandom(hunt, rng)
+  const pool = safe(unshot)
+  // 防御：若全部未报格都落在 avoidHeads（异常教学阵），退化为普通 normal 随机
+  return pickRandom(pool.length > 0 ? pool : unshot, rng)
 }
 
 /* ---------------- generateFleet ---------------- */

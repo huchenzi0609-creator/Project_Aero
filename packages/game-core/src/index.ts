@@ -33,6 +33,7 @@ export type {
   ShotOutcome,
   GridConfig,
   Difficulty,
+  TutorialAiOptions,
 } from '@aero/shared'
 
 /** 编辑器坐标系边长（5×5） */
@@ -676,4 +677,55 @@ export function takePreFireTurn(state: GameState, player: PlayerId): ShotResult 
   next[player] = rest
   const stateWithoutHead: GameState = { ...state, preFire: next }
   return applyShot(stateWithoutHead, head!)
+}
+
+/**
+ * 残局注入原语（教程单元3 等使用；纯函数）：
+ * 将 victim 方第 planeIndex 架飞机整机标记为"已被对手击毁"——等效对手已完成该击毁：
+ * - 该机 id 加入 victim.destroyedPlaneIds；
+ * - 其全部占位格补记历史：非机头格 outcome 'hit'、机头格 'kill'，写入
+ *   victim.receivedShots 与对手 shotsFired（已在记录中的坐标不重复追加）。
+ * 应在对局开始前调用（对手尚无真实射击、phase 为 placing/playing 皆可）。
+ * 若该机已在 destroyedPlaneIds 中 → 原样返回（幂等）。
+ */
+export function markPlaneDestroyed(state: GameState, victim: PlayerId, planeIndex: number): GameState {
+  const board = state.players[victim]
+  const plane = board.planes[planeIndex]
+  if (!plane) return state // 越界下标：无可标记
+  if (board.destroyedPlaneIds.includes(plane.id)) return state // 幂等
+  const shape = board.shape
+  const absHead = rotateShape(shape, plane.rotation).head
+  const headAbs = { r: absHead.r + plane.origin.r, c: absHead.c + plane.origin.c }
+  const existing = new Set(board.receivedShots.map((s) => cellKey(s.coord.r, s.coord.c)))
+  const shots: Shot[] = []
+  for (const cell of occupiedCells(plane, shape)) {
+    if (existing.has(cellKey(cell.r, cell.c))) continue
+    shots.push({
+      coord: { r: cell.r, c: cell.c },
+      outcome: cell.r === headAbs.r && cell.c === headAbs.c ? 'kill' : 'hit',
+    })
+  }
+  const opponent = (1 - victim) as PlayerId
+  const oppExisting = new Set(state.players[opponent].shotsFired.map((s) => cellKey(s.coord.r, s.coord.c)))
+  const oppShots = shots.filter((s) => !oppExisting.has(cellKey(s.coord.r, s.coord.c)))
+  const players: [PlayerBoard, PlayerBoard] =
+    victim === 0
+      ? [
+          { ...board, receivedShots: [...board.receivedShots, ...shots], destroyedPlaneIds: [...board.destroyedPlaneIds, plane.id] },
+          { ...state.players[1], shotsFired: [...state.players[1].shotsFired, ...oppShots] },
+        ]
+      : [
+          { ...state.players[0], shotsFired: [...state.players[0].shotsFired, ...oppShots] },
+          { ...board, receivedShots: [...board.receivedShots, ...shots], destroyedPlaneIds: [...board.destroyedPlaneIds, plane.id] },
+        ]
+  return { ...state, players }
+}
+
+/**
+ * 设定当前行动方（纯函数）：覆盖 state.turn 为 player（残局注入用，如把首回合交给对方）。
+ * 不改变 firstMover/phase/winner；调用方如需要首回合语义一致，请在 createGame 时指定 firstMover。
+ */
+export function setActiveTurn(state: GameState, player: PlayerId): GameState {
+  if (state.turn === player) return state
+  return { ...state, turn: player }
 }

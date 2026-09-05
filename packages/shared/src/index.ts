@@ -36,6 +36,12 @@ export type GamePhase = 'placing' | 'playing' | 'counterattack' | 'ended'
 /** 玩家编号：0=先手, 1=后手 */
 export type PlayerId = 0 | 1
 
+/** 教程教学 AI 选项（单机教程单元2/3 的对手，M8 前置）：以 normal 档行为为基底 */
+export interface TutorialAiOptions {
+  /** 报点绝不允许落在此列表格（我方全部机头位置）上：可命中机翼/机身、可击空，但不爆头 */
+  avoidHeads: Cell[]
+}
+
 /* ---------- 常量 ---------- */
 
 export const GRID_MIN = 10
