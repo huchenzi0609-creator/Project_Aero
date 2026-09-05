@@ -74,9 +74,11 @@ interface GameScreenProps {
   /** 教程 AI 注入（v0.3.0）：替代默认 chooseShot 的出手决策；
    *  返回 null = 本帧不出手（教程用它暂停 AI），此后由本组件轮询直至放行。缺省用默认 AI。 */
   aiShotSelector?: (knowledge: ShotKnowledge, rng: Rng) => Cell | null
+  /** 教程（v0.3.1）：终局不弹出胜负结算 overlay（只发 playerWin/playerLose 事件，由教程气泡/弹窗接管） */
+  hideSettlement?: boolean
 }
 
-export function GameScreen({ mode = 'single', onGameEvent, aiShotSelector }: GameScreenProps) {
+export function GameScreen({ mode = 'single', onGameEvent, aiShotSelector, hideSettlement }: GameScreenProps) {
   const session = useGameStore((s) => s.session)
   const applyShotAt = useGameStore((s) => s.applyShotAt)
   const advanceBlitz = useGameStore((s) => s.advanceBlitz)
@@ -198,12 +200,15 @@ export function GameScreen({ mode = 'single', onGameEvent, aiShotSelector }: Gam
       audioService.playSfx(iWin ? 'win' : 'lose')
       onGameEvent?.(iWin ? { type: 'playerWin' } : { type: 'playerLose' })
     }
-    const t = window.setTimeout(() => {
-      setScreen('result')
-      audioService.playSfx('page-flip')
-    }, 650)
-    return () => window.clearTimeout(t)
-  }, [state, screen, me, onGameEvent])
+    if (!hideSettlement) {
+      const t = window.setTimeout(() => {
+        setScreen('result')
+        audioService.playSfx('page-flip')
+      }, 650)
+      return () => window.clearTimeout(t)
+    }
+    return undefined
+  }, [state, screen, me, onGameEvent, hideSettlement])
 
   /* ---------- AI 回合驱动：300~900ms 后出手；教程注入 aiShotSelector 时按其决策轮询（null=暂停） ---------- */
   useEffect(() => {
