@@ -88,9 +88,6 @@ export function TutorialEntry({ onExit }: { onExit: () => void }) {
         <h1 className="page__title">新手教程</h1>
       </header>
       <div className="page__body tutorial-home__body">
-        <p className="tutorial-home__intro">
-          《飞机杀》将分两段带你上手：先学摆阵与对战，再学涂色、幽灵飞机、预报点等进阶工具。
-        </p>
         <ul className="tutorial-home__list">
           <li>基础 · 摆阵与对战：约 2 分钟</li>
           <li>进阶 · 对局工具：约 3 分钟</li>
@@ -108,17 +105,9 @@ export function TutorialEntry({ onExit }: { onExit: () => void }) {
         onClose={() => setEntryOpen(false)}
         footer={
           <>
+            {/* P2：我已了解 → 返回主页（跳过教程）；还不了解 → 进入基础·单元1 */}
             <PaperButton variant="ghost" onClick={exitAll}>
-              返回主页
-            </PaperButton>
-            <PaperButton
-              variant="primary"
-              onClick={() => {
-                setEntryOpen(false)
-                setStage('advanced')
-              }}
-            >
-              是的
+              我已了解
             </PaperButton>
             <PaperButton
               variant="primary"
@@ -127,7 +116,7 @@ export function TutorialEntry({ onExit }: { onExit: () => void }) {
                 setStage('placement')
               }}
             >
-              还没有
+              还不了解
             </PaperButton>
           </>
         }
