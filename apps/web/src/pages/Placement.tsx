@@ -5,7 +5,7 @@
  * 本页负责：头部（标题/难度/清空/随机/确认）、常驻校验清单、退出二次确认，
  * 确认后 gameStore.begin() → createGame + setFleet(0, 我方) + AI generateFleet + setFleet(1)。
  */
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { PlacedPlane } from '@aero/shared'
 import { generateFleet, mulberry32 } from '@aero/game-core/ai'
 import { useAppStore } from '../store/appStore'
@@ -17,6 +17,7 @@ import { useEffectiveOrientation } from '../hooks/useOrientation'
 import { PaperButton } from '../components/ui/PaperButton'
 import { PaperModal } from '../components/ui/PaperModal'
 import { FleetPlacementBoard, fleetCheckState } from '../components/placement/FleetPlacementBoard'
+import type { TutorialGameEvent } from '../tutorial/events'
 
 const DIFFICULTY_LABEL: Record<string, string> = {
   easy: '简单',
@@ -25,7 +26,12 @@ const DIFFICULTY_LABEL: Record<string, string> = {
   hell: '地狱',
 }
 
-export function Placement() {
+interface PlacementProps {
+  /** 教程事件钩子（v0.3.0 预留，M8 TutorialProvider 注入；为空零开销） */
+  onGameEvent?: (e: TutorialGameEvent) => void
+}
+
+export function Placement({ onGameEvent }: PlacementProps) {
   const config = useAppStore((s) => s.gridConfig)
   const setView = useAppStore((s) => s.setView)
   const placementOrigin = useAppStore((s) => s.placementOrigin)
@@ -42,14 +48,49 @@ export function Placement() {
   const check = fleetCheckState(grid, config)
   const canConfirm = check.ok
 
-  const clearAll = () => setGrid([])
+  /* ---------- v0.3.0 教程埋点：飞机拖入 / 旋转事件（对机队做单架增量比对） ---------- */
+  const prevGridRef = useRef<PlacedPlane[]>(grid)
+  const handlePlanesChange = (next: PlacedPlane[]) => {
+    const prev = prevGridRef.current
+    // 仅单架增量（真实拖入）逐架补发 planePlaced；随机/清空等批量变化不逐架发
+    if (next.length - prev.length === 1) {
+      const added = next.find((p) => !prev.some((q) => q.id === p.id))
+      if (added) onGameEvent?.({ type: 'planePlaced', planeId: added.id })
+    }
+    // 旋转：同 id 旋转值变化（单击旋转，与数量增量正交）
+    if (next.length - prev.length <= 1) {
+      const prevRot = new Map(prev.map((p) => [p.id, p.rotation]))
+      for (const np of next) {
+        const pr = prevRot.get(np.id)
+        if (pr !== undefined && pr !== np.rotation) onGameEvent?.({ type: 'planeRotated', planeId: np.id })
+      }
+    }
+    prevGridRef.current = next
+    setGrid(next)
+  }
+
+  // 全部入格 / 阵形合法 上升沿事件
+  const prevFullRef = useRef(grid.length === planeCount)
+  useEffect(() => {
+    const full = grid.length === planeCount
+    if (full && !prevFullRef.current) onGameEvent?.({ type: 'allPlanesPlaced' })
+    prevFullRef.current = full
+  }, [grid.length, planeCount, onGameEvent])
+
+  const prevValidRef = useRef(check.ok)
+  useEffect(() => {
+    if (check.ok && !prevValidRef.current) onGameEvent?.({ type: 'formationValid' })
+    prevValidRef.current = check.ok
+  }, [check.ok, onGameEvent])
+
+  const clearAll = () => handlePlanesChange([])
 
   const randomFleet = () => {
     const diff = useSettingsStore.getState().difficulty
     const rng = mulberry32(((Date.now() ^ Math.floor(Math.random() * 0xffffffff)) >>> 0) || 1)
     try {
       const fleet = generateFleet(width, height, planeCount, shape, diff, rng)
-      setGrid(fleet)
+      handlePlanesChange(fleet)
       toast(`已按「${DIFFICULTY_LABEL[diff] ?? diff}」难度随机摆阵`, 'success')
     } catch (err) {
       toast(err instanceof Error ? err.message : '随机摆阵失败，请手动摆放', 'error')
@@ -71,6 +112,7 @@ export function Placement() {
       toast(res.errors.join('；'), 'error')
       return
     }
+    onGameEvent?.({ type: 'confirmPlacement' })
     audioService.playSfx('page-flip')
     setView('game')
   }
@@ -121,7 +163,7 @@ export function Placement() {
       <FleetPlacementBoard
         config={config}
         planes={grid}
-        onPlanesChange={setGrid}
+        onPlanesChange={handlePlanesChange}
         portraitChromeReserve={345}
       />
 
