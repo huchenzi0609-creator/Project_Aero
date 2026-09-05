@@ -114,7 +114,7 @@ function buildBasicNodes(): FlowNode[] {
   const nodes: FlowNode[] = [
     { id: 'welcome', kind: 'click', text: [T2_WELCOME], after: 'grid', highlight: 'bubble' },
     { id: 'grid', kind: 'click', text: [T2_GRID], after: 'first', highlight: '.game__opp' },
-    { id: 'first', kind: 'wait', text: [T2_FIRST], wait: shot, highlight: '.game__opp', next: (e) => (shotOutcome(e) === 'kill' ? 'kill' : 'fb') },
+    { id: 'first', kind: 'wait', text: [T2_FIRST], wait: shot, highlight: null, next: (e) => (shotOutcome(e) === 'kill' ? 'kill' : 'fb') },
     {
       id: 'fb',
       kind: 'wait',
@@ -144,7 +144,7 @@ function buildAdvancedNodes(): FlowNode[] {
   const nodes: FlowNode[] = [
     { id: 'a1', kind: 'click', text: [T3_WELCOME], after: 'a2', highlight: 'bubble' },
     { id: 'a2', kind: 'click', text: T3_REF, after: 'a3', highlight: '.game__ref' },
-    { id: 'a3', kind: 'wait', text: [T3_DRAG], wait: (e) => e.type === 'ghostCreated', highlight: '.game__ref', next: 'a4', pauseAi: true },
+    { id: 'a3', kind: 'wait', text: [T3_DRAG], wait: (e) => e.type === 'ghostCreated', highlight: null, next: 'a4', pauseAi: true },
     { id: 'a4', kind: 'click', text: T3_GHOST, after: 'a5', highlight: 'bubble', pauseAi: true },
     { id: 'a5', kind: 'click', text: [T3_MINE], after: 'a6', highlight: '.game__mine' },
     { id: 'a6', kind: 'click', text: T3_SURE, after: 'a7', highlight: null },
