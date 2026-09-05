@@ -19,6 +19,7 @@ import type { Server, Socket } from 'socket.io'
 import { z } from 'zod'
 import {
   cellSchema,
+  DEFAULT_PLANE_SHAPE,
   gridConfigSchema,
   MACHINE_TAKEOVER_DIFFICULTY,
   placedPlaneSchema,
@@ -62,6 +63,42 @@ export type ClientSocket = Socket<ClientToServerEvents, ServerToClientEvents, Re
 
 type RoomPhase = 'waiting' | 'placing' | 'playing' | 'counterattack' | 'ended'
 
+/* ---------------------------------------------------------------- v0.3.0 扩展（M1 落地 shared 前暂驻服务端） */
+
+/**
+ * v0.3.0 房间配置扩展：`blitz`（超快棋）与 `blind`（盲棋）布尔开关，缺省 false。
+ * 契约：packages/shared 的 GameConfig.blitz?/blind?（M1 落地中）；本地 schema 先扩展自持。
+ */
+export interface V030GameConfig extends GridConfig {
+  blitz?: boolean
+  blind?: boolean
+}
+
+/** gridConfigSchema + blitz/blind（布尔可选）——创建/匹配自定义房间统一用此校验 */
+const v030ConfigSchema = gridConfigSchema.extend({
+  blitz: z.boolean().optional(),
+  blind: z.boolean().optional(),
+})
+
+/** 超快棋时钟推进间隔（~250ms） */
+const BLITZ_TICK_MS = 250
+/** 超快棋每成功报点奖励（+1s） */
+const BLITZ_SHOT_BONUS_MS = 1000
+/** 超快棋初始时限默认值：每架飞机 10s */
+const BLITZ_DEFAULT_BASE_MS_PER_PLANE = 10_000
+
+/** 快速匹配（match:quick）支持的档位网格边长 → 该网格下合法的飞机数上限 */
+const QUICK_GRID_SIZES = [10, 15, 20] as const
+
+/** match:quick 中一个待配条目（等待池） */
+interface QuickEntry {
+  socketId: string
+  userId: string
+  name: string
+  /** 勾选的档位组合键集合（combo 指纹） */
+  keys: Set<string>
+}
+
 interface Seat {
   index: 0 | 1
   userId: string
@@ -87,7 +124,7 @@ interface ShotLogEntry {
 
 interface Room {
   code: string
-  config: GridConfig
+  config: V030GameConfig
   /** 本房间每步限时（ms；UNLIMITED_TURN_LIMIT_MS=0 表示不限时），来自 config.turnLimitMs ?? TURN_LIMIT_MS */
   turnLimitMs: number
   seats: [Seat, Seat]
@@ -102,7 +139,16 @@ interface Room {
   gameStartedAt: number | null
   gameEndedAt: number | null
   endPayload: GameEndPayload | null
+  /** 终局广播事件种类：'gameEnd'（常规）| 'gameOver'（v0.3.0 blitz 时钟判负），重连回放按此选择 */
+  endKind: 'gameEnd' | 'gameOver'
   destroyTimer: NodeJS.Timeout | null
+  /** 超快棋双方剩余时钟（ms）；非 blitz 房间为 null */
+  blitzClock: [number, number] | null
+  blitzTimer: NodeJS.Timeout | null
+  /** 上次时钟推进时间戳（ms） */
+  blitzLastAt: number
+  /** 上次向双方广播的整秒值（广播节流用） */
+  blitzSecShown: [number, number]
 }
 
 interface MatchEntry {
@@ -120,6 +166,8 @@ export interface RoomManagerOptions {
   matchmakingTimeoutMs?: number
   machineDelay?: { min: number; max: number }
   store?: Store
+  /** 超快棋初始每架时限（ms），默认 10_000；测试可注入小值加速判负 */
+  blitzBaseMsPerPlane?: number
 }
 
 const ROOM_CODE_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
@@ -131,9 +179,12 @@ export class RoomManager {
   private readonly reconnectGraceMs: number
   private readonly matchmakingTimeoutMs: number
   private readonly machineDelay: { min: number; max: number }
+  private readonly blitzBaseMsPerPlane: number
   private readonly store?: Store
   private readonly rooms = new Map<string, Room>()
   private readonly matchQueue = new Map<string, MatchEntry[]>()
+  /** v0.3.0 快速匹配等待池（match:quick） */
+  private readonly quickPool: QuickEntry[] = []
 
   constructor(io: ServerIO, options: RoomManagerOptions = {}) {
     this.io = io
@@ -142,6 +193,7 @@ export class RoomManager {
     this.reconnectGraceMs = options.reconnectGraceMs ?? RECONNECT_GRACE_MS
     this.matchmakingTimeoutMs = options.matchmakingTimeoutMs ?? 30_000
     this.machineDelay = options.machineDelay ?? { min: 500, max: 1200 }
+    this.blitzBaseMsPerPlane = options.blitzBaseMsPerPlane ?? BLITZ_DEFAULT_BASE_MS_PER_PLANE
     this.store = options.store
   }
 
@@ -268,6 +320,10 @@ export class RoomManager {
       clearTimeout(room.destroyTimer)
       room.destroyTimer = null
     }
+    if (room.blitzTimer) {
+      clearInterval(room.blitzTimer)
+      room.blitzTimer = null
+    }
     for (const seat of room.seats) {
       if (seat.machineTimer) {
         clearTimeout(seat.machineTimer)
@@ -281,6 +337,43 @@ export class RoomManager {
   }
 
   /* ---------------------------------------------------------------- 房间操作 */
+
+  /** 房间是否超快棋（blitz）：config.blitz === true */
+  private isBlitz(room: Room): boolean {
+    return room.config.blitz === true
+  }
+
+  /** 房间是否盲棋（blind）：config.blind === true */
+  private isBlind(room: Room): boolean {
+    return room.config.blind === true
+  }
+
+  /** 建空房间（含 v0.3.0 字段默认值）；createRoom / 匹配配对 / match:quick 共用 */
+  private buildRoom(code: string, config: V030GameConfig, fromMatch: boolean): Room {
+    return {
+      code,
+      config,
+      turnLimitMs: config.turnLimitMs ?? TURN_LIMIT_MS,
+      seats: [this.newSeat(0), this.newSeat(1)],
+      phase: 'waiting',
+      game: null,
+      turnTimer: null,
+      turnDeadline: null,
+      shotLog: [],
+      takeovers: [],
+      wasCounterattack: false,
+      fromMatch,
+      gameStartedAt: null,
+      gameEndedAt: null,
+      endPayload: null,
+      endKind: 'gameEnd',
+      destroyTimer: null,
+      blitzClock: null,
+      blitzTimer: null,
+      blitzLastAt: 0,
+      blitzSecShown: [0, 0],
+    }
+  }
 
   /**
    * 兜底释放残留房间（客户端异常退出导致用户仍挂在 waiting/placing 阶段的房间）。
@@ -303,7 +396,8 @@ export class RoomManager {
     socketId: string,
     config: GridConfig,
   ): { ok: true; code: string } | { ok: false; error: string } {
-    const parsed = gridConfigSchema.safeParse(config)
+    // v0.3.0：使用扩展 schema（接受 blitz/blind 布尔开关），字段类型非法即拒绝
+    const parsed = v030ConfigSchema.safeParse(config)
     if (!parsed.success) return { ok: false, error: '棋盘配置非法' }
     // 兜底：若用户残留一个 waiting/placing 阶段的房间，先自动释放再建房；
     // 对局中（playing/counterattack）仍拒绝
@@ -311,24 +405,7 @@ export class RoomManager {
       if (this.roomOfUser(userId)) return { ok: false, error: '您已在其他对局中，请先退出' }
     }
     const code = this.uniqueCode()
-    const room: Room = {
-      code,
-      config: parsed.data,
-      turnLimitMs: parsed.data.turnLimitMs ?? TURN_LIMIT_MS,
-      seats: [this.newSeat(0), this.newSeat(1)],
-      phase: 'waiting',
-      game: null,
-      turnTimer: null,
-      turnDeadline: null,
-      shotLog: [],
-      takeovers: [],
-      wasCounterattack: false,
-      fromMatch: false,
-      gameStartedAt: null,
-      gameEndedAt: null,
-      endPayload: null,
-      destroyTimer: null,
-    }
+    const room = this.buildRoom(code, parsed.data, false)
     this.rooms.set(code, room)
     this.occupySeat(room, 0, userId, name, socketId)
     this.emitToSeat(room.seats[0], 'roomUpdate', { ...this.roomSummary(room), you: 0 } satisfies RoomUpdate)
@@ -449,6 +526,13 @@ export class RoomManager {
     const game = room.game
     if (!game || game.phase === 'ended') return { ok: false, error: '对局已结束' }
     if (game.turn !== player) return { ok: false, error: '未轮到该玩家报点' }
+    // 盲棋：取消重复报点拒绝（允许对已报点格再次报点）——旁路裁决 outcome，不触碰 game-core 状态
+    if (this.isBlind(room)) {
+      const alreadyShot = game.players[player].shotsFired.some(
+        (s) => s.coord.r === coord.r && s.coord.c === coord.c,
+      )
+      if (alreadyShot) return this.blindRepeatShot(room, player, coord)
+    }
     const res = this.core.applyShot(game, coord)
     if (!res.ok) return { ok: false, error: res.error ?? '无效报点' }
     const next = res.state ?? game
@@ -463,6 +547,8 @@ export class RoomManager {
         outcome,
       })
     }
+    // 超快棋：每成功报点给报点方 +1s 并广播时钟
+    if (this.isBlitz(room)) this.addBlitzTime(room, player, BLITZ_SHOT_BONUS_MS)
     if (next.winner !== null || next.phase === 'ended') {
       const winner = next.winner !== null ? next.winner : ((1 - player) as 0 | 1)
       this.finishGame(room, winner, this.resolveEndReason(room, next))
@@ -477,6 +563,46 @@ export class RoomManager {
     }
     this.startTurnFor(room, next.turn)
     return { ok: true }
+  }
+
+  /** 盲棋重复报点：接受为一次合法行动；按当前棋盘旁路裁决（残骸格/空格=miss、存活部件=hit），
+   *  不重复计数、不触碰 game-core 状态、不触发胜负，随后正常轮换回合。 */
+  private blindRepeatShot(room: Room, player: 0 | 1, coord: Cell): { ok: true } {
+    const game = room.game as GameState
+    const target = (1 - player) as 0 | 1
+    const outcome = this.adjudicateRepeatShot(room, target, coord)
+    room.shotLog.push({ by: player, coord, outcome })
+    for (const s of room.seats) {
+      this.emitToSeat(s, 'shotResult', {
+        by: s.index === player ? 'you' : 'opponent',
+        coord,
+        outcome,
+      })
+    }
+    if (this.isBlitz(room)) this.addBlitzTime(room, player, BLITZ_SHOT_BONUS_MS)
+    if (game.phase === 'counterattack') {
+      // 绝地反击中的重复报点视为反击未成 → 先手胜（与 applyShot「其余情形判先手胜」一致）
+      this.finishGame(room, game.firstMover, 'counterattack')
+      return { ok: true }
+    }
+    // 正常轮换（手动切换 game.turn / turnNo，其余状态不变）
+    room.game = { ...game, turn: target, turnNo: game.turnNo + 1 }
+    this.startTurnFor(room, target)
+    return { ok: true }
+  }
+
+  /** 旁路裁决：该格是否命中目标方某架存活飞机的部件（机头格一旦被报即已 kill 入 destroyed，
+   *  故此处只可能是非机头部件或残骸格）；命中 → hit，否则（空格/残骸）→ miss */
+  private adjudicateRepeatShot(room: Room, target: 0 | 1, coord: Cell): ShotOutcome {
+    const board = room.game?.players[target]
+    if (!board) return 'miss'
+    for (const plane of board.planes) {
+      if (board.destroyedPlaneIds.includes(plane.id)) continue
+      for (const c of this.core.occupiedCells(plane, board.shape)) {
+        if (c.r === coord.r && c.c === coord.c) return 'hit'
+      }
+    }
+    return 'miss'
   }
 
   /** 终局原因：绝地反击 > 超时被接管方落败 > 正常全歼 */
@@ -517,12 +643,14 @@ export class RoomManager {
     room.turnDeadline = null
     this.broadcast(room, 'phaseChange', { phase: 'playing' })
     this.broadcastRoomUpdate(room)
+    if (this.isBlitz(room)) this.startBlitzClock(room)
     this.startTurnFor(room, game.turn)
   }
 
   /**
    * 为某位玩家开启回合（含计时器/机器走棋调度）。
    * 断线中的座位不启动计时，重连时恢复。
+   * blitz 房间忽略 byo-yomi（机会/超时代打/机器接管均不生效），时钟由 blitz tick 单独推进。
    */
   private startTurnFor(room: Room, player: 0 | 1): void {
     const game = room.game
@@ -535,6 +663,13 @@ export class RoomManager {
     if (seat.machineTimer) {
       clearTimeout(seat.machineTimer)
       seat.machineTimer = null
+    }
+    if (this.isBlitz(room)) {
+      // 超快棋：不设 byo-yomi deadline/定时器（机会与超时代打不适用）；回合切换只广播状态 + 时钟
+      room.turnDeadline = null
+      this.emitTurnState(room, player)
+      this.broadcastBlitzClock(room, true)
+      return
     }
     if (seat.machine) {
       // 机器接管席位：500~1200ms 后自动走棋
@@ -654,6 +789,7 @@ export class RoomManager {
     if (room.phase === 'ended') return
     room.phase = 'ended'
     room.gameEndedAt = Date.now()
+    this.stopBlitzClock(room)
     this.clearRoomTimers(room)
     const payload: GameEndPayload = {
       winner,
@@ -664,6 +800,7 @@ export class RoomManager {
       },
       stats: this.computeStats(room),
     }
+    room.endKind = 'gameEnd'
     room.endPayload = payload
     for (const s of room.seats) this.emitToSeat(s, 'gameEnd', payload)
     this.persistGame(room, winner, reason)
@@ -671,6 +808,100 @@ export class RoomManager {
     room.destroyTimer = setTimeout(() => {
       this.rooms.delete(room.code)
     }, this.reconnectGraceMs)
+  }
+
+  /** blitz 时钟归零判负：广播 v0.3.0 事件 gameOver { winner, reason:'blitz-timeout', layouts, stats }，
+   *  清理计时器、落盘（reason 文本 'blitz-timeout'） */
+  private finishBlitzTimeout(room: Room, loser: 0 | 1): void {
+    if (room.phase === 'ended') return
+    const winner = (1 - loser) as 0 | 1
+    room.phase = 'ended'
+    room.gameEndedAt = Date.now()
+    this.stopBlitzClock(room)
+    this.clearRoomTimers(room)
+    const payload = {
+      winner,
+      reason: 'blitz-timeout',
+      layouts: {
+        player0: room.seats[0].fleet ?? [],
+        player1: room.seats[1].fleet ?? [],
+      },
+      stats: this.computeStats(room),
+    }
+    room.endKind = 'gameOver'
+    room.endPayload = payload as unknown as GameEndPayload
+    for (const s of room.seats) this.emitToSeat(s, 'gameOver', payload)
+    this.persistGame(room, winner, 'blitz-timeout')
+    room.destroyTimer = setTimeout(() => {
+      this.rooms.delete(room.code)
+    }, this.reconnectGraceMs)
+  }
+
+  /* ---------------------------------------------------------------- 超快棋（blitz）时钟 */
+
+  /** 开启 blitz 时钟：双方初始各 blitzBaseMsPerPlane × 飞机架数，~250ms 推进当前回合方 */
+  private startBlitzClock(room: Room): void {
+    const base = this.blitzBaseMsPerPlane * room.config.planeCount
+    room.blitzClock = [base, base]
+    room.blitzLastAt = Date.now()
+    room.blitzSecShown = [Math.ceil(base / 1000), Math.ceil(base / 1000)]
+    if (room.blitzTimer) clearInterval(room.blitzTimer)
+    room.blitzTimer = setInterval(() => this.tickBlitz(room), BLITZ_TICK_MS)
+    // 时钟开局即广播一次（双方看到初始剩余）
+    this.broadcastBlitzClock(room, true)
+  }
+
+  /** 时钟推进：当前回合方剩余 -= 真实流逝；归零 → blitz 超时判负 */
+  private tickBlitz(room: Room): void {
+    if (room.phase === 'ended' || !room.blitzClock) {
+      this.stopBlitzClock(room)
+      return
+    }
+    const game = room.game
+    if (!game) return
+    const now = Date.now()
+    const dt = Math.max(0, now - room.blitzLastAt)
+    room.blitzLastAt = now
+    const cur = game.turn
+    const remain = room.blitzClock[cur] - dt
+    room.blitzClock[cur] = remain
+    if (remain <= 0) {
+      this.finishBlitzTimeout(room, cur) // 超时立即判负
+      return
+    }
+    this.broadcastBlitzClock(room, false)
+  }
+
+  private stopBlitzClock(room: Room): void {
+    if (room.blitzTimer) {
+      clearInterval(room.blitzTimer)
+      room.blitzTimer = null
+    }
+  }
+
+  /** 成功报点奖励：给报点方 +ms 并立即广播时钟 */
+  private addBlitzTime(room: Room, player: 0 | 1, ms: number): void {
+    if (!room.blitzClock) return
+    room.blitzClock[player] += ms
+    this.broadcastBlitzClock(room, true)
+  }
+
+  /**
+   * 广播双方剩余时钟：对每个座位发两条 clock:update（{player:'me'} 自己、{player:'them'} 对方），
+   * ms 为该方剩余毫秒（精确值，客户端自行取整显示）。
+   * 节流：仅在整秒值变化时广播（force=true 强制，用于开局/报点奖励/回合切换）。
+   */
+  private broadcastBlitzClock(room: Room, force: boolean): void {
+    if (!room.blitzClock || room.phase === 'ended') return
+    for (const seat of room.seats) {
+      const idx = seat.index
+      const sec = Math.max(0, Math.ceil(room.blitzClock[idx] / 1000))
+      if (!force && sec === room.blitzSecShown[idx]) continue
+      room.blitzSecShown[idx] = sec
+      const other = (1 - idx) as 0 | 1
+      this.emitToSeat(seat, 'clock:update', { player: 'me', ms: Math.max(0, room.blitzClock[idx]) })
+      this.emitToSeat(seat, 'clock:update', { player: 'them', ms: Math.max(0, room.blitzClock[other]) })
+    }
   }
 
   /** 终局统计：回合数/总报点数/命中数（非 miss 即 hit 或 kill）/击毁架数 */
@@ -706,8 +937,9 @@ export class RoomManager {
   /* ---------------------------------------------------------------- 断线 / 重连 */
 
   onDisconnect(socketId: string): void {
-    // 若在匹配队列中则移出
+    // 若在匹配队列/快速匹配等待池中则移出
     this.removeFromMatchQueue(socketId)
+    this.removeFromQuickPool(socketId)
     const found = this.findRoomBySocket(socketId)
     if (!found) return
     const { room, seat } = found
@@ -787,11 +1019,16 @@ export class RoomManager {
       })
     }
     if (room.phase === 'ended') {
-      if (room.endPayload) this.emitToSeat(seat, 'gameEnd', room.endPayload)
+      // 按终局种类回放（常规 gameEnd / v0.3.0 blitz 时钟判负 gameOver）
+      if (room.endPayload) {
+        if (room.endKind === 'gameOver') this.emitToSeat(seat, 'gameOver', room.endPayload)
+        else this.emitToSeat(seat, 'gameEnd', room.endPayload)
+      }
       return { ok: true, you: seat.index }
     }
     this.emitToSeat(seat, 'phaseChange', { phase: this.mapPhase(room) })
     if (room.phase === 'playing' || room.phase === 'counterattack') {
+      if (this.isBlitz(room)) this.broadcastBlitzClock(room, true)
       const current = room.game?.turn
       if (current !== undefined && current === seat.index) {
         if (seat.frozenRemainingMs !== null) {
@@ -840,7 +1077,7 @@ export class RoomManager {
     socketId: string,
     config: unknown,
   ): { ok: true } | { ok: false; error: string } {
-    const parsed = gridConfigSchema.safeParse(config)
+    const parsed = v030ConfigSchema.safeParse(config)
     if (!parsed.success) return { ok: false, error: '棋盘配置非法' }
     const key = this.configKey(parsed.data)
     const presetKeys = Object.values(PRESETS).map((c) => this.configKey(c))
@@ -862,24 +1099,7 @@ export class RoomManager {
         waiting.timer = null
       }
       const code = this.uniqueCode()
-      const room: Room = {
-        code,
-        config: parsed.data,
-        turnLimitMs: parsed.data.turnLimitMs ?? TURN_LIMIT_MS,
-        seats: [this.newSeat(0), this.newSeat(1)],
-        phase: 'waiting',
-        game: null,
-        turnTimer: null,
-        turnDeadline: null,
-        shotLog: [],
-        takeovers: [],
-        wasCounterattack: false,
-        fromMatch: true,
-        gameStartedAt: null,
-        gameEndedAt: null,
-        endPayload: null,
-        destroyTimer: null,
-      }
+      const room = this.buildRoom(code, parsed.data, true)
       this.rooms.set(code, room)
       this.occupySeat(room, 0, waiting.userId, waiting.name, waiting.socketId)
       this.occupySeat(room, 1, userId, name, socketId)
@@ -921,6 +1141,107 @@ export class RoomManager {
     }
   }
 
+  /* ---------------------------------------------------------------- 快速匹配（match:quick，v0.3.0） */
+
+  /** combo 指纹键：同 gridSize/planes/blitz/blind 视为同一档位 */
+  private quickKey(config: V030GameConfig): string {
+    return `${config.width}x${config.height}x${config.planeCount}x${config.blitz ? 1 : 0}x${config.blind ? 1 : 0}`
+  }
+
+  /** 校验并规范化一个 combo → 完整房间配置（标准默认飞机形状）；非法返回 null */
+  private comboToConfig(raw: unknown): V030GameConfig | null {
+    if (typeof raw !== 'object' || raw === null) return null
+    const c = raw as { gridSize?: unknown; planes?: unknown; blitz?: unknown; blind?: unknown }
+    if (typeof c.gridSize !== 'number' || typeof c.planes !== 'number') return null
+    const { gridSize, planes } = c
+    if (!(QUICK_GRID_SIZES as readonly number[]).includes(gridSize)) return null
+    const maxPlanes = Math.floor((gridSize * gridSize) / 25)
+    if (!Number.isInteger(planes) || planes < 1 || planes > maxPlanes) return null
+    return {
+      width: gridSize,
+      height: gridSize,
+      planeCount: planes,
+      shape: DEFAULT_PLANE_SHAPE,
+      blitz: c.blitz === true,
+      blind: c.blind === true,
+    }
+  }
+
+  /**
+   * 快速匹配：请求携带勾选的档位组合（combos）。与等待池任一玩家的组合有交集 →
+   * 取交集 combo 建房并双方广播 room:joined；无交集 → 入池并广播 match:waiting。
+   * 断开连接 / match:cancel 时移出池。
+   */
+  quickMatch(
+    userId: string,
+    name: string,
+    socketId: string,
+    rawCombos: unknown,
+  ): { ok: true } | { ok: false; error: string } {
+    if (!Array.isArray(rawCombos) || rawCombos.length === 0) return { ok: false, error: '缺少匹配选项' }
+    // 兜底：释放残留 waiting/placing 房间；对局中（playing/counterattack）仍拒绝
+    if (!this.releaseStaleRoomOf(userId)) {
+      if (this.roomOfUser(userId)) return { ok: false, error: '您已在其他对局中，请先退出' }
+    }
+    const keys = new Set<string>()
+    const configByKey = new Map<string, V030GameConfig>()
+    for (const raw of rawCombos) {
+      const cfg = this.comboToConfig(raw)
+      if (!cfg) return { ok: false, error: '匹配选项非法' }
+      const k = this.quickKey(cfg)
+      keys.add(k)
+      configByKey.set(k, cfg)
+    }
+    // 扫等待池：先到先配对（移除已断开的陈旧条目）
+    for (let i = 0; i < this.quickPool.length; i++) {
+      const entry = this.quickPool[i] as QuickEntry
+      if (entry.socketId === socketId) continue
+      if (!this.io.sockets.sockets.has(entry.socketId)) {
+        this.quickPool.splice(i, 1)
+        i--
+        continue
+      }
+      const shared = [...entry.keys].find((k) => keys.has(k))
+      if (!shared) continue
+      this.quickPool.splice(i, 1)
+      const cfg = configByKey.get(shared) as V030GameConfig
+      this.buildQuickRoom(cfg, entry, { userId, name, socketId })
+      return { ok: true }
+    }
+    // 无交集：入池等待
+    this.quickPool.push({ socketId, userId, name, keys })
+    this.emitToSocket(socketId, 'match:waiting')
+    return { ok: true }
+  }
+
+  /** 按交集 combo 建房并广播 room:joined（房主 = 先入池者，坐 0 号位） */
+  private buildQuickRoom(
+    config: V030GameConfig,
+    host: { socketId: string; userId: string; name: string },
+    guest: { socketId: string; userId: string; name: string },
+  ): void {
+    const code = this.uniqueCode()
+    const room = this.buildRoom(code, config, true)
+    this.rooms.set(code, room)
+    this.occupySeat(room, 0, host.userId, host.name, host.socketId)
+    this.occupySeat(room, 1, guest.userId, guest.name, guest.socketId)
+    room.phase = 'placing'
+    const joined = { roomCode: code, config } as const
+    this.emitToSocket(host.socketId, 'room:joined', joined)
+    this.emitToSocket(guest.socketId, 'room:joined', joined)
+    this.broadcastRoomUpdate(room)
+  }
+
+  /** 取消快速匹配（match:cancel）：把用户移出等待池 */
+  quickCancel(socketId: string): void {
+    this.removeFromQuickPool(socketId)
+  }
+
+  private removeFromQuickPool(socketId: string): void {
+    const idx = this.quickPool.findIndex((e) => e.socketId === socketId)
+    if (idx >= 0) this.quickPool.splice(idx, 1)
+  }
+
   /** 停止全部计时器（关服/测试收尾） */
   shutdown(): void {
     for (const room of this.rooms.values()) this.clearRoomTimers(room)
@@ -928,6 +1249,7 @@ export class RoomManager {
       for (const e of q) if (e.timer) clearTimeout(e.timer)
     }
     this.matchQueue.clear()
+    this.quickPool.length = 0
     this.rooms.clear()
   }
 }

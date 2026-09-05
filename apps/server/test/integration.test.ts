@@ -52,8 +52,8 @@ class TestClient {
     })
   }
 
-  /** 消费缓存中第一个匹配事件；无则等待新事件（超时报错） */
-  waitFor<T>(event: keyof ServerToClientEvents, pred?: (v: T) => boolean, timeoutMs = 10_000): Promise<T> {
+  /** 消费缓存中第一个匹配事件；无则等待新事件（超时报错）。事件名为字符串，兼容 v0.3.0 扩展事件 */
+  waitFor<T>(event: string, pred?: (v: T) => boolean, timeoutMs = 10_000): Promise<T> {
     const predicate = pred ?? (() => true)
     const deadline = Date.now() + timeoutMs
     return new Promise<T>((resolve, reject) => {
@@ -81,7 +81,7 @@ class TestClient {
   }
 
   /** 已收到的事件历史（不消费） */
-  history<T>(event: keyof ServerToClientEvents): T[] {
+  history<T>(event: string): T[] {
     return (this.buffers.get(event) ?? []) as T[]
   }
 
@@ -105,6 +105,27 @@ function emitAck<T>(socket: TestSocket, event: string, payload?: unknown): Promi
       ;(socket.emit as (ev: string, p: unknown, ack: (r: T) => void) => void)(event, payload, cb)
     }
   })
+}
+
+/** 发送 v0.3.0 扩展事件（不在 shared 类型内）并等待 ack */
+function rawEmit<T>(client: TestClient, event: string, payload?: unknown): Promise<T> {
+  const sock = client.socket as unknown as { emit: (ev: string, ...args: unknown[]) => void }
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`raw ack 超时: ${event}`)), 10_000)
+    const cb = (res: T): void => {
+      clearTimeout(timer)
+      resolve(res)
+    }
+    if (payload === undefined) sock.emit(event, cb)
+    else sock.emit(event, payload, cb)
+  })
+}
+
+/** 发送 v0.3.0 扩展事件（无 ack，fire-and-forget） */
+function rawSend(client: TestClient, event: string, payload?: unknown): void {
+  const sock = client.socket as unknown as { emit: (ev: string, ...args: unknown[]) => void }
+  if (payload === undefined) sock.emit(event)
+  else sock.emit(event, payload)
 }
 
 async function authClient(client: TestClient, token?: string): Promise<GuestIdentity> {
@@ -1054,6 +1075,254 @@ describe('公网匹配（matchmakingTimeoutMs=400ms）', () => {
       expect((await t).status).toBe('timeout')
     } finally {
       c.dispose()
+    }
+  })
+})
+
+/* ---------------------------------------------------------------- v0.3.0 */
+
+/** v0.3.0：blitz 时钟判负终局（gameOver 事件） */
+interface GameOverLike {
+  winner: 0 | 1
+  reason: string
+  layouts: { player0: PlacedPlane[]; player1: PlacedPlane[] }
+  stats: { turnCount: number; shotsFired: number; hitCount: number; killCount: number }
+}
+
+/** v0.3.0：blitz 时钟广播（clock:update） */
+interface ClockUpdateLike {
+  player: 'me' | 'them'
+  ms: number
+}
+
+/** v0.3.0：快速匹配快速匹配入房（room:joined） */
+interface RoomJoinedLike {
+  roomCode: string
+  config: GridConfig
+}
+
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+
+describe('v0.3.0：超快棋 / 盲棋 / 快速匹配', () => {
+  let server: ServerHandle
+  let core: GameCoreApi
+
+  beforeAll(async () => {
+    const resolved = resolveGameCore()
+    core = resolved.core
+    // blitz 每架 400ms → 10×10 三机初始 1.2s，便于快速判负
+    server = await startServer({
+      port: 0,
+      dataDir: ':memory:',
+      roomManagerOptions: { core, blitzBaseMsPerPlane: 400 },
+    })
+  })
+  afterAll(async () => {
+    await server.close()
+  })
+
+  it('超快棋：时钟归零 → 双方收 gameOver(blitz-timeout)；忽略 byo-yomi（无接管/无 gameEnd）', { timeout: 20_000 }, async () => {
+    const a = new TestClient(server.url) // 不报点 → 其时钟耗尽判负
+    const b = new TestClient(server.url)
+    try {
+      await authClient(a)
+      await authClient(b)
+      const config: GridConfig = { ...PRESETS.small, blitz: true }
+      const fleetA = core.generateFleet(config.width, config.height, config.planeCount, config.shape, 'normal', core.mulberry32(111))
+      const fleetB = core.generateFleet(config.width, config.height, config.planeCount, config.shape, 'normal', core.mulberry32(112))
+      const { youA, youB } = await setupRoom(a, b, config, { a: fleetA, b: fleetB })
+      await readyBoth(a, b)
+
+      // 若 B 先手：B 报一个空格把回合交给 A（保证是 A 的时钟耗尽）
+      const tsA = await a.waitFor<{ yourTurn: boolean }>('turnStart')
+      if (!tsA.yourTurn) {
+        const empty = findEmptyCell(fleetA, fleetB, config.shape, config.width, config.height)
+        const r = await emitAck<{ ok: boolean; error?: string }>(b.socket, 'shoot', { coord: empty })
+        expect(r.ok).toBe(true)
+      }
+
+      const goAP = a.waitFor<GameOverLike>('gameOver', undefined, 10_000)
+      const goBP = b.waitFor<GameOverLike>('gameOver', undefined, 10_000)
+      const [goA, goB] = await Promise.all([goAP, goBP])
+      expect(goA.reason).toBe('blitz-timeout')
+      expect(goA.winner).toBe(youB) // A 时钟耗尽 → B 胜
+      expect(goB.reason).toBe('blitz-timeout')
+      expect(goB.winner).toBe(youB)
+      // 双方都收到过 clock:update（me/them）
+      const clockA = a.history<ClockUpdateLike>('clock:update')
+      const clockB = b.history<ClockUpdateLike>('clock:update')
+      expect(clockA.length).toBeGreaterThan(0)
+      expect(clockB.length).toBeGreaterThan(0)
+      expect(clockA.some((c) => c.player === 'me' && c.ms >= 0)).toBe(true)
+      expect(clockA.some((c) => c.player === 'them' && c.ms >= 0)).toBe(true)
+      // 忽略 byo-yomi：无机器接管、无常规 gameEnd
+      expect(a.history('machineTakeover')).toHaveLength(0)
+      expect(a.history<{ reason: string }>('gameEnd')).toHaveLength(0)
+      // gameOver 携带双方真实阵型
+      expect(goA.layouts.player0).toEqual(fleetA)
+      expect(goA.layouts.player1).toEqual(fleetB)
+      void youA
+    } finally {
+      a.dispose()
+      b.dispose()
+    }
+  })
+
+  it('盲棋：重复报点被接受（非 already-shot），回合正常轮换', { timeout: 15_000 }, async () => {
+    const a = new TestClient(server.url)
+    const b = new TestClient(server.url)
+    try {
+      await authClient(a)
+      await authClient(b)
+      const config: GridConfig = { ...PRESETS.small, blind: true }
+      const fleetA = core.generateFleet(config.width, config.height, config.planeCount, config.shape, 'normal', core.mulberry32(121))
+      const fleetB = core.generateFleet(config.width, config.height, config.planeCount, config.shape, 'normal', core.mulberry32(122))
+      const { youA, youB } = await setupRoom(a, b, config, { a: fleetA, b: fleetB })
+      await readyBoth(a, b)
+
+      const tsA = await a.waitFor<{ yourTurn: boolean }>('turnStart')
+      const first = tsA.yourTurn ? a : b
+      const second = tsA.yourTurn ? b : a
+      const secondIndex = tsA.yourTurn ? youB : youA
+      void youB
+      void youA
+
+      // 先手报空格 X → ok
+      const x = findEmptyCell(fleetA, fleetB, config.shape, config.width, config.height)
+      const s1 = await emitAck<{ ok: boolean; error?: string }>(first.socket, 'shoot', { coord: x })
+      expect(s1.ok).toBe(true)
+      // 后手报另一空格 Y → ok
+      await second.waitFor<{ yourTurn: boolean }>('turnStart', (p) => p.yourTurn)
+      const y = findEmptyCellExcluding(fleetA, fleetB, config.shape, config.width, config.height, new Set([`${x.r},${x.c}`]))
+      const s2 = await emitAck<{ ok: boolean; error?: string }>(second.socket, 'shoot', { coord: y })
+      expect(s2.ok).toBe(true)
+      // 先手回合：重复报 X → 应被接受（盲棋取消 already-shot 拒绝），outcome miss（空格）
+      await first.waitFor<{ yourTurn: boolean }>('turnStart', (p) => p.yourTurn)
+      const dup = await emitAck<{ ok: boolean; error?: string }>(first.socket, 'shoot', { coord: x })
+      expect(dup.ok).toBe(true)
+      // 双方收到重复报点的 shotResult
+      const firstShot = await first.waitFor<ShotResultPayload>(
+        'shotResult',
+        (p) => p.by === 'you' && p.coord.r === x.r && p.coord.c === x.c && p.outcome === 'miss',
+        5_000,
+      )
+      const secondShot = await second.waitFor<ShotResultPayload>(
+        'shotResult',
+        (p) => p.by === 'opponent' && p.coord.r === x.r && p.coord.c === x.c && p.outcome === 'miss',
+        5_000,
+      )
+      expect(firstShot.outcome).toBe('miss')
+      expect(secondShot.outcome).toBe('miss')
+      // 回合轮换回后手
+      await second.waitFor<{ yourTurn: boolean }>('turnStart', (p) => p.yourTurn, 5_000)
+      // 收尾：后手投降 → gameEnd，胜者为先手
+      const endAP = a.waitFor<GameEndPayload>('gameEnd', undefined, 5_000)
+      const endBP = b.waitFor<GameEndPayload>('gameEnd', undefined, 5_000)
+      second.socket.emit('resign')
+      const [endA, endB] = await Promise.all([endAP, endBP])
+      expect(endA.reason).toBe('resign')
+      expect(endA.winner).toBe(secondIndex === youB ? youA : youB)
+      void endB
+      void first
+    } finally {
+      a.dispose()
+      b.dispose()
+    }
+  })
+
+  it('match:quick：有组合交集 → 双方 room:joined 同一房间（交集档位）', { timeout: 10_000 }, async () => {
+    const a = new TestClient(server.url)
+    const b = new TestClient(server.url)
+    try {
+      await authClient(a)
+      await authClient(b)
+      // A 先入池（勾选小+中）；B 再入池（只勾小 → 交集=小）
+      const waitingAP = a.waitFor<void>('match:waiting')
+      const ackA = await rawEmit<{ ok: boolean; error?: string }>(a, 'match:quick', {
+        combos: [
+          { gridSize: 10, planes: 3, blitz: false, blind: false },
+          { gridSize: 15, planes: 5, blitz: false, blind: false },
+        ],
+      })
+      expect(ackA.ok).toBe(true)
+      await waitingAP
+
+      const joinedAP = a.waitFor<RoomJoinedLike>('room:joined', undefined, 5_000)
+      const joinedBP = b.waitFor<RoomJoinedLike>('room:joined', undefined, 5_000)
+      const ackB = await rawEmit<{ ok: boolean; error?: string }>(b, 'match:quick', {
+        combos: [{ gridSize: 10, planes: 3, blitz: false, blind: false }],
+      })
+      expect(ackB.ok).toBe(true)
+      const [joinedA, joinedB] = await Promise.all([joinedAP, joinedBP])
+      expect(joinedA.roomCode).toBe(joinedB.roomCode)
+      expect(joinedA.roomCode).toMatch(/^[A-Z0-9]{6}$/)
+      expect(joinedA.config.width).toBe(10)
+      expect(joinedA.config.height).toBe(10)
+      expect(joinedA.config.planeCount).toBe(3)
+      expect(joinedA.config.blitz).toBe(false)
+      expect(joinedA.config.blind).toBe(false)
+      // 双方已在同一 placing 房间
+      const ruA = await a.waitFor<RoomUpdate>('roomUpdate', (r) => r.players.length === 2, 3_000)
+      expect(ruA.code).toBe(joinedA.roomCode)
+      void joinedB
+      a.socket.emit('leaveRoom')
+      b.socket.emit('leaveRoom')
+    } finally {
+      a.dispose()
+      b.dispose()
+    }
+  })
+
+  it('match:cancel：取消后不再与池中玩家配对', { timeout: 10_000 }, async () => {
+    const a = new TestClient(server.url)
+    const b = new TestClient(server.url)
+    try {
+      await authClient(a)
+      await authClient(b)
+      const combo = { gridSize: 10, planes: 3, blitz: false, blind: false }
+      const waitingAP = a.waitFor<void>('match:waiting')
+      await rawEmit(a, 'match:quick', { combos: [combo] })
+      await waitingAP
+      rawSend(a, 'match:cancel')
+      // B 随后入同组合 → 不应与已取消的 A 配对，应收到 match:waiting
+      const waitingBP = b.waitFor<void>('match:waiting', undefined, 3_000)
+      const ackB = await rawEmit<{ ok: boolean; error?: string }>(b, 'match:quick', { combos: [combo] })
+      expect(ackB.ok).toBe(true)
+      await waitingBP
+      await sleep(800)
+      expect(b.history<RoomJoinedLike>('room:joined')).toHaveLength(0)
+      rawSend(b, 'match:cancel')
+    } finally {
+      a.dispose()
+      b.dispose()
+    }
+  })
+
+  it('配置校验：blitz/blind 非布尔被拒；match:quick 非法组合被拒', { timeout: 10_000 }, async () => {
+    const a = new TestClient(server.url)
+    const b = new TestClient(server.url)
+    try {
+      await authClient(a)
+      await authClient(b)
+      // createRoom：blitz 传字符串 → 棋盘配置非法
+      const bad = await emitAck<{ roomCode?: string; error?: string }>(a.socket, 'createRoom', {
+        config: { ...PRESETS.small, blitz: 'yes' as unknown as boolean },
+      })
+      expect(bad.roomCode).toBeUndefined()
+      expect(bad.error).toContain('非法')
+      // match:quick：非法 gridSize
+      const q1 = await rawEmit<{ ok: boolean; error?: string }>(b, 'match:quick', {
+        combos: [{ gridSize: 99, planes: 3, blitz: false, blind: false }],
+      })
+      expect(q1.ok).toBe(false)
+      expect(q1.error).toContain('非法')
+      // match:quick：空 combos
+      const q2 = await rawEmit<{ ok: boolean; error?: string }>(b, 'match:quick', { combos: [] })
+      expect(q2.ok).toBe(false)
+      expect(q2.error).toContain('缺少')
+    } finally {
+      a.dispose()
+      b.dispose()
     }
   })
 })

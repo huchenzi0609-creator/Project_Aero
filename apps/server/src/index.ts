@@ -196,6 +196,37 @@ function wireSocketEvents(io: ServerIO, roomManager: RoomManager, identityServic
     socket.on('disconnect', () => {
       roomManager.onDisconnect(socket.id)
     })
+
+    /* -------- v0.3.0 扩展事件（shared 事件类型尚未包含，契约见 docs/online-protocol-v030.md） -------- */
+
+    // 泛化监听器：接收 string 事件名（socket.io 类型化 on 只认 shared 键，这里 cast 到 string 通道）
+    type ExtAck = (res: { ok: boolean; error?: string }) => void
+    const rawOn = (
+      ev: string,
+      listener: (payload: unknown, ack?: ExtAck) => void,
+    ): void => {
+      const adapted: (...args: unknown[]) => void = (...args) => {
+        const ack = args[1]
+        if (typeof ack === 'function') listener(args[0], ack as ExtAck)
+        else listener(args[0])
+      }
+      const s = socket as unknown as { on: (e: string, l: (...args: unknown[]) => void) => void }
+      s.on(ev, adapted)
+    }
+    // 快速匹配进入（payload { combos }；ack 即时校验结果，配对结果经 match:waiting / room:joined 异步通知）
+    rawOn('match:quick', (payload, ack) => {
+      if (!socket.data.userId) {
+        ack?.({ ok: false, error: '请先认证身份' })
+        return
+      }
+      const combos = (payload as { combos?: unknown } | undefined)?.combos
+      const res = roomManager.quickMatch(socket.data.userId, socket.data.userName ?? '游客', socket.id, combos)
+      ack?.(res.ok ? { ok: true } : { ok: false, error: res.error })
+    })
+    // 取消快速匹配
+    rawOn('match:cancel', () => {
+      roomManager.quickCancel(socket.id)
+    })
   })
 }
 

@@ -34,6 +34,8 @@ export interface GameCoreApi {
     planes: PlacedPlane[],
   ): { ok: true; state: GameState } | { ok: false; errors: string[] }
   applyShot(state: GameState, coord: Cell): ShotResult
+  /** 摆放后占据的绝对格位（旋转 + origin 平移）——盲棋重复报点旁路裁决用 */
+  occupiedCells(plane: PlacedPlane, shape: PlaneShape): Cell[]
   chooseShot(knowledge: ShotKnowledge, difficulty: Difficulty, rng: Rng): Cell
   generateFleet(
     width: number,
@@ -52,6 +54,7 @@ export const realGameCore: GameCoreApi = {
   createGame: engine.createGame,
   setFleet: engine.setFleet,
   applyShot: engine.applyShot,
+  occupiedCells: engine.occupiedCells,
   chooseShot: ai.chooseShot,
   generateFleet: ai.generateFleet,
   mulberry32: ai.mulberry32,
