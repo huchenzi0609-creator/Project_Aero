@@ -15,15 +15,6 @@ export function watchErrors(page: Page): () => string[] {
   return () => errs
 }
 
-/**
- * 已知产品缺陷过滤（QA 报告而非 e2e 阻断）：对已报点格再次点击（报点被拒分支）
- * 会让 PaperGrid 在若干重新渲染帧中出现 React 重复 key 警告（见 QA 缺陷清单 #R1）。
- * 相关用例用 filterKnownReactKeyWarnings 收敛后仍断言其余控制台零报错。
- */
-export function filterKnownReactKeyWarnings(errs: string[]): string[] {
-  return errs.filter((e) => !(e.includes('same key') && e.includes('PaperGrid')))
-}
-
 /** 生成 width×height 棋盘全部坐标（行优先，A1 起始），与 formatCoord 一致 */
 export function allCoords(width = 10, height = 10): string[] {
   const out: string[] = []

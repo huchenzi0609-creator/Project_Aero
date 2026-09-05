@@ -13,7 +13,6 @@ import {
   allCoords,
   bothReadyOnline,
   createRoomHost,
-  filterKnownReactKeyWarnings,
   joinRoomByCode,
   oppCell,
   startSingleSmallGame,
@@ -119,8 +118,8 @@ test.describe('v0.3.0 经典回归', () => {
     // 已报点格不会产生预报点
     await expect(page.locator('.game__opp .prefire-mark')).toHaveCount(0)
 
-    // 缺陷 R1：重复报点被拒分支触发 PaperGrid React 重复 key 警告（产品缺陷，单独报告）；其余报错仍为零
-    expect(filterKnownReactKeyWarnings(errs())).toEqual([])
+    // R1 已修复（8920e87）：重复报点被拒分支不再产生 React key 警告 → 控制台零容忍
+    expect(errs()).toEqual([])
   })
 })
 
