@@ -1,0 +1,163 @@
+/* ============================================================
+   v0.3.0 共享组件样式：BlitzClock / PreFireMark
+   + 练习模式页（PracticeMenu）与主页新菜单的少量布局
+   单位沿用 stage 契约（cqw/cqh，container-type:size 由 stage.css 提供）
+   ============================================================ */
+
+/* ---------- BlitzClock（超快棋倒计时） ---------- */
+
+.blitz-clock {
+  display: inline-flex;
+  align-items: baseline;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: clamp(16px, 3.2cqw, 26px);
+  line-height: 1.2;
+  min-width: 2.6em;
+  text-align: center;
+  color: var(--ink);
+  letter-spacing: 0.04em;
+}
+.blitz-clock--active {
+  color: var(--ink);
+}
+.blitz-clock--idle {
+  color: var(--ink-faint);
+}
+/* 剩余 <10s：标红 + 轻微闪烁 */
+.blitz-clock--danger {
+  color: var(--kill-red);
+  animation: blitzClockBlink 1s step-end infinite;
+}
+@keyframes blitzClockBlink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+/* ---------- PreFireMark（深红「?」预报点） ---------- */
+
+.prefire-mark {
+  color: var(--kill-red);
+  display: block;
+}
+.prefire-mark text {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+/* ---------- 练习模式 PracticeMenu ---------- */
+
+.practice {
+  max-width: 920px;
+  width: 100%;
+  margin: 0 auto;
+}
+.practice__cards {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+}
+.practice__mode-card {
+  width: 100%;
+  justify-content: flex-start;
+  gap: 14px;
+  text-align: left;
+  padding: 14px 16px;
+}
+.practice__badge {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  font-size: 22px;
+  font-weight: 600;
+  background: var(--paper-sheet-2);
+  border: 1.5px solid var(--pencil);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7), 0 2px 4px rgba(84, 66, 38, 0.2);
+}
+.practice__badge--classic {
+  color: var(--ink);
+}
+.practice__badge--blitz {
+  color: var(--kill-red);
+  border-color: rgba(168, 54, 47, 0.5);
+}
+.practice__badge--blind {
+  color: var(--hit-green);
+  border-color: rgba(47, 107, 79, 0.5);
+}
+.practice__badge--custom {
+  color: #4a6382;
+  border-color: rgba(74, 99, 130, 0.5);
+}
+.practice__mode-label {
+  display: block;
+  font-size: 19px;
+}
+.practice__mode-sub {
+  display: block;
+  font-size: 13px;
+  color: var(--ink-soft);
+  margin-top: 2px;
+  line-height: 1.5;
+}
+
+/* 尺寸 + AI 难度（经典 / 超快棋 / 盲棋共用） */
+.practice__setup {
+  max-width: 640px;
+  width: 100%;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.practice__setup-note {
+  font-size: 13px;
+  color: var(--ink-soft);
+  margin: 4px 0 0;
+}
+.practice__size-cards {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+}
+.practice__size-card {
+  width: 100%;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  text-align: left;
+  padding: 12px 14px;
+}
+.practice__size-label {
+  font-size: 17px;
+}
+.practice__size-sub {
+  font-size: 12.5px;
+  color: var(--ink-soft);
+}
+.practice__setup-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-top: 6px;
+}
+
+/* ---------- 主页：教程占位弹窗说明区 ---------- */
+
+.home__tutorial-note {
+  font-size: 14px;
+  color: var(--ink-soft);
+  line-height: 1.7;
+}

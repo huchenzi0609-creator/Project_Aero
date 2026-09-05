@@ -1,8 +1,11 @@
+import { useState } from 'react'
 import { useAppStore } from '../store/appStore'
 import { useGuestStore } from '../store/guestStore'
 import { useEffectiveOrientation } from '../hooks/useOrientation'
 import { PaperButton } from '../components/ui/PaperButton'
+import { PaperModal } from '../components/ui/PaperModal'
 import { OrientationToggle } from '../components/OrientationToggle'
+import { PracticeMenu } from './PracticeMenu'
 
 /** 折纸飞机小涂鸦 + 虚线航迹（签名元素） */
 function PaperPlaneDoodle() {
@@ -39,10 +42,37 @@ function PencilUnderline() {
   )
 }
 
+/** 教程占位弹窗（M8 完工前） */
+function TutorialPlaceholder({ open, onClose }: { open: boolean; onClose: () => void }) {
+  return (
+    <PaperModal
+      open={open}
+      title="新手教程"
+      onClose={onClose}
+      footer={
+        <PaperButton variant="primary" onClick={onClose}>
+          知道了
+        </PaperButton>
+      }
+    >
+      <p className="home__tutorial-note">
+        教程制作中——正式版将分「基础 · 摆阵 / 对战」与「进阶 · 工具」两段引导你上手。
+      </p>
+    </PaperModal>
+  )
+}
+
 export function Home() {
   const orientation = useEffectiveOrientation()
   const setView = useAppStore((s) => s.setView)
   const guestName = useGuestStore((s) => s.name)
+  // 练习模式面板（挂在本视图内；将来 view 层加 'practice' 路由后可由 setView 接管）
+  const [panel, setPanel] = useState<'root' | 'practice'>('root')
+  const [tutorialOpen, setTutorialOpen] = useState(false)
+
+  if (panel === 'practice') {
+    return <PracticeMenu onExit={() => setPanel('root')} />
+  }
 
   return (
     <div className={`page home home--${orientation}`}>
@@ -61,11 +91,14 @@ export function Home() {
           <PencilUnderline />
         </section>
         <nav className="home__menu" aria-label="主菜单">
-          <PaperButton size="lg" onClick={() => setView('single')}>
-            单人对局
+          <PaperButton size="lg" onClick={() => setTutorialOpen(true)}>
+            新手教程
+          </PaperButton>
+          <PaperButton size="lg" onClick={() => setPanel('practice')}>
+            练习模式
           </PaperButton>
           <PaperButton size="lg" onClick={() => setView('online')}>
-            联机对战
+            对战模式
           </PaperButton>
           <PaperButton size="lg" onClick={() => setView('settings')}>
             设置
@@ -77,8 +110,10 @@ export function Home() {
         <button type="button" className="link-btn" onClick={() => setView('rules')}>
           规则说明
         </button>
-        <span className="home__version">v0.2.10</span>
+        <span className="home__version">v0.3.0</span>
       </footer>
+
+      <TutorialPlaceholder open={tutorialOpen} onClose={() => setTutorialOpen(false)} />
     </div>
   )
 }

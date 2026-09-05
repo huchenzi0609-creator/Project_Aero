@@ -1,5 +1,10 @@
 /**
  * ColoringTool —— 对局工具（v0.2.2，单机 + 联机）：着色 + 样式参考飞机拖拽。
+ * v0.3.0：新增幽灵飞机（ghostRects）着色支持 —— useColoring(opts) 增补
+ * `paintAt` 入口：着色模式下点/拖到幽灵飞机占据格 → 整架批量着色（语义与放置副本
+ * 一致：同色=整机还原未染色，异色=整机染当前色）；开启快捷着色（quickColor，默认
+ * 读 settingsStore.quickColor = true）且整机被着色时，额外回调 onGhostBatch(id, cells)
+ * —— 组件只发事件，页面据此退出着色模式并回收幽灵（页面端 ghost 状态管理属 M4/M6）。
  *
  * - useColoring：着色状态 hook（色块列表 / 模式开关 / 当前颜色 / 调色板开关），
  *   每局独立、新对局由调用方 reset 清空，不持久化。
@@ -18,6 +23,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Cell, PlaneShape, PlacedPlane, Rotation, Shot } from '@aero/shared'
 import { boundingBox, occupiedCells, rotateShape } from '@aero/game-core'
 import { cellsBBox } from '../../lib/shape'
+import { useSettingsStore } from '../../store/settingsStore'
 import '../../styles/coloring.css'
 
 export type ColoringColor = 'yellow' | 'blue' | 'green'
@@ -35,6 +41,43 @@ export const COLORING_COLORS: ReadonlyArray<{ color: ColoringColor; label: strin
   { color: 'blue', label: '蓝色' },
   { color: 'green', label: '绿色' },
 ]
+
+/* ============================================================
+   幽灵飞机（v0.3.0）：ghostRects / quickColor / onGhostBatch
+   ============================================================ */
+
+/** 幽灵飞机：id + 占据的全部棋盘格位（含机身与机头；生命周期由页面端维护，组件只读） */
+export interface GhostRect {
+  id: string
+  cells: Cell[]
+}
+
+/** useColoring 的 v0.3.0 幽灵着色选项（页面端传入） */
+export interface GhostColoringOptions {
+  /** 当前在场的幽灵飞机占据格列表（可选；缺省关闭幽灵着色逻辑） */
+  ghostRects?: readonly GhostRect[]
+  /** 快捷着色：整机被着色后是否请求页面回收幽灵；缺省读 settingsStore.quickColor（默认 true） */
+  quickColor?: boolean
+  /**
+   * 幽灵飞机被整机批量【着色】后的回调（组件只发事件）。
+   * 页面据此退出着色模式并消灭该幽灵飞机；同一幽灵可能在一条拖拽路径中被命中多次，
+   * 回调按 id 幂等处理即可（页面移除幽灵后 ghostRects 会随之更新）。
+   * 注意：与放置副本批量着色一致，整机【擦除】还原为未染色时【不】触发本回调。
+   */
+  onGhostBatch?: (id: string, cells: Cell[]) => void
+}
+
+/** 返回覆盖该格位的幽灵飞机（无则 null） */
+export function ghostRectAt(
+  ghostRects: readonly GhostRect[] | undefined,
+  coord: Cell,
+): GhostRect | null {
+  if (!ghostRects) return null
+  for (const g of ghostRects) {
+    if (g.cells.some((c) => c.r === coord.r && c.c === coord.c)) return g
+  }
+  return null
+}
 
 function clamp(v: number, lo: number, hi: number): number {
   return Math.min(hi, Math.max(lo, v))
@@ -54,11 +97,20 @@ export interface ColoringState {
   paintCell: (coord: Cell, brush: PaintBrush) => void
   /** 整机批量染/擦：hitColor 与当前色相同 → 整机还原为未染色；否则整机染当前色（覆盖） */
   paintPlane: (planeCells: Cell[], hitColor: ColoringColor | null) => void
+  /**
+   * v0.3.0 着色入口（建议作为 PaperGrid `coloring.onPaint` 的实参）：
+   * 坐标命中幽灵飞机（ghostRects）时执行整机批量染/擦（paintPlane 语义）；
+   * 若快捷着色开启且整机被着色，再回调 onGhostBatch(id, cells)（由页面回收幽灵）。
+   * 未命中幽灵时与 paintCell 完全一致。
+   */
+  paintAt: (coord: Cell, brush: PaintBrush) => void
   /** 新对局清空（每局独立） */
   reset: () => void
 }
 
-export function useColoring(): ColoringState {
+export function useColoring(options?: GhostColoringOptions): ColoringState {
+  const settingsQuickColor = useSettingsStore((s) => s.quickColor)
+  const { ghostRects, quickColor = settingsQuickColor, onGhostBatch } = options ?? {}
   const [coloredCells, setColoredCells] = useState<ColoredCell[]>([])
   const [coloringMode, setColoringMode] = useState(false)
   const [currentColor, setCurrentColor] = useState<ColoringColor>('yellow')
@@ -78,18 +130,37 @@ export function useColoring(): ColoringState {
     })
   }
 
+  /** 整机批量染/擦核心（与 paintPlane 同一语义，供放置副本与幽灵共用） */
+  const applyPlane = (prev: ColoredCell[], planeCells: Cell[], hitColor: ColoringColor | null): ColoredCell[] => {
+    const inPlane = (c: ColoredCell) =>
+      planeCells.some((pc) => pc.r === c.coord.r && pc.c === c.coord.c)
+    if (hitColor === currentColor) {
+      // 命中格同色 → 整机还原为未染色
+      return prev.filter((c) => !inPlane(c))
+    }
+    // 命中格异色/未染色 → 整机染当前色（覆盖）
+    const without = prev.filter((c) => !inPlane(c))
+    return [...without, ...planeCells.map((pc) => ({ coord: pc, color: currentColor }))]
+  }
+
   const paintPlane = (planeCells: Cell[], hitColor: ColoringColor | null) => {
-    setColoredCells((prev) => {
-      const inPlane = (c: ColoredCell) =>
-        planeCells.some((pc) => pc.r === c.coord.r && pc.c === c.coord.c)
-      if (hitColor === currentColor) {
-        // 命中格同色 → 整机还原为未染色
-        return prev.filter((c) => !inPlane(c))
-      }
-      // 命中格异色/未染色 → 整机染当前色（覆盖）
-      const without = prev.filter((c) => !inPlane(c))
-      return [...without, ...planeCells.map((pc) => ({ coord: pc, color: currentColor }))]
-    })
+    setColoredCells((prev) => applyPlane(prev, planeCells, hitColor))
+  }
+
+  const paintAt = (coord: Cell, brush: PaintBrush) => {
+    const ghost = ghostRectAt(ghostRects, coord)
+    if (!ghost) {
+      paintCell(coord, brush)
+      return
+    }
+    const hit =
+      coloredCells.find((c) => c.coord.r === coord.r && c.coord.c === coord.c)?.color ?? null
+    const painting = brush === 'paint' && hit !== currentColor
+    setColoredCells((prev) => applyPlane(prev, ghost.cells, hit))
+    // 快捷着色：整机被着色 → 通知页面回收幽灵（擦除不回收）
+    if (quickColor && painting && onGhostBatch) {
+      onGhostBatch(ghost.id, ghost.cells)
+    }
   }
 
   const selectColor = (color: ColoringColor) => {
@@ -114,6 +185,7 @@ export function useColoring(): ColoringState {
     toggleMode: () => setColoringMode((m) => !m),
     paintCell,
     paintPlane,
+    paintAt,
     reset,
   }
 }

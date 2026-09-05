@@ -48,6 +48,9 @@ export function CustomConfig({ mode = 'single' }: { mode?: 'single' | 'online' }
   const [planeText, setPlaneText] = useState('3')
   const [useDefault, setUseDefault] = useState(true)
   const [allowMoveRefPlane, setAllowMoveRefPlane] = useState(true)
+  // v0.3.0 单机规则开关（写入 GridConfig.blitz/blind，与 game-core 新字段同名，可独立开启）
+  const [blitzMode, setBlitzMode] = useState(false)
+  const [blindMode, setBlindMode] = useState(false)
   // 联机每步限时（毫秒字符串）；默认 30 秒，仅联机自定义房间使用
   const [turnLimitMs, setTurnLimitMs] = useState<string>(String(TURN_LIMIT_MS))
   const [cells, setCells] = useState<Cell[]>([])
@@ -120,10 +123,13 @@ export function CustomConfig({ mode = 'single' }: { mode?: 'single' | 'online' }
   }
 
   function confirm() {
-    // 联机自定义房间携带每步限时（单机无计时概念，不带该字段）
+    // 联机自定义房间携带每步限时（单机无计时概念，不带该字段）。
+    // 单机携带 v0.3.0 规则标记 blitz/blind（始终写入：false 即关闭，键名与 game-core 新字段一致）。
+    const base: GridConfig = { width, height, planeCount, shape, allowMoveRefPlane }
+    const modeFlags: { blitz: boolean; blind: boolean } = { blitz: blitzMode, blind: blindMode }
     const config: GridConfig = isOnline
-      ? { width, height, planeCount, shape, allowMoveRefPlane, turnLimitMs: Number(turnLimitMs) }
-      : { width, height, planeCount, shape, allowMoveRefPlane }
+      ? { ...base, turnLimitMs: Number(turnLimitMs) }
+      : { ...base, ...modeFlags }
     if (isOnline) {
       if (busy) return
       setBusy(true)
@@ -265,6 +271,31 @@ export function CustomConfig({ mode = 'single' }: { mode?: 'single' | 'online' }
               onChange={setAllowMoveRefPlane}
             />
           </div>
+
+          {/* v0.3.0：单机规则开关（超快棋 / 盲棋，可独立开启，二者可同开） */}
+          {!isOnline ? (
+            <>
+              <div className="custom__toggle-row">
+                <PaperToggle
+                  label="超快棋模式"
+                  description="开局倒计时 10×n 秒，超时判负。"
+                  checked={blitzMode}
+                  onChange={setBlitzMode}
+                />
+              </div>
+              <div className="custom__toggle-row">
+                <PaperToggle
+                  label="盲棋模式"
+                  description="双方不记旧报点，禁用参考飞机与着色。"
+                  checked={blindMode}
+                  onChange={setBlindMode}
+                />
+              </div>
+              {blindMode && allowMoveRefPlane ? (
+                <p className="custom__hint">盲棋模式下「允许移动参考飞机」将自动失效。</p>
+              ) : null}
+            </>
+          ) : null}
 
           {isOnline ? (
             <div className="custom__field">
