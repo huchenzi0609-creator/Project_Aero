@@ -12,6 +12,7 @@ import { useToastStore } from '../store/toastStore'
 import { useGameStore } from '../store/gameStore'
 import { useAppStore } from '../store/appStore'
 import { PaperButton } from '../components/ui/PaperButton'
+import { PaperModal } from '../components/ui/PaperModal'
 import { FleetPlacementBoard, fleetCheckState } from '../components/placement/FleetPlacementBoard'
 import { useSteps } from './stepMachine'
 import type { TutorialStep } from './stepMachine'
@@ -45,6 +46,7 @@ export function TutorialPlacement({
   const { width, height, planeCount } = config
 
   const [grid, setGrid] = useState<PlacedPlane[]>([])
+  const [skipOpen, setSkipOpen] = useState(false)
   const step = useSteps(T1_STEPS)
 
   /* ---------- 事件桥（与 Placement 一致的增量语义） ---------- */
@@ -152,9 +154,34 @@ export function TutorialPlacement({
           showHint={!stepWait}
           onClick={() => step.click()}
           skipLabel="跳过单元"
-          onSkip={() => onDone(grid)} // 跳过摆阵：以当前（可能部分）阵型容错——不足则父级随机补齐
+          onSkip={() => setSkipOpen(true)}
         />
       ) : null}
+
+      {/* 跳过确认（ui-copy §4）：确认 = 以当前（可能部分）阵型跳入单元2——不足父级随机补齐 */}
+      <PaperModal
+        open={skipOpen}
+        title="新手教程"
+        onClose={() => setSkipOpen(false)}
+        footer={
+          <>
+            <PaperButton variant="ghost" onClick={() => setSkipOpen(false)}>
+              取消
+            </PaperButton>
+            <PaperButton
+              variant="danger"
+              onClick={() => {
+                setSkipOpen(false)
+                onDone(grid)
+              }}
+            >
+              确认
+            </PaperButton>
+          </>
+        }
+      >
+        <p style={{ margin: 0 }}>确认跳过当前单元？</p>
+      </PaperModal>
     </div>
   )
 }
