@@ -7,17 +7,16 @@
  * - machineTakeover 横幅；对手断线 60s 倒计时横幅与恢复；我方断线自动重连横幅；
  * - 投降按钮（二次确认）；gameEnd 结算页复用 M4 布局（胜负+双方真实阵型+stats）。
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { Cell, PlaneShape, PlacedPlane, Shot } from '@aero/shared'
 import { DEFAULT_PLANE_SHAPE } from '@aero/shared'
-import { boundingBox, formatCoord, inBounds, killEfficiencyStats, parseCoord, rotateShape } from '@aero/game-core'
+import { boundingBox, formatCoord, inBounds, killEfficiencyStats, occupiedCells, parseCoord, rotateShape } from '@aero/game-core'
 import { useAppStore } from '../store/appStore'
 import { useOnlineStore } from '../store/onlineStore'
 import { useGuestStore } from '../store/guestStore'
 import { useSettingsStore } from '../store/settingsStore'
 import { useToastStore } from '../store/toastStore'
 import { connectClient, onV030, v030Api } from '../online/client'
-import type { GridConfigV030 } from '../online/protocol'
 import { BlitzClock } from '../components/v030/BlitzClock'
 import { PreFireMark } from '../components/v030/PreFireMark'
 import { blindVisibleMarks } from '../components/v030/BlindMarks'
@@ -37,6 +36,7 @@ import {
   refShotsFor,
   useColoring,
   useRefPlanes,
+  type GhostRect,
 } from '../components/grid/ColoringTool'
 
 const OUTCOME_TEXT: Record<string, string> = {
@@ -95,10 +95,9 @@ export function OnlineGame() {
   const socketStatus = useOnlineStore((s) => s.socketStatus)
   const sessionError = useOnlineStore((s) => s.sessionError)
 
-  // v0.3 模式（房间 config 携带；经典 = 双 false）
-  const modeCfg = config as GridConfigV030 | null
-  const modeBlitz = modeCfg?.blitz === true
-  const modeBlind = modeCfg?.blind === true
+  // v0.3 模式（shared GridConfig 携带 blitz/blind；经典 = 双 false）
+  const modeBlitz = config?.blitz === true
+  const modeBlind = config?.blind === true
   const roomCode = room?.code ?? ''
 
   /* ---------- v0.3 连接 / 时钟 / 预报点 / 快捷着色 ---------- */
@@ -141,14 +140,6 @@ export function OnlineGame() {
     setBlitzLoseNotice(false)
   }, [roomCode])
 
-  // 快捷着色开关（设置项由「设置」侧新增并持久化，default true；落地前读取缺省）
-  interface SettingsV030Like {
-    quickColor?: boolean
-  }
-  const quickColor = useSettingsStore(
-    (s) => (s as unknown as SettingsV030Like).quickColor ?? true,
-  )
-
   const [highlight, setHighlight] = useState<Cell | null>(null)
   const [input, setInput] = useState('')
   const [flash, setFlash] = useState<Cell | null>(null)
@@ -163,8 +154,17 @@ export function OnlineGame() {
   const oppBoardRef = useRef<HTMLDivElement | null>(null)
   const refAreaRef = useRef<HTMLElement | null>(null)
 
-  /* ---------- 着色工具（每局独立：新房间 / 终局时清空） ---------- */
-  const coloring = useColoring()
+  /* ---------- 着色工具（每局独立：新房间 / 终局时清空；v0.3.0 幽灵快捷着色） ---------- */
+  // 幽灵飞机（在场放置副本）活动列表：由 refPlanes.placed 经 useLayoutEffect 同步；
+  // 快捷着色回收 = 从本列表移除（渲染层同时用 retiredGhostIds 过滤，避免点击滞后一帧）
+  const [ghostRects, setGhostRects] = useState<GhostRect[]>([])
+  const [retiredGhostIds, setRetiredGhostIds] = useState<ReadonlySet<string>>(new Set())
+  // onGhostBatch 需引用其后定义的处理器（依赖 coloring），用 ref 桥接取最新闭包
+  const ghostBatchHandlerRef = useRef<(id: string, cells: Cell[]) => void>(() => {})
+  const coloring = useColoring({
+    ghostRects,
+    onGhostBatch: (id, cells) => ghostBatchHandlerRef.current(id, cells),
+  })
   const isColoring = coloring.coloringMode
   useEffect(() => {
     coloring.reset()
@@ -337,12 +337,9 @@ export function OnlineGame() {
     if (blindColorLocked && coloring.coloringMode) coloring.toggleMode()
   }, [blindColorLocked])
 
-  // v0.3 快捷着色：向参考飞机拖拽层传递 quickColor / onGhostBatch（M3 落地 ColoringTool 后生效；
-  // 组件支持前多余字段被忽略，无副作用）。onGhostBatch = 完成整架批量着色 → 退出着色模式。
-  const refInput: import('../components/grid/ColoringTool').RefPlanesInput & {
-    quickColor?: boolean
-    onGhostBatch?: (id: number) => void
-  } = {
+  // v0.3.0 幽灵快捷着色（与 M4 单机同构）：
+  // placed 每次变化 → useLayoutEffect 同步活动幽灵列表（回收 = 从列表移除，渲染层再过滤 retired）
+  const refPlanes = useRefPlanes({
     width: config?.width ?? 10,
     height: config?.height ?? 10,
     shape: config?.shape ?? DEFAULT_PLANE_SHAPE,
@@ -356,12 +353,36 @@ export function OnlineGame() {
       coloredCells: coloring.coloredCells,
       paintPlane: coloring.paintPlane,
     },
-    quickColor,
-    onGhostBatch: () => {
-      if (coloring.coloringMode) coloring.toggleMode()
-    },
+  })
+
+  useLayoutEffect(() => {
+    if (!config) return
+    setGhostRects(
+      (refPlanes.placed ?? [])
+        .filter((p) => !retiredGhostIds.has(String(p.id)))
+        .map((p) => ({ id: String(p.id), cells: occupiedCells(p, config.shape) })),
+    )
+  }, [refPlanes.placed, retiredGhostIds, config])
+
+  // 新房间 / 终局：清空幽灵活动列表与回收记录
+  useEffect(() => {
+    setGhostRects([])
+    setRetiredGhostIds(new Set())
+  }, [roomCode])
+  useEffect(() => {
+    if (gameEnd) {
+      setGhostRects([])
+      setRetiredGhostIds(new Set())
+    }
+  }, [gameEnd])
+
+  // 快捷着色：整机被批量着色 → 回收该幽灵 + 退出着色模式（ColoringTool 只发事件，回收由页面执行）
+  const handleGhostBatch = (id: string) => {
+    setGhostRects((prev) => prev.filter((g) => g.id !== id))
+    setRetiredGhostIds((prev) => new Set(prev).add(id))
+    if (coloring.coloringMode) coloring.toggleMode()
   }
-  const refPlanes = useRefPlanes(refInput)
+  ghostBatchHandlerRef.current = handleGhostBatch
 
   // 新房间 / 终局：清空参考飞机放置副本
   useEffect(() => {
@@ -496,6 +517,11 @@ export function OnlineGame() {
 
   const oppSeat = room.players[(1 - you) as 0 | 1]
   const oppName = oppSeat?.name ?? '对手'
+
+  // 对手网格实际渲染的幽灵：隐藏已被快捷着色回收的（placed 内部仍保留，拖拽/重叠不受影响）
+  const visibleShownPlanes = refPlanes.shownPlanes.filter(
+    (p) => p.id === -1 || !retiredGhostIds.has(String(p.id)),
+  )
 
   const isPlaying = phase === 'playing' || phase === 'counterattack'
   // v0.3：非我方回合不再拦截报点（改预报点机制），故禁点条件移除 !yourTurn
@@ -816,10 +842,11 @@ export function OnlineGame() {
               coloredCells={coloring.coloredCells}
               coloring={
                 isColoring
-                  ? { active: true, color: coloring.currentColor, onPaint: coloring.paintCell }
+                  ? { active: true, color: coloring.currentColor, onPaint: coloring.paintAt }
                   : undefined
               }
-              planes={refPlanes.shownPlanes}
+              // 渲染过滤：隐藏已被快捷着色回收的幽灵（placed 内部仍保留，拖拽/重叠逻辑不受影响）
+              planes={visibleShownPlanes}
               shape={config.shape}
               planesLayer={{
                 ghost: true,

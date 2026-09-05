@@ -21,12 +21,6 @@ export interface MatchCombo {
   blind: boolean
 }
 
-/** 房间携带 v0.3 模式开关（经典模式两者为 false / 缺省） */
-export interface GridConfigV030 extends GridConfig {
-  blitz?: boolean
-  blind?: boolean
-}
-
 /* ---------- v0.3 新增 Socket 事件（C→S / S→C） ---------- */
 
 export interface QuickMatchWaitingPayload {
@@ -36,7 +30,7 @@ export interface QuickMatchWaitingPayload {
 
 export interface RoomJoinedPayload {
   roomCode: string
-  config: GridConfigV030
+  config: GridConfig
 }
 
 export interface ClockUpdatePayload {

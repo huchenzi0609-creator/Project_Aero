@@ -17,10 +17,10 @@
  */
 import { io } from 'socket.io-client'
 import type { Socket } from 'socket.io-client'
-import type { PlacedPlane } from '@aero/shared'
+import type { GridConfig, PlacedPlane } from '@aero/shared'
 import { useOnlineStore } from '../store/onlineStore'
 import { readToken } from '../net/storage'
-import type { GridConfigV030, MatchCombo } from './protocol'
+import type { MatchCombo } from './protocol'
 import type { RoomJoinedPayload } from './protocol'
 
 /** 本客户端专属的房间持久化 key（与 net/storage 的 aero:online:gameId 隔离） */
@@ -238,7 +238,7 @@ export const v030Api = {
   },
 
   /** 创建房间（config 可携带 blitz/blind 模式开关） */
-  createRoom(config: GridConfigV030): Promise<ApiResult<string>> {
+  createRoom(config: GridConfig): Promise<ApiResult<string>> {
     return whenConnected().then((ok) => {
       if (!ok) return { ok: false, error: '尚未连接服务器，请稍候重试' }
       return new Promise((resolve) => {

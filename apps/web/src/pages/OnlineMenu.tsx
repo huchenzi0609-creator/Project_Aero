@@ -16,13 +16,14 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { CSSProperties } from 'react'
 import { PRESETS } from '@aero/shared'
+import type { GridConfig } from '@aero/shared'
 import { useAppStore } from '../store/appStore'
 import { useGuestStore } from '../store/guestStore'
 import { useToastStore } from '../store/toastStore'
 import { useEffectiveOrientation } from '../hooks/useOrientation'
 import { connectClient, onV030, subscribeStatus, v030Api } from '../online/client'
 import type { ClientStatus } from '../online/client'
-import type { GridConfigV030, MatchCombo, MatchGridSize } from '../online/protocol'
+import type { MatchCombo, MatchGridSize } from '../online/protocol'
 import { PaperButton } from '../components/ui/PaperButton'
 import { PaperCard } from '../components/ui/PaperCard'
 
@@ -143,7 +144,7 @@ export function OnlineMenu() {
     if (busy) return
     setBusy(true)
     try {
-      const config: GridConfigV030 = {
+      const config: GridConfig = {
         ...PRESETS[customTier],
         blitz: customBlitz,
         blind: customBlind,

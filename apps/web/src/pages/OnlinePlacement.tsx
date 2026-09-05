@@ -16,7 +16,6 @@ import { useGuestStore } from '../store/guestStore'
 import { useSettingsStore } from '../store/settingsStore'
 import { useToastStore } from '../store/toastStore'
 import { connectClient, v030Api } from '../online/client'
-import type { GridConfigV030 } from '../online/protocol'
 import { useEffectiveOrientation } from '../hooks/useOrientation'
 import { PaperButton } from '../components/ui/PaperButton'
 import { PaperModal } from '../components/ui/PaperModal'
@@ -134,10 +133,9 @@ export function OnlinePlacement() {
     )
   }
 
-  // v0.3 模式透传：房间 config 的 blitz/blind（服务端回传；创建/加入后经 roomUpdate 到达）
-  const modeCfg = config as GridConfigV030
-  const modeBlitz = modeCfg.blitz === true
-  const modeBlind = modeCfg.blind === true
+  // v0.3 模式透传：房间 config 的 blitz/blind（shared GridConfig；经 roomUpdate 回传）
+  const modeBlitz = config.blitz === true
+  const modeBlind = config.blind === true
 
   const players = room.players
   const meSeat = players[you]
