@@ -63,7 +63,7 @@ export function TutorialEntry({ onExit }: { onExit: () => void }) {
   /* ---------- 阶段渲染 ---------- */
 
   if (stage === 'placement') {
-    return <TutorialPlacement onDone={onPlacementDone} />
+    return <TutorialPlacement onDone={onPlacementDone} onExitHome={exitAll} />
   }
   if (stage === 'basic' || stage === 'advanced') {
     return (

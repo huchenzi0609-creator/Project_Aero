@@ -29,12 +29,18 @@ const T1_STEPS: TutorialStep[] = [
   { key: 't17', text: ['点击“确认布阵”开始游戏'], highlight: '.tutorial-confirm' },
 ]
 
-export function TutorialPlacement({ onDone }: { onDone: (fleet: PlacedPlane[]) => void }) {
+export function TutorialPlacement({
+  onDone,
+  onExitHome,
+}: {
+  onDone: (fleet: PlacedPlane[]) => void
+  /** 退出/跳过→回主页（A5：统一由宿主 TutorialEntry 收口，避免误回废弃页面） */
+  onExitHome: () => void
+}) {
   const orientation = useEffectiveOrientation()
   const config = useAppStore((s) => s.gridConfig)
   const toast = useToastStore((s) => s.push)
   const resetGame = useGameStore((s) => s.reset)
-  const setView = useAppStore((s) => s.setView)
   const { width, height, planeCount } = config
 
   const [grid, setGrid] = useState<PlacedPlane[]>([])
@@ -84,7 +90,7 @@ export function TutorialPlacement({ onDone }: { onDone: (fleet: PlacedPlane[]) =
   // 首页返回 = 退出教程（对局未开，直接回主页）
   const exit = () => {
     resetGame()
-    setView('home')
+    onExitHome()
   }
 
   const highlight = step.index >= 0 && step.step?.highlight ? step.step.highlight : null
