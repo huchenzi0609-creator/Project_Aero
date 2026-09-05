@@ -63,28 +63,11 @@ export type ClientSocket = Socket<ClientToServerEvents, ServerToClientEvents, Re
 
 type RoomPhase = 'waiting' | 'placing' | 'playing' | 'counterattack' | 'ended'
 
-/* ---------------------------------------------------------------- v0.3.0 扩展（M1 落地 shared 前暂驻服务端） */
-
-/**
- * v0.3.0 房间配置扩展：`blitz`（超快棋）与 `blind`（盲棋）布尔开关，缺省 false。
- * 契约：packages/shared 的 GameConfig.blitz?/blind?（M1 落地中）；本地 schema 先扩展自持。
- */
-export interface V030GameConfig extends GridConfig {
-  blitz?: boolean
-  blind?: boolean
-}
-
-/** gridConfigSchema + blitz/blind（布尔可选）——创建/匹配自定义房间统一用此校验 */
-const v030ConfigSchema = gridConfigSchema.extend({
-  blitz: z.boolean().optional(),
-  blind: z.boolean().optional(),
-})
+/* ---------------------------------------------------------------- v0.3.0 常量（shared / game-core 已落地契约） */
 
 /** 超快棋时钟推进间隔（~250ms） */
 const BLITZ_TICK_MS = 250
-/** 超快棋每成功报点奖励（+1s） */
-const BLITZ_SHOT_BONUS_MS = 1000
-/** 超快棋初始时限默认值：每架飞机 10s */
+/** 超快棋初始时限默认值：每架飞机 10s（core createGame 内建同值；服务器可按基准覆写以便测试注入） */
 const BLITZ_DEFAULT_BASE_MS_PER_PLANE = 10_000
 
 /** 快速匹配（match:quick）支持的档位网格边长 → 该网格下合法的飞机数上限 */
@@ -124,7 +107,7 @@ interface ShotLogEntry {
 
 interface Room {
   code: string
-  config: V030GameConfig
+  config: GridConfig
   /** 本房间每步限时（ms；UNLIMITED_TURN_LIMIT_MS=0 表示不限时），来自 config.turnLimitMs ?? TURN_LIMIT_MS */
   turnLimitMs: number
   seats: [Seat, Seat]
@@ -142,12 +125,10 @@ interface Room {
   /** 终局广播事件种类：'gameEnd'（常规）| 'gameOver'（v0.3.0 blitz 时钟判负），重连回放按此选择 */
   endKind: 'gameEnd' | 'gameOver'
   destroyTimer: NodeJS.Timeout | null
-  /** 超快棋双方剩余时钟（ms）；非 blitz 房间为 null */
-  blitzClock: [number, number] | null
   blitzTimer: NodeJS.Timeout | null
   /** 上次时钟推进时间戳（ms） */
   blitzLastAt: number
-  /** 上次向双方广播的整秒值（广播节流用） */
+  /** 上次向双方广播的整秒值（广播节流用）；blitz 房间才有意义 */
   blitzSecShown: [number, number]
 }
 
@@ -348,8 +329,8 @@ export class RoomManager {
     return room.config.blind === true
   }
 
-  /** 建空房间（含 v0.3.0 字段默认值）；createRoom / 匹配配对 / match:quick 共用 */
-  private buildRoom(code: string, config: V030GameConfig, fromMatch: boolean): Room {
+  /** 建空房间；createRoom / 匹配配对 / match:quick 共用 */
+  private buildRoom(code: string, config: GridConfig, fromMatch: boolean): Room {
     return {
       code,
       config,
@@ -368,7 +349,6 @@ export class RoomManager {
       endPayload: null,
       endKind: 'gameEnd',
       destroyTimer: null,
-      blitzClock: null,
       blitzTimer: null,
       blitzLastAt: 0,
       blitzSecShown: [0, 0],
@@ -396,8 +376,8 @@ export class RoomManager {
     socketId: string,
     config: GridConfig,
   ): { ok: true; code: string } | { ok: false; error: string } {
-    // v0.3.0：使用扩展 schema（接受 blitz/blind 布尔开关），字段类型非法即拒绝
-    const parsed = v030ConfigSchema.safeParse(config)
+    // shared gridConfigSchema 已含 blitz/blind 布尔开关，字段类型非法即拒绝
+    const parsed = gridConfigSchema.safeParse(config)
     if (!parsed.success) return { ok: false, error: '棋盘配置非法' }
     // 兜底：若用户残留一个 waiting/placing 阶段的房间，先自动释放再建房；
     // 对局中（playing/counterattack）仍拒绝
@@ -526,13 +506,8 @@ export class RoomManager {
     const game = room.game
     if (!game || game.phase === 'ended') return { ok: false, error: '对局已结束' }
     if (game.turn !== player) return { ok: false, error: '未轮到该玩家报点' }
-    // 盲棋：取消重复报点拒绝（允许对已报点格再次报点）——旁路裁决 outcome，不触碰 game-core 状态
-    if (this.isBlind(room)) {
-      const alreadyShot = game.players[player].shotsFired.some(
-        (s) => s.coord.r === coord.r && s.coord.c === coord.c,
-      )
-      if (alreadyShot) return this.blindRepeatShot(room, player, coord)
-    }
+    // 盲棋：core applyShot 天然允许重复报点（含残骸格返回 miss），服务端不做任何预检/旁路；
+    // 绝地反击阶段的重复报点语义以 core applyShot 结果为准。
     const res = this.core.applyShot(game, coord)
     if (!res.ok) return { ok: false, error: res.error ?? '无效报点' }
     const next = res.state ?? game
@@ -547,8 +522,8 @@ export class RoomManager {
         outcome,
       })
     }
-    // 超快棋：每成功报点给报点方 +1s 并广播时钟
-    if (this.isBlitz(room)) this.addBlitzTime(room, player, BLITZ_SHOT_BONUS_MS)
+    // 超快棋：core applyShot 已给报点方 +1s（state.blitz.clocks 更新），此处仅同步广播时钟
+    if (this.isBlitz(room)) this.broadcastBlitzClock(room, true)
     if (next.winner !== null || next.phase === 'ended') {
       const winner = next.winner !== null ? next.winner : ((1 - player) as 0 | 1)
       this.finishGame(room, winner, this.resolveEndReason(room, next))
@@ -565,46 +540,6 @@ export class RoomManager {
     return { ok: true }
   }
 
-  /** 盲棋重复报点：接受为一次合法行动；按当前棋盘旁路裁决（残骸格/空格=miss、存活部件=hit），
-   *  不重复计数、不触碰 game-core 状态、不触发胜负，随后正常轮换回合。 */
-  private blindRepeatShot(room: Room, player: 0 | 1, coord: Cell): { ok: true } {
-    const game = room.game as GameState
-    const target = (1 - player) as 0 | 1
-    const outcome = this.adjudicateRepeatShot(room, target, coord)
-    room.shotLog.push({ by: player, coord, outcome })
-    for (const s of room.seats) {
-      this.emitToSeat(s, 'shotResult', {
-        by: s.index === player ? 'you' : 'opponent',
-        coord,
-        outcome,
-      })
-    }
-    if (this.isBlitz(room)) this.addBlitzTime(room, player, BLITZ_SHOT_BONUS_MS)
-    if (game.phase === 'counterattack') {
-      // 绝地反击中的重复报点视为反击未成 → 先手胜（与 applyShot「其余情形判先手胜」一致）
-      this.finishGame(room, game.firstMover, 'counterattack')
-      return { ok: true }
-    }
-    // 正常轮换（手动切换 game.turn / turnNo，其余状态不变）
-    room.game = { ...game, turn: target, turnNo: game.turnNo + 1 }
-    this.startTurnFor(room, target)
-    return { ok: true }
-  }
-
-  /** 旁路裁决：该格是否命中目标方某架存活飞机的部件（机头格一旦被报即已 kill 入 destroyed，
-   *  故此处只可能是非机头部件或残骸格）；命中 → hit，否则（空格/残骸）→ miss */
-  private adjudicateRepeatShot(room: Room, target: 0 | 1, coord: Cell): ShotOutcome {
-    const board = room.game?.players[target]
-    if (!board) return 'miss'
-    for (const plane of board.planes) {
-      if (board.destroyedPlaneIds.includes(plane.id)) continue
-      for (const c of this.core.occupiedCells(plane, board.shape)) {
-        if (c.r === coord.r && c.c === coord.c) return 'hit'
-      }
-    }
-    return 'miss'
-  }
-
   /** 终局原因：绝地反击 > 超时被接管方落败 > 正常全歼 */
   private resolveEndReason(room: Room, game: GameState): GameEndPayload['reason'] {
     if (room.wasCounterattack) return 'counterattack'
@@ -619,12 +554,14 @@ export class RoomManager {
 
   private startGame(room: Room): void {
     const firstMover = randomInt(2) as 0 | 1
+    // v0.3.0：模式开关（blitz/blind）作为 options 交给 core createGame 权威初始化
     let game = this.core.createGame(
       room.config.width,
       room.config.height,
       room.config.shape,
       room.config.planeCount,
       firstMover,
+      { blitz: this.isBlitz(room), blind: this.isBlind(room) },
     )
     for (const seat of room.seats) {
       const res = this.core.setFleet(game, seat.index, seat.fleet as PlacedPlane[])
@@ -637,6 +574,11 @@ export class RoomManager {
     }
     // createGame 返回的阶段为 placing，双方就绪后显式进入 playing（applyShot 仅允许 playing/counterattack）
     game = { ...game, phase: 'playing' }
+    // 超快棋初始时钟：core 默认 10s×n；服务器可按 blitzBaseMsPerPlane 基准覆写（默认值一致，测试注入小值用）
+    if (this.isBlitz(room)) {
+      const base = this.blitzBaseMsPerPlane * room.config.planeCount
+      game = { ...game, blitz: { clocks: [base, base] } }
+    }
     room.game = game
     room.phase = 'playing'
     room.gameStartedAt = Date.now()
@@ -811,7 +753,7 @@ export class RoomManager {
   }
 
   /** blitz 时钟归零判负：广播 v0.3.0 事件 gameOver { winner, reason:'blitz-timeout', layouts, stats }，
-   *  清理计时器、落盘（reason 文本 'blitz-timeout'） */
+   *  清理计时器、落盘（reason 'blitz-timeout'，与 shared 类型一致） */
   private finishBlitzTimeout(room: Room, loser: 0 | 1): void {
     if (room.phase === 'ended') return
     const winner = (1 - loser) as 0 | 1
@@ -819,7 +761,7 @@ export class RoomManager {
     room.gameEndedAt = Date.now()
     this.stopBlitzClock(room)
     this.clearRoomTimers(room)
-    const payload = {
+    const payload: GameEndPayload = {
       winner,
       reason: 'blitz-timeout',
       layouts: {
@@ -829,7 +771,7 @@ export class RoomManager {
       stats: this.computeStats(room),
     }
     room.endKind = 'gameOver'
-    room.endPayload = payload as unknown as GameEndPayload
+    room.endPayload = payload
     for (const s of room.seats) this.emitToSeat(s, 'gameOver', payload)
     this.persistGame(room, winner, 'blitz-timeout')
     room.destroyTimer = setTimeout(() => {
@@ -839,34 +781,44 @@ export class RoomManager {
 
   /* ---------------------------------------------------------------- 超快棋（blitz）时钟 */
 
-  /** 开启 blitz 时钟：双方初始各 blitzBaseMsPerPlane × 飞机架数，~250ms 推进当前回合方 */
+  /** 读当前游戏时钟（room.game.blitz.clocks；缺失返回 null） */
+  private blitzClocks(room: Room): [number, number] | null {
+    const clocks = room.game?.blitz?.clocks
+    if (!clocks) return null
+    return clocks
+  }
+
+  /** 开启 blitz 时钟：初始值已由 createGame 写入 state.blitz.clocks；这里只启动 ~250ms 推进定时器 */
   private startBlitzClock(room: Room): void {
-    const base = this.blitzBaseMsPerPlane * room.config.planeCount
-    room.blitzClock = [base, base]
     room.blitzLastAt = Date.now()
-    room.blitzSecShown = [Math.ceil(base / 1000), Math.ceil(base / 1000)]
+    const clocks = this.blitzClocks(room)
+    room.blitzSecShown = [clocks ? Math.ceil(clocks[0] / 1000) : 0, clocks ? Math.ceil(clocks[1] / 1000) : 0]
     if (room.blitzTimer) clearInterval(room.blitzTimer)
     room.blitzTimer = setInterval(() => this.tickBlitz(room), BLITZ_TICK_MS)
     // 时钟开局即广播一次（双方看到初始剩余）
     this.broadcastBlitzClock(room, true)
   }
 
-  /** 时钟推进：当前回合方剩余 -= 真实流逝；归零 → blitz 超时判负 */
+  /** 时钟推进（core 权威）：当前回合方时钟扣减真实流逝；timedOut → blitz 超时判负 */
   private tickBlitz(room: Room): void {
-    if (room.phase === 'ended' || !room.blitzClock) {
+    if (room.phase === 'ended' || !this.blitzClocks(room)) {
       this.stopBlitzClock(room)
       return
     }
     const game = room.game
-    if (!game) return
+    if (!game || game.phase === 'ended') {
+      this.stopBlitzClock(room)
+      return
+    }
     const now = Date.now()
     const dt = Math.max(0, now - room.blitzLastAt)
     room.blitzLastAt = now
     const cur = game.turn
-    const remain = room.blitzClock[cur] - dt
-    room.blitzClock[cur] = remain
-    if (remain <= 0) {
-      this.finishBlitzTimeout(room, cur) // 超时立即判负
+    // core 递减并判超时；写回返回的 state（含新时钟；timedOut 时 phase=ended、winner=对方）
+    const result = this.core.advanceBlitzClock(game, cur, dt)
+    room.game = result.state
+    if (result.timedOut) {
+      this.finishBlitzTimeout(room, cur)
       return
     }
     this.broadcastBlitzClock(room, false)
@@ -879,28 +831,22 @@ export class RoomManager {
     }
   }
 
-  /** 成功报点奖励：给报点方 +ms 并立即广播时钟 */
-  private addBlitzTime(room: Room, player: 0 | 1, ms: number): void {
-    if (!room.blitzClock) return
-    room.blitzClock[player] += ms
-    this.broadcastBlitzClock(room, true)
-  }
-
   /**
-   * 广播双方剩余时钟：对每个座位发两条 clock:update（{player:'me'} 自己、{player:'them'} 对方），
-   * ms 为该方剩余毫秒（精确值，客户端自行取整显示）。
-   * 节流：仅在整秒值变化时广播（force=true 强制，用于开局/报点奖励/回合切换）。
+   * 广播双方剩余时钟（数据源 = room.game.blitz.clocks，core 权威）：对每个座位发两条
+   * clock:update（{player:'me'} 自己、{player:'them'} 对方），ms 为剩余毫秒精确值。
+   * 节流：仅在整秒值变化时广播（force=true 强制，用于开局/报点奖励/回合切换/重连同步）。
    */
   private broadcastBlitzClock(room: Room, force: boolean): void {
-    if (!room.blitzClock || room.phase === 'ended') return
+    const clocks = this.blitzClocks(room)
+    if (!clocks || room.phase === 'ended') return
     for (const seat of room.seats) {
       const idx = seat.index
-      const sec = Math.max(0, Math.ceil(room.blitzClock[idx] / 1000))
+      const sec = Math.max(0, Math.ceil(clocks[idx] / 1000))
       if (!force && sec === room.blitzSecShown[idx]) continue
       room.blitzSecShown[idx] = sec
       const other = (1 - idx) as 0 | 1
-      this.emitToSeat(seat, 'clock:update', { player: 'me', ms: Math.max(0, room.blitzClock[idx]) })
-      this.emitToSeat(seat, 'clock:update', { player: 'them', ms: Math.max(0, room.blitzClock[other]) })
+      this.emitToSeat(seat, 'clock:update', { player: 'me', ms: Math.max(0, clocks[idx]) })
+      this.emitToSeat(seat, 'clock:update', { player: 'them', ms: Math.max(0, clocks[other]) })
     }
   }
 
@@ -1077,7 +1023,7 @@ export class RoomManager {
     socketId: string,
     config: unknown,
   ): { ok: true } | { ok: false; error: string } {
-    const parsed = v030ConfigSchema.safeParse(config)
+    const parsed = gridConfigSchema.safeParse(config)
     if (!parsed.success) return { ok: false, error: '棋盘配置非法' }
     const key = this.configKey(parsed.data)
     const presetKeys = Object.values(PRESETS).map((c) => this.configKey(c))
@@ -1144,12 +1090,12 @@ export class RoomManager {
   /* ---------------------------------------------------------------- 快速匹配（match:quick，v0.3.0） */
 
   /** combo 指纹键：同 gridSize/planes/blitz/blind 视为同一档位 */
-  private quickKey(config: V030GameConfig): string {
+  private quickKey(config: GridConfig): string {
     return `${config.width}x${config.height}x${config.planeCount}x${config.blitz ? 1 : 0}x${config.blind ? 1 : 0}`
   }
 
   /** 校验并规范化一个 combo → 完整房间配置（标准默认飞机形状）；非法返回 null */
-  private comboToConfig(raw: unknown): V030GameConfig | null {
+  private comboToConfig(raw: unknown): GridConfig | null {
     if (typeof raw !== 'object' || raw === null) return null
     const c = raw as { gridSize?: unknown; planes?: unknown; blitz?: unknown; blind?: unknown }
     if (typeof c.gridSize !== 'number' || typeof c.planes !== 'number') return null
@@ -1184,7 +1130,7 @@ export class RoomManager {
       if (this.roomOfUser(userId)) return { ok: false, error: '您已在其他对局中，请先退出' }
     }
     const keys = new Set<string>()
-    const configByKey = new Map<string, V030GameConfig>()
+    const configByKey = new Map<string, GridConfig>()
     for (const raw of rawCombos) {
       const cfg = this.comboToConfig(raw)
       if (!cfg) return { ok: false, error: '匹配选项非法' }
@@ -1204,7 +1150,7 @@ export class RoomManager {
       const shared = [...entry.keys].find((k) => keys.has(k))
       if (!shared) continue
       this.quickPool.splice(i, 1)
-      const cfg = configByKey.get(shared) as V030GameConfig
+      const cfg = configByKey.get(shared) as GridConfig
       this.buildQuickRoom(cfg, entry, { userId, name, socketId })
       return { ok: true }
     }
@@ -1216,7 +1162,7 @@ export class RoomManager {
 
   /** 按交集 combo 建房并广播 room:joined（房主 = 先入池者，坐 0 号位） */
   private buildQuickRoom(
-    config: V030GameConfig,
+    config: GridConfig,
     host: { socketId: string; userId: string; name: string },
     guest: { socketId: string; userId: string; name: string },
   ): void {

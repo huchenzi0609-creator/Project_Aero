@@ -1,9 +1,9 @@
 # Project Aero v0.3.0 联机协议（online-protocol-v030）
 
 > 本文件是 **M5 联机服务端 ↔ M6 联机前端** 在 v0.3.0 的协议对齐文档。
-> 说明：`packages/shared`（M1）正在把下列字段/事件并入正式类型，落地前服务端
-> 已按本文件所述实现，事件经 Socket.IO 字符串通道收发。若 shared 落地后与本文件
-> 有出入，以 shared 为准并在本文件注明。
+> 说明：`packages/shared`（M1）已落地 `blitz`/`blind` 字段与新事件类型；对局/时钟裁决
+> 收敛到 **game-core（core）权威实现**（服务端只做计时调度、节流广播与收尾）。服务端
+> 仍经 Socket.IO 字符串通道收发本文件所列事件；若 shared 与本文件有出入，以 shared 为准。
 
 ## 0. 模式开关（房间配置）
 
@@ -45,9 +45,13 @@
 
 ## 2. 超快棋（blitz）计时 —— 服务端权威
 
-- 初始时钟：每方 `10s × 飞机架数`（如 10×10 三机 = 30s）。
-- 时钟推进：服务端 ~250ms 定时器扣减**当前回合方**剩余；玩家每次**成功报点**（shoot ack
-  ok，含 miss/hit/kill）给自己 **+1s**（立即生效并广播）。
+- 初始时钟：每方 `10s × 飞机架数`（如 10×10 三机 = 30s），由 **game-core `createGame`
+  权威初始化**到 `state.blitz.clocks`（服务端可按 `blitzBaseMsPerPlane` 基准覆写，默认值一致、
+  测试注入小值用）。
+- 时钟推进：**game-core `advanceBlitzClock(state, player, deltaMs)` 权威递减**当前回合方剩余
+  （返回新 state，服务端写回；timedOut 由服务端走 `gameOver(blitz-timeout)` 收尾）；玩家每次
+  **成功报点**（shoot ack ok，含 miss/hit/kill）由 `applyShot` 自动给自己 **+1s**（服务端随之
+  广播）。
 - 广播：`clock:update { player: 'me' | 'them', ms: number }`——对每个接收者各发两条
   （`'me'` 是自己剩余、`'them'` 是对方剩余；`ms` 为剩余毫秒精确值，客户端自行取整显示；
   服务端秒级节流，开局/报点奖励/回合切换会立即补发）。
@@ -58,15 +62,16 @@
 - blitz 房间**忽略 byo-yomi**：不设 turnStart 的 deadline 计时（deadline=0）、无机会消耗、
   无系统代走、无机器接管；`timerUpdate`/`turnStart.chancesLeft` 无业务意义（客户端 UI 应
   只依赖 `clock:update`）。
-- 断线重连：blitz 时钟在 playing 期间持续走（不因断线暂停）；重连后服务端立即补发一次
-  双方 `clock:update`。断线宽限判负（`gameEnd reason:'disconnect'`）与 blitz 时钟判负
-  谁先到按谁结算。
+- 断线重连：blitz 时钟在 playing 期间持续走（不因断线暂停）；**重连成功时服务端立即补发
+  一次双方 `clock:update`**（数据源 `state.blitz.clocks`），保证重连客户端立刻拿到双方剩余时间。
+  断线宽限判负（`gameEnd reason:'disconnect'`）与 blitz 时钟判负谁先到按谁结算。
 
 ## 3. 盲棋（blind）
 
-- 取消「重复报点拒绝」：对已报过的格（含残骸格）**再次报点合法**，按当前棋盘旁路裁决：
-  空格/已击毁飞机残骸格 → `miss`；存活飞机非机头部件 → `hit`。该步算一次正常行动（正常
-  轮换回合、blitz 房照常 +1s），但**不重复触发胜负判定、不改动对局内部报点历史**。
+- 取消「重复报点拒绝」：对已报过的格（含残骸格）**再次报点合法**——该语义由
+  **game-core（core）权威实现**：服务端建房时把 `{ blitz, blind }` 作为 options 传给
+  `createGame`，`applyShot` 在 blind 下跳过 already-shot 拦截，空格/残骸格仍返回 `miss`；
+  服务端不再做任何预检或旁路裁决，绝地反击阶段的重复报点语义以 `applyShot` 结果为准。
 - 广播仍是一次 `shotResult { by, coord, outcome }`；标记显示规则由**客户端按历史过滤**
   （同格重复记录由客户端 UI 决定如何呈现），协议无需变化。
 - 非盲棋房间：重复报点仍被拒（ack `already-shot`），行为与 v0.2 一致。

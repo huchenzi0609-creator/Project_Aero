@@ -180,15 +180,22 @@ export function createGame(
   shape: PlaneShape,
   planeCount: number,
   firstMover: 0 | 1,
+  options?: { blitz?: boolean; blind?: boolean },
 ): GameState {
-  return {
+  const state: GameState = {
     phase: 'placing',
     players: [makeBoard(width, height, shape), makeBoard(width, height, shape)],
     turn: firstMover,
     firstMover,
     turnNo: 1,
     winner: null,
+    mode: { blitz: options?.blitz ?? false, blind: options?.blind ?? false },
   }
+  if (options?.blitz) {
+    // 与 core 一致：初始限时 = 10 秒 × 飞机架数
+    state.blitz = { clocks: [10_000 * planeCount, 10_000 * planeCount] }
+  }
+  return state
 }
 
 export function setFleet(
@@ -221,7 +228,9 @@ export function applyShot(state: GameState, coord: Cell): ShotResult {
   const turn = state.turn
   const target = (1 - turn) as 0 | 1
   const shooterBoard = state.players[turn]
-  if (shooterBoard.shotsFired.some((s) => s.coord.r === coord.r && s.coord.c === coord.c)) {
+  const blind = state.mode?.blind === true
+  // 与 core 一致：非盲棋拦截重复报点；盲棋允许（残骸/空格仍返回 miss）
+  if (!blind && shooterBoard.shotsFired.some((s) => s.coord.r === coord.r && s.coord.c === coord.c)) {
     return { ok: false, error: 'already-shot' }
   }
   const targetBoard = state.players[target]
@@ -249,6 +258,12 @@ export function applyShot(state: GameState, coord: Cell): ShotResult {
   next.players[target].receivedShots.push({ coord, outcome })
   if (outcome === 'kill' && killedPlaneId !== undefined) {
     next.players[target].destroyedPlaneIds.push(killedPlaneId)
+  }
+  // 与 core 一致：超快棋每次成功报点给射击方 +1s
+  if (state.mode?.blitz === true && next.blitz) {
+    const clocks: [number, number] = [...next.blitz.clocks]
+    clocks[turn] += 1_000
+    next.blitz = { clocks }
   }
 
   const targetDestroyed = next.players[target].planes.every((p) =>
@@ -286,6 +301,30 @@ export function applyShot(state: GameState, coord: Cell): ShotResult {
   next.turn = (1 - turn) as 0 | 1
   next.turnNo += 1
   return { ok: true, outcome, killedPlaneId, state: next, winner: next.winner }
+}
+
+/** 与 core 一致的 advanceBlitzClock：递减指定玩家时钟，归零判负（纯函数，返回新 state） */
+export function advanceBlitzClock(
+  state: GameState,
+  player: 0 | 1,
+  deltaMs: number,
+): { state: GameState; timedOut: boolean; winner?: 0 | 1 } {
+  if (!state.blitz) {
+    throw new Error('advanceBlitzClock 仅适用于超快棋（blitz）对局（state.blitz 缺失）')
+  }
+  if (deltaMs <= 0) return { state, timedOut: false }
+  const clocks: [number, number] = [...state.blitz.clocks]
+  const remaining = Math.max(0, (clocks[player] ?? 0) - deltaMs)
+  clocks[player] = remaining
+  if (remaining > 0) {
+    return { state: { ...state, blitz: { clocks } }, timedOut: false }
+  }
+  const winner = (1 - player) as 0 | 1
+  return {
+    state: { ...state, blitz: { clocks }, phase: 'ended', winner },
+    timedOut: true,
+    winner,
+  }
 }
 
 export interface ShotKnowledge {
