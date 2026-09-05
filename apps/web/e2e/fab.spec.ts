@@ -85,7 +85,7 @@ test.describe('回到未完成对局浮窗', () => {
   })
 
   test('对局中刷新→浮窗→点击回联机对局', async ({ browser }) => {
-    const { ctxA, ctxB, A, errsA, errsB } = await twoInRoom(browser)
+    const { ctxA, ctxB, A, B, errsA, errsB } = await twoInRoom(browser)
     const fab = A.locator('.fab')
     await bothReadyOnline(A, B)
     await expect(fab).toHaveCount(0)
