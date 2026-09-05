@@ -34,7 +34,7 @@ const T1 = {
   invalid: '飞机不能重叠、不能越界哦！',
 }
 
-type Phase = 'welcome' | 'tray' | 'drag' | 'more' | 'rotateHint' | 'rotateWait' | 'final'
+type Phase = 'welcome' | 'tray' | 'drag' | 'more' | 'rotateHint' | 'rotateWait' | 'thanks' | 'detect'
 
 export function TutorialPlacement({
   onDone,
@@ -50,6 +50,8 @@ export function TutorialPlacement({
   const { width, height, planeCount } = config
 
   const [grid, setGrid] = useState<PlacedPlane[]>([])
+  const versionRef = useRef(0)
+  const thanksCauseRef = useRef<number | null>(null)
   const [phase, setPhase] = useState<Phase>('welcome')
   const [skipOpen, setSkipOpen] = useState(false)
   const [exitOpen, setExitOpen] = useState(false)
@@ -57,6 +59,7 @@ export function TutorialPlacement({
   const phaseRef = useRef<Phase>('welcome')
   const setPh = (p: Phase) => {
     phaseRef.current = p
+    segIdxRef.current = 0
     setPhase(p)
   }
 
@@ -65,6 +68,7 @@ export function TutorialPlacement({
   /* ---------- 事件桥（与 Placement 一致的增量语义） ---------- */
   const prevGridRef = useRef<PlacedPlane[]>(grid)
   const handlePlanesChange = (next: PlacedPlane[]) => {
+    versionRef.current += 1
     const prev = prevGridRef.current
     if (next.length - prev.length === 1) {
       const added = next.find((p) => !prev.some((q) => q.id === p.id))
@@ -88,21 +92,31 @@ export function TutorialPlacement({
     prevFullRef.current = full
   }, [grid.length, planeCount])
 
+  // T1-6/7：旋转完成后的 thanks 常驻展示期，玩家再次挪动/旋转（下一次网格变化）→ 进入合法性检测
+  useEffect(() => {
+    if (phaseRef.current === 'thanks' && versionRef.current > (thanksCauseRef.current ?? Infinity)) {
+      setPh('detect')
+    }
+  }, [grid])
+
   /** 事件 → 阶段推进（wait 节点：事件到达才离开；期间气泡常驻） */
   const dispatchEvent = (e: TutorialGameEvent) => {
     const cur = phaseRef.current
     if (cur === 'drag' && e.type === 'planePlaced') setPh('more')
     else if (cur === 'more' && e.type === 'allPlanesPlaced') setPh('rotateHint')
-    else if (cur === 'rotateWait' && e.type === 'planeRotated') setPh('final')
+    else if (cur === 'rotateWait' && e.type === 'planeRotated') {
+      thanksCauseRef.current = versionRef.current
+      setPh('thanks')
+    }
   }
 
-  /** 气泡点击：click 节点翻段/推进；wait/final 翻段不消失 */
+  /** 气泡点击：click 节点推进；wait/thanks/detect 仅翻段不消失 */
   const clickBubble = () => {
     const cur = phaseRef.current
     if (cur === 'welcome') setPh('tray')
     else if (cur === 'tray') setPh('drag')
     else if (cur === 'rotateHint') setPh('rotateWait')
-    // 其余（drag/more/rotateWait/final）：点击仅翻段，不消失
+    // 其余（drag/more/rotateWait/thanks/detect）：点击仅翻段，不消失
     force((x) => x + 1)
   }
 
@@ -124,13 +138,14 @@ export function TutorialPlacement({
     if (p === 'more') return [T1.more]
     if (p === 'rotateHint') return [T1.rotate]
     if (p === 'rotateWait') return [T1.rotate]
-    if (p === 'final') return check.ok ? [T1.thanks, T1.confirm] : [T1.invalid]
+    if (p === 'thanks') return [T1.thanks]
+    if (p === 'detect') return check.ok ? [T1.confirm] : [T1.invalid]
     return []
   }
   const isClickNode = phase === 'welcome' || phase === 'tray' || phase === 'rotateHint'
   const segments = segsOf(phase)
   const segIdxRef = useRef(0)
-  // final 合法性切换时重置分段（避免停留第二段）
+
   if (segments.length === 0) segIdxRef.current = 0
   const segIdx = Math.min(segIdxRef.current, segments.length - 1)
   const segText = segments.length > 0 ? (segments[segIdx] ?? '') : ''
@@ -143,13 +158,13 @@ export function TutorialPlacement({
     clickBubble()
   }
 
-  // 突显目标：'bubble'=气泡自身（welcome/rotateHint）；tray；空网格（rotateWait 引导旋转发生在棋盘）；
-  // final 合法 → 确认按钮；非法 → 无突显（页面全亮）
+  // 突显目标：'bubble'=气泡自身（welcome/rotateHint）；tray；棋盘（rotateWait 引导旋转）；
+  // detect 合法 → 确认按钮（随合法性即时切换）；非法 → 无突显（页面全亮）；thanks 无突显
   const highlightFor = (p: Phase): string | null => {
     if (p === 'welcome' || p === 'rotateHint') return '.tutorial-bubble'
     if (p === 'tray') return '.placement__tray'
     if (p === 'rotateWait') return '.placement__board-wrap'
-    if (p === 'final') return check.ok ? '.tutorial-confirm' : null
+    if (p === 'detect') return check.ok ? '.tutorial-confirm' : null
     return null
   }
   const highlight = highlightFor(phase)
@@ -202,7 +217,7 @@ export function TutorialPlacement({
         </span>
       </footer>
 
-      {/* 教程层（final 非法 → highlight null → 无遮罩全亮）；「点击继续」仅 click 节点显示 */}
+      {/* 教程层（detect 非法 → highlight null → 无遮罩全亮）；「点击继续」仅 click 节点显示 */}
       <TutorialSpotlight target={highlight} />
       {segments.length > 0 ? (
         <TutorialBubble
