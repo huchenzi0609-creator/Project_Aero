@@ -105,8 +105,8 @@ export function TutorialEntry({ onExit }: { onExit: () => void }) {
         onClose={() => setEntryOpen(false)}
         footer={
           <>
-            {/* P2：我已了解 → 返回主页（跳过教程）；还不了解 → 进入基础·单元1 */}
-            <PaperButton variant="ghost" onClick={exitAll}>
+            {/* P2：我已了解 → 直达进阶·单元3；还不了解 → 基础·单元1 */}
+            <PaperButton variant="ghost" onClick={goAdvanced}>
               我已了解
             </PaperButton>
             <PaperButton

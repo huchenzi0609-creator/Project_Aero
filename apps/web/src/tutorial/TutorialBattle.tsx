@@ -46,8 +46,8 @@ interface FlowNode {
   after?: string | ((e: TutorialGameEvent | null) => string | null) | null
   /** quiet 静默窗口毫秒（kind=quiet） */
   quietMs?: number
-  /** 突显目标：'bubble' = 气泡自身；null = 不突显（可保留弱化遮罩） */
-  highlight?: string | null
+  /** 突显目标：'bubble' = 气泡自身；支持数组（多目标同时突显）；null = 不突显 */
+  highlight?: string | string[] | null
   /** 展示期间暂停 AI（aiShotSelector 返回 null） */
   pauseAi?: boolean
 }
@@ -130,9 +130,12 @@ function buildBasicNodes(): FlowNode[] {
     },
     {
       id: 'kill',
-      kind: 'click',
+      kind: 'wait',
       text: T2_KILL,
-      after: (_e) => (wonNow() ? 'win' : 'fb'),
+      // v0.3.2：击毁三连为事件驱动（wait）——文本停留至下一次我方报点才继续（规则5）；
+      // 若该击毁已致终局（wonNow），dispatch 顶层直接转 win，绝不再显示三连
+      wait: shot,
+      next: (e) => (wonNow() ? 'win' : shotOutcome(e) === 'kill' ? 'kill' : 'fb'),
       highlight: null,
     },
     { id: 'win', kind: 'click', text: [T2_WIN], after: null, highlight: 'bubble' },
@@ -145,7 +148,7 @@ function buildAdvancedNodes(): FlowNode[] {
   const nodes: FlowNode[] = [
     { id: 'a1', kind: 'click', text: [T3_WELCOME], after: 'a2', highlight: 'bubble' },
     { id: 'a2', kind: 'click', text: T3_REF, after: 'a3', highlight: '.game__ref' },
-    { id: 'a3', kind: 'wait', text: [T3_DRAG], wait: (e) => e.type === 'ghostCreated', highlight: null, next: 'a4', pauseAi: true },
+    { id: 'a3', kind: 'wait', text: [T3_DRAG], wait: (e) => e.type === 'ghostCreated', highlight: ['.game__ref', '.game__opp'], next: 'a4', pauseAi: true },
     { id: 'a4', kind: 'click', text: T3_GHOST, after: 'a5', highlight: 'bubble', pauseAi: true },
     { id: 'a5', kind: 'click', text: [T3_MINE], after: 'a6', highlight: '.game__mine' },
     { id: 'a6', kind: 'click', text: T3_SURE, after: 'a7', highlight: null },
@@ -169,24 +172,23 @@ function buildAdvancedNodes(): FlowNode[] {
       next: 'a10',
       pauseAi: true,
     },
-    { id: 'a10', kind: 'click', text: T3_TOOL, after: 'ghostAwait', highlight: 'bubble', pauseAi: true },
-    // 静默等待：仅【着色模式 + 点击幽灵飞机】（deliberate）才推进
     {
-      id: 'ghostAwait',
+      id: 'a10',
       kind: 'wait',
+      text: T3_TOOL,
+      // v0.3.2：仅【着色模式开启 + 直接点击幽灵飞机】的批量着色事件才推进（deliberate）
       wait: (e) => e.type === 'ghostBatchColored' && e.viaGhostPointerDown === true,
-      highlight: null,
       next: 'a11',
+      highlight: 'bubble',
       pauseAi: true,
     },
-    { id: 'a11', kind: 'click', text: T3_BATCH, after: 'preAwait', highlight: 'bubble', pauseAi: true },
-    // 静默等待：我方创建预报点 → 展示 T3-12 并等 AI 恢复
     {
-      id: 'preAwait',
+      id: 'a11',
       kind: 'wait',
+      text: T3_BATCH,
       wait: (e) => e.type === 'preFireCreated',
-      highlight: null,
       next: 'a12',
+      highlight: 'bubble',
       pauseAi: true,
     },
     { id: 'a12', kind: 'click', text: T3_PRE, after: null, highlight: 'bubble', pauseAi: true },
@@ -249,6 +251,8 @@ export function TutorialBattle({ variant, fleet, onExitHome, onGoAdvanced }: Tut
   const [p5Open, setP5Open] = useState(false)
   const [free, setFree] = useState(false)
   const [skipOpen, setSkipOpen] = useState(false)
+  // v0.3.2：弹窗（跳过确认 / P3 / P5）为遮罩豁免对象——打开时隐藏气泡与突显层、事件/点击不推进节点
+  const anyModalOpen = skipOpen || p3Open || p5Open
   const [, tick] = useState(0)
   const runRef = useRef<RunState | null>(null) // null = 未开始（挂载后 begin 成功再启动）
   const lastEventRef = useRef<TutorialGameEvent | null>(null)
@@ -325,7 +329,13 @@ export function TutorialBattle({ variant, fleet, onExitHome, onGoAdvanced }: Tut
   /** 事件分发：返回是否已处理 */
   const dispatchEvent = useCallback(
     (e: TutorialGameEvent) => {
+      if (anyModalOpen) return false
       if (free || !runRef.current) return false
+      // v0.3.2 胜利即时：basic 引擎一旦 ended+我方胜，任何后续事件一律不再喂给前置节点
+      if (variant === 'basic' && wonNow() && currentNode()?.id !== 'win') {
+        goNode('win')
+        return true
+      }
       lastEventRef.current = e
       const node = currentNode()
       if (!node) return false
@@ -355,11 +365,12 @@ export function TutorialBattle({ variant, fleet, onExitHome, onGoAdvanced }: Tut
       }
       return false
     },
-    [free, resolveNext, goNode, rerender],
+    [free, resolveNext, goNode, rerender, anyModalOpen],
   )
 
   /** 气泡点击：翻段；click 节点读毕 → after */
   const onBubbleClick = useCallback(() => {
+    if (anyModalOpen) return
     const r = runRef.current
     const node = currentNode()
     if (!r || !node) return
@@ -381,7 +392,7 @@ export function TutorialBattle({ variant, fleet, onExitHome, onGoAdvanced }: Tut
     }
     // wait/quiet：事件未到，点击仅翻段后停留
     rerender()
-  }, [segs, resolveNext, goNode, rerender])
+  }, [segs, resolveNext, goNode, rerender, anyModalOpen])
 
   // 开局（挂载一次）
   useEffect(() => {
@@ -430,6 +441,19 @@ export function TutorialBattle({ variant, fleet, onExitHome, onGoAdvanced }: Tut
       goNode(variant === 'basic' ? 'welcome' : 'a1')
     }
   }, [sessionNonce, variant, goNode])
+
+  // v0.3.2 胜利即时兜底：basic 内引擎每次状态推进后检查胜负（AI 绝地反击等非玩家事件致胜也覆盖）
+  const sessionLive = useGameStore((s) => s.session)
+  useEffect(() => {
+    if (variant !== 'basic' || free) return
+    if (wonNow() && runRef.current && runRef.current.nodeId !== 'win') goNode('win')
+  }, [sessionLive, free, variant])
+
+  // v0.3.2 继续对局收口：free 后玩家从结算离开（GameScreen 清 session）→ 由宿主收口回主页，
+  // 且此间不再渲染 GameScreen（避免"对局会话不存在"错误页闪现）
+  useEffect(() => {
+    if (free && !sessionLive) onExitHome()
+  }, [free, sessionLive, onExitHome])
 
   // 终局兜底：单元3 任何时刻对局结束（含玩家在工具步骤前获胜/超时）→ 直接 P5
   useEffect(() => {
@@ -486,15 +510,19 @@ export function TutorialBattle({ variant, fleet, onExitHome, onGoAdvanced }: Tut
   const segsNow = node && r ? segs(node.id, lastEventRef.current) : []
   const showBubble = !!node && !free && r != null && segsNow.length > 0
   const segText = showBubble ? (segsNow[Math.min(r!.seg, segsNow.length - 1)] ?? '') : ''
-  // A3：着色按钮横/竖版分别位于 stage 浮层 / 输入栏（另一侧 display:none）——按方向选可见目标
-  let rawHighlight = !free && node?.highlight ? node.highlight : null
-  if (rawHighlight && rawHighlight.includes('.coloring-btn')) {
-    rawHighlight =
-      orientation === 'portrait' ? '.game__inputbar .coloring-btn' : '.coloring-stage__btn .coloring-btn'
+  // 突显解析：'bubble'=气泡自身；着色按钮横/竖版分别位于 stage 浮层 / 输入栏（另一侧 display:none）
+  let rawHighlight: string | string[] | null = !free && node?.highlight ? node.highlight : null
+  if (typeof rawHighlight === 'string') {
+    if (rawHighlight === 'bubble') rawHighlight = '.tutorial-bubble'
+    else if (rawHighlight.includes('.coloring-btn')) {
+      rawHighlight = orientation === 'portrait' ? '.game__inputbar .coloring-btn' : '.coloring-stage__btn .coloring-btn'
+    }
   }
   const highlight = rawHighlight
-  // 突显目标位于底部输入栏时气泡上置（避免遮挡底部按钮）；其余保持默认
-  const bubbleAnchor = node?.highlight && (node.highlight.startsWith('.game__inputbar') || node.highlight.startsWith('.tutorial-confirm')) ? 'top' : 'bottom'
+  // 突显目标位于底部输入栏时气泡上置（避免遮挡底部按钮）；其余保持默认（多目标含输入栏也上置）
+  const hlText = Array.isArray(node?.highlight) ? node.highlight.join(' ') : (node?.highlight ?? '')
+  const bubbleAnchor =
+    hlText.includes('.game__inputbar') || hlText.includes('.tutorial-confirm') ? 'top' : 'bottom'
   const unitLabel = variant === 'basic' ? '对战基础' : '工具进阶'
 
   /** 跳过确认（确认 = 视为完成：basic→P3 / advanced→P5） */
@@ -515,6 +543,9 @@ export function TutorialBattle({ variant, fleet, onExitHome, onGoAdvanced }: Tut
     )
   }
 
+  // v0.3.2：free 模式会话已被结算页清空 → 交给 effect 收口回主页，不再渲染 GameScreen
+  if (free && !sessionLive) return null
+
   return (
     <>
       <GameScreen
@@ -523,7 +554,7 @@ export function TutorialBattle({ variant, fleet, onExitHome, onGoAdvanced }: Tut
         hideSettlement={!free}
       />
 
-      {!free ? (
+      {!free && !anyModalOpen ? (
         <div className="tutorial-hud">
           <button type="button" className="tutorial-bubble__skip" onClick={() => setSkipOpen(true)}>
             跳过 · {unitLabel}
@@ -531,8 +562,8 @@ export function TutorialBattle({ variant, fleet, onExitHome, onGoAdvanced }: Tut
         </div>
       ) : null}
 
-      {showBubble || highlight ? <TutorialSpotlight target={highlight} /> : null}
-      {showBubble ? (
+      {!anyModalOpen && (showBubble || highlight) ? <TutorialSpotlight target={highlight} /> : null}
+      {showBubble && !anyModalOpen ? (
         <TutorialBubble
           key={`${node!.id}-${r!.seg}`}
           text={segText}

@@ -3,11 +3,12 @@
    ============================================================ */
 
 /* ---------- 遮罩 ---------- */
-
+/* v0.3.2：z-index 压到弹窗（.paper-modal 系 60）之下 —— 教程内 P3/P5/跳过确认等弹窗
+   是突显遮罩的豁免对象：弹窗完整可见可点、不被压暗（背景弱化由弹窗 backdrop 承担） */
 .tutorial-spotlight {
   position: fixed;
   inset: 0;
-  z-index: 200;
+  z-index: 56;
   pointer-events: none;
 }
 .tutorial-spotlight > div {
