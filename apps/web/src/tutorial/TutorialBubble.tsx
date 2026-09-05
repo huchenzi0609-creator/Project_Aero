@@ -12,11 +12,14 @@ export function TutorialBubble({
   onClick,
   skipLabel,
   onSkip,
+  showHint = true,
 }: {
   text: string
   onClick: () => void
   skipLabel: string
   onSkip: () => void
+  /** 仅纯文本步（点击推进）显示「点击继续」；等待游戏事件的条件步不显示（v0.3.1） */
+  showHint?: boolean
 }) {
   const ref = useRef<HTMLDivElement | null>(null)
   const [pos, setPos] = useState<{ left?: number; top?: number; right?: number; bottom?: number } | null>(null)
@@ -59,7 +62,7 @@ export function TutorialBubble({
         <RichTutorial text={text} />
       </div>
       <div className="tutorial-bubble__foot">
-        <span className="tutorial-bubble__hint">点击继续</span>
+        {showHint ? <span className="tutorial-bubble__hint">点击继续</span> : null}
         <button type="button" className="tutorial-bubble__skip" onClick={(e) => {
           e.stopPropagation()
           onSkip()

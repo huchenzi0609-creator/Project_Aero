@@ -40,6 +40,6 @@ export type TutorialGameEvent =
   /** 着色：参考飞机副本成功拖入对手棋盘（幽灵飞机诞生） */
   | { type: 'ghostCreated'; id: string }
   /** 着色：着色模式点击幽灵飞机完成整机批量染色（快捷着色默认开；此时幽灵被回收） */
-  | { type: 'ghostBatchColored'; id: string; cells: Cell[] }
+  | { type: 'ghostBatchColored'; id: string; cells: Cell[]; viaGhostPointerDown?: boolean }
   /** 预报点：非我方回合点击空网格创建成功 */
   | { type: 'preFireCreated'; coord: Cell }
