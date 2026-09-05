@@ -114,7 +114,6 @@ export function PracticeMenu({ onExit }: { onExit?: () => void }) {
         <header className="page__head">
           <div>
             <h1 className="page__title">{MODE_TITLES[setup]}</h1>
-            <p className="page__subtitle">选择棋盘大小与 AI 难度，进入摆阵对局。</p>
           </div>
         </header>
         <div className="page__body practice__setup">
@@ -139,7 +138,6 @@ export function PracticeMenu({ onExit }: { onExit?: () => void }) {
             onChange={setDifficulty}
             options={DIFFICULTY_OPTIONS}
           />
-          <p className="practice__setup-note">AI 难度与「设置」页联动，双向同步保存。</p>
 
           <div className="practice__setup-foot">
             <PaperButton variant="ghost" onClick={exit}>
