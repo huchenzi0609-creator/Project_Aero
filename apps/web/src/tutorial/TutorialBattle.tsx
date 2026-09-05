@@ -18,6 +18,7 @@ import { PRESETS } from '@aero/shared'
 import { rotateShape } from '@aero/game-core'
 import { chooseTutorialShot, generateFleet, mulberry32 } from '@aero/game-core/ai'
 import type { Rng, ShotKnowledge } from '@aero/game-core/ai'
+import { useEffectiveOrientation } from '../hooks/useOrientation'
 import { useGameStore } from '../store/gameStore'
 import { useSettingsStore } from '../store/settingsStore'
 import { useToastStore } from '../store/toastStore'
@@ -228,6 +229,7 @@ interface RunState {
 }
 
 export function TutorialBattle({ variant, fleet, onExitHome, onGoAdvanced }: TutorialBattleProps) {
+  const orientation = useEffectiveOrientation()
   const toast = useToastStore((s) => s.push)
   const begin = useGameStore((s) => s.beginTutorialBattle)
   const beginEndgame = useGameStore((s) => s.beginTutorialEndgame)
@@ -484,9 +486,15 @@ export function TutorialBattle({ variant, fleet, onExitHome, onGoAdvanced }: Tut
   const segsNow = node && r ? segs(node.id, lastEventRef.current) : []
   const showBubble = !!node && !free && r != null && segsNow.length > 0
   const segText = showBubble ? (segsNow[Math.min(r!.seg, segsNow.length - 1)] ?? '') : ''
-  const highlight = !free && node?.highlight ? node.highlight : null
-  // 突显目标位于底部输入栏/工具栏时，气泡上置（A3：避免气泡遮住着色按钮等底部目标）
-  const bubbleAnchor = node?.highlight && (node.highlight.startsWith('.game__inputbar') || node.highlight.includes('coloring') || node.highlight.startsWith('.tutorial-confirm')) ? 'top' : 'bottom'
+  // A3：着色按钮横/竖版分别位于 stage 浮层 / 输入栏（另一侧 display:none）——按方向选可见目标
+  let rawHighlight = !free && node?.highlight ? node.highlight : null
+  if (rawHighlight && rawHighlight.includes('.coloring-btn')) {
+    rawHighlight =
+      orientation === 'portrait' ? '.game__inputbar .coloring-btn' : '.coloring-stage__btn .coloring-btn'
+  }
+  const highlight = rawHighlight
+  // 突显目标位于底部输入栏时气泡上置（避免遮挡底部按钮）；其余保持默认
+  const bubbleAnchor = node?.highlight && (node.highlight.startsWith('.game__inputbar') || node.highlight.startsWith('.tutorial-confirm')) ? 'top' : 'bottom'
   const unitLabel = variant === 'basic' ? '对战基础' : '工具进阶'
 
   /** 跳过确认（确认 = 视为完成：basic→P3 / advanced→P5） */
