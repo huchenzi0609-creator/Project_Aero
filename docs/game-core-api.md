@@ -133,14 +133,29 @@ export function takePreFireTurn(state: GameState, player: PlayerId): ShotResult 
 ### 教程（M8）能力（v0.3.0 起）
 
 ```ts
-/** 残局注入：将 victim 方第 planeIndex 架整机标记为已被对手击毁（等效对手已完成该击毁）——
- *  该机 id 加入 destroyedPlaneIds，其全部占位格补记 receivedShots（非头格 'hit'、头格 'kill'）
- *  与对手 shotsFired（已记录的坐标不重复）。幂等；应在对局开始前（对手尚无真实射击）调用。 */
+/** 残局注入：将 victim 方第 planeIndex 架整机标记为已被对手击毁——该机 id 加入
+ *  destroyedPlaneIds（此后对其任意残骸格报点返回 miss，无效打击），其全部占位格补记
+ *  receivedShots（非头格 'hit'、头格 'kill'；已记录坐标不重复）。**不写入对手 shotsFired**
+ *  （保持其射击历史干净，残骸格后续可再报且按 miss 裁决）。幂等；应在对局开始前调用。 */
 export function markPlaneDestroyed(state: GameState, victim: PlayerId, planeIndex: number): GameState
 
 /** 设定当前行动方：覆盖 state.turn = player（残局注入用，如把首回合交给对方）。
  *  不改 firstMover/phase/winner；需首回合语义一致时在 createGame 指定 firstMover。 */
 export function setActiveTurn(state: GameState, player: PlayerId): GameState
+
+/** 残局开局种子：'me'=玩家 0、'them'=玩家 1 */
+export interface EndgameSeed {
+  preKill: { side: 'me' | 'them'; planeIndex: number }
+  firstTurn: 'me' | 'them'
+}
+
+/** 残局开局工厂（教程单元3）：双方摆阵就绪 + 指定一架整机已被击毁 + 设定当前行动方
+ *  （等价 createGame → 双方 setFleet → markPlaneDestroyed → setActiveTurn）。
+ *  摆阵非法或 planeIndex 越界 → { ok: false, errors }。 */
+export function createEndgameState(
+  width: number, height: number, shape: PlaneShape, planeCount: number,
+  myPlanes: PlacedPlane[], opponentPlanes: PlacedPlane[], seed: EndgameSeed,
+): { ok: true; state: GameState } | { ok: false; errors: string[] }
 ```
 
 > 教学 AI（教程单元2/3 对手，spec 见 docs/tutorial-spec-v030.md §5）在 AI 模块：

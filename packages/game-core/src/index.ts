@@ -681,11 +681,13 @@ export function takePreFireTurn(state: GameState, player: PlayerId): ShotResult 
 
 /**
  * 残局注入原语（教程单元3 等使用；纯函数）：
- * 将 victim 方第 planeIndex 架飞机整机标记为"已被对手击毁"——等效对手已完成该击毁：
- * - 该机 id 加入 victim.destroyedPlaneIds；
- * - 其全部占位格补记历史：非机头格 outcome 'hit'、机头格 'kill'，写入
- *   victim.receivedShots 与对手 shotsFired（已在记录中的坐标不重复追加）。
- * 应在对局开始前调用（对手尚无真实射击、phase 为 placing/playing 皆可）。
+ * 将 victim 方第 planeIndex 架飞机整机标记为"已被对手击毁"：
+ * - 该机 id 加入 victim.destroyedPlaneIds（此后对其任意残骸格报点返回 miss，无效打击）；
+ * - 其全部占位格补记 victim.receivedShots（非机头格 'hit'、机头格 'kill'；已在记录中的坐标不重复），
+ *   供我方网格渲染"对方已完成该击毁"的标记历史。
+ * 注意：**不写入对方 shotsFired**——保留其射击历史干净，使"该机残骸格后续被报点"仍按
+ * miss 裁决（而非 already-shot）；对家 AI/教学 AI 的 knowledge 亦不受注入污染。
+ * 应在对局开始前调用（对方尚无真实射击、phase 为 placing/playing 皆可）。
  * 若该机已在 destroyedPlaneIds 中 → 原样返回（幂等）。
  */
 export function markPlaneDestroyed(state: GameState, victim: PlayerId, planeIndex: number): GameState {
@@ -705,19 +707,13 @@ export function markPlaneDestroyed(state: GameState, victim: PlayerId, planeInde
       outcome: cell.r === headAbs.r && cell.c === headAbs.c ? 'kill' : 'hit',
     })
   }
-  const opponent = (1 - victim) as PlayerId
-  const oppExisting = new Set(state.players[opponent].shotsFired.map((s) => cellKey(s.coord.r, s.coord.c)))
-  const oppShots = shots.filter((s) => !oppExisting.has(cellKey(s.coord.r, s.coord.c)))
+  const newBoard: PlayerBoard = {
+    ...board,
+    receivedShots: [...board.receivedShots, ...shots],
+    destroyedPlaneIds: [...board.destroyedPlaneIds, plane.id],
+  }
   const players: [PlayerBoard, PlayerBoard] =
-    victim === 0
-      ? [
-          { ...board, receivedShots: [...board.receivedShots, ...shots], destroyedPlaneIds: [...board.destroyedPlaneIds, plane.id] },
-          { ...state.players[1], shotsFired: [...state.players[1].shotsFired, ...oppShots] },
-        ]
-      : [
-          { ...state.players[0], shotsFired: [...state.players[0].shotsFired, ...oppShots] },
-          { ...board, receivedShots: [...board.receivedShots, ...shots], destroyedPlaneIds: [...board.destroyedPlaneIds, plane.id] },
-        ]
+    victim === 0 ? [newBoard, state.players[1]] : [state.players[0], newBoard]
   return { ...state, players }
 }
 
@@ -728,4 +724,42 @@ export function markPlaneDestroyed(state: GameState, victim: PlayerId, planeInde
 export function setActiveTurn(state: GameState, player: PlayerId): GameState {
   if (state.turn === player) return state
   return { ...state, turn: player }
+}
+
+/** 残局开局种子（教程单元3 等）：'me'=玩家 0，'them'=玩家 1 */
+export interface EndgameSeed {
+  /** 被标记为"已被对方击毁"的飞机：side 决定哪一方，planeIndex 为该方 planes 数组下标 */
+  preKill: { side: 'me' | 'them'; planeIndex: number }
+  /** 当前行动方（教程单元3 为 'them'，即对方先手） */
+  firstTurn: 'me' | 'them'
+}
+
+/**
+ * 残局开局工厂（纯函数）：一步完成"双方摆阵就绪 + 指定一架整机已被击毁 + 设定当前行动方"。
+ * 内部等价于 createGame(..., firstMover 0) → 双方 setFleet → markPlaneDestroyed → setActiveTurn。
+ * 被标记已毁飞机的全部格按 markPlaneDestroyed 语义补记 receivedShots 与对方 shotsFired，
+ * 此后对该机残骸任意格报点返回 miss（无效打击）。摆阵非法或 planeIndex 越界 → { ok: false, errors }。
+ */
+export function createEndgameState(
+  width: number,
+  height: number,
+  shape: PlaneShape,
+  planeCount: number,
+  myPlanes: PlacedPlane[],
+  opponentPlanes: PlacedPlane[],
+  seed: EndgameSeed,
+): { ok: true; state: GameState } | { ok: false; errors: string[] } {
+  const g = createGame(width, height, shape, planeCount, 0)
+  const s0 = setFleet(g, 0, myPlanes)
+  if (!s0.ok) return { ok: false, errors: s0.errors }
+  const s1 = setFleet(s0.state, 1, opponentPlanes)
+  if (!s1.ok) return { ok: false, errors: s1.errors }
+  const victim: PlayerId = seed.preKill.side === 'me' ? 0 : 1
+  const victims = victim === 0 ? myPlanes : opponentPlanes
+  if (seed.preKill.planeIndex < 0 || seed.preKill.planeIndex >= victims.length) {
+    return { ok: false, errors: [`preKill.planeIndex ${seed.preKill.planeIndex} 越界（该方共 ${victims.length} 架）`] }
+  }
+  const destroyed = markPlaneDestroyed(s1.state, victim, seed.preKill.planeIndex)
+  const first: PlayerId = seed.firstTurn === 'me' ? 0 : 1
+  return { ok: true, state: setActiveTurn(destroyed, first) }
 }

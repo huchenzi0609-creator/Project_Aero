@@ -8,6 +8,7 @@ import { DEFAULT_PLANE_SHAPE, type Cell, type PlacedPlane, type Shot } from '@ae
 import { chooseTutorialShot, mulberry32, type ShotKnowledge } from '@aero/game-core/ai'
 import {
   applyShot,
+  createEndgameState,
   createGame,
   markPlaneDestroyed,
   occupiedCells,
@@ -91,7 +92,7 @@ describe('v0.3.0 教程·教学 AI（避开机头报点）', () => {
 })
 
 describe('v0.3.0 教程·残局状态注入', () => {
-  it('markPlaneDestroyed：整机已毁、补记 9 hit + 1 kill（receivedShots 与对方 shotsFired），余机数正确、幂等', () => {
+  it('markPlaneDestroyed：整机已毁、补记 9 hit + 1 kill（仅 receivedShots，对方 shotsFired 保持干净）、幂等', () => {
     const g = newBigGame(0)
     const injected = markPlaneDestroyed(g, 0, 1) // 我方 id1 机（(5,0)，头 (5,2)）
     expect(injected.players[0].destroyedPlaneIds).toEqual([1])
@@ -101,7 +102,8 @@ describe('v0.3.0 教程·残局状态注入', () => {
     expect(received.filter((s) => s.outcome === 'kill')).toHaveLength(1)
     expect(received.filter((s) => s.outcome === 'hit')).toHaveLength(9)
     expect(received.find((s) => s.outcome === 'kill')!.coord).toEqual({ r: 5, c: 2 })
-    expect(injected.players[1].shotsFired).toHaveLength(10)
+    // 对方射击历史不被注入污染 → 后续打残骸格返回 miss（而非 already-shot）
+    expect(injected.players[1].shotsFired).toHaveLength(0)
     expect(markPlaneDestroyed(injected, 0, 1)).toEqual(injected) // 幂等
   })
 
@@ -157,5 +159,70 @@ describe('v0.3.0 教程·残局状态注入', () => {
     expect(r2.ok).toBe(true)
     expect(r2.outcome).toBe('miss')
     expect(r2.state!.turn).toBe(1)
+  })
+
+  it('createEndgameState 工厂：我方毁一架 + 对方先手 + 初始状态完整', () => {
+    const opponent = fleet([
+      { r: 9, c: 5 },
+      { r: 9, c: 10 },
+      { r: 4, c: 10 },
+    ])
+    const r = createEndgameState(15, 15, DEFAULT_PLANE_SHAPE, 3, MY_FLEET, opponent, {
+      preKill: { side: 'me', planeIndex: 1 },
+      firstTurn: 'them',
+    })
+    expect(r.ok).toBe(true)
+    if (r.ok) {
+      const g = r.state
+      expect(g.phase).toBe('playing')
+      expect(g.turn).toBe(1) // 对方先手
+      expect(g.players[0].destroyedPlaneIds).toEqual([1])
+      expect(remainingPlanes(g.players[0])).toBe(2)
+      const received = g.players[0].receivedShots
+      expect(received).toHaveLength(10)
+      expect(received.find((s) => s.outcome === 'kill')!.coord).toEqual({ r: 5, c: 2 }) // 我方 id1 机头
+      expect(g.players[1].shotsFired).toHaveLength(0) // 注入不写对方射击历史
+    }
+    // 越界 planeIndex → ok:false
+    const bad = createEndgameState(15, 15, DEFAULT_PLANE_SHAPE, 3, MY_FLEET, opponent, {
+      preKill: { side: 'me', planeIndex: 9 },
+      firstTurn: 'them',
+    })
+    expect(bad.ok).toBe(false)
+    // 非法摆阵（单方内部重叠）→ ok:false
+    const overlapMine = fleet([
+      { r: 0, c: 0 },
+      { r: 0, c: 0 }, // 与上一架重叠
+      { r: 9, c: 5 },
+    ])
+    const overlap = createEndgameState(15, 15, DEFAULT_PLANE_SHAPE, 3, overlapMine, opponent, {
+      preKill: { side: 'me', planeIndex: 0 },
+      firstTurn: 'them',
+    })
+    expect(overlap.ok).toBe(false)
+  })
+
+  it('被注入击毁的飞机：后续对其任意残骸格报点返回 miss（无效打击）', () => {
+    const opponent = fleet([
+      { r: 9, c: 5 },
+      { r: 9, c: 10 },
+      { r: 4, c: 10 },
+    ])
+    const r = createEndgameState(15, 15, DEFAULT_PLANE_SHAPE, 3, MY_FLEET, opponent, {
+      preKill: { side: 'me', planeIndex: 0 }, // 我方 id0 机（(0,0)，头 (0,2)）
+      firstTurn: 'them',
+    })
+    if (!r.ok) throw new Error('factory fail')
+    let cur = r.state
+    // 对方（先手）打已毁 id0 机的残骸格（机身 (1,0)）→ miss（不 kill 不 hit）
+    const s1 = applyShot(cur, { r: 1, c: 0 })
+    expect(s1.ok).toBe(true)
+    expect(s1.outcome).toBe('miss')
+    cur = s1.state!
+    // 再打其机头残骸格 (0,2) → 仍 miss
+    const s2 = applyShot(cur, { r: 0, c: 2 })
+    expect(s2.ok).toBe(true)
+    expect(s2.outcome).toBe('miss')
+    expect(s2.state!.players[0].destroyedPlaneIds).toEqual([0]) // 未被再次击毁
   })
 })
