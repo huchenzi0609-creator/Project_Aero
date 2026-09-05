@@ -11,7 +11,7 @@
  */
 import { expect, test } from '@playwright/test'
 import type { BrowserContext, Page } from '@playwright/test'
-import { allCoords, openOnline, oppCell, practiceToPlacement, watchErrors } from './helpers'
+import { allCoords, oppCell, practiceToPlacement, watchErrors } from './helpers'
 
 interface Rect {
   x: number

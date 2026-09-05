@@ -10,7 +10,6 @@ import {
   bothReadyOnline,
   createRoomHost,
   joinRoomByCode,
-  openOnline,
   oppCell,
   watchErrors,
 } from './helpers'

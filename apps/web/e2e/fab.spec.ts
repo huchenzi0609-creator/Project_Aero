@@ -31,7 +31,7 @@ test.describe('回到未完成对局浮窗', () => {
   test.setTimeout(150_000)
 
   test('摆阵中刷新→浮窗→点击回摆阵', async ({ browser }) => {
-    const { ctxA, ctxB, A, B, errsA, errsB } = await twoInRoom(browser)
+    const { ctxA, ctxB, A, errsA, errsB } = await twoInRoom(browser)
     const fab = A.locator('.fab')
     await expect(fab).toHaveCount(0) // 已在摆阵页内不显示
     await A.reload()
@@ -51,7 +51,7 @@ test.describe('回到未完成对局浮窗', () => {
   })
 
   test('拖拽吸附到边缘；确认退出清理房间后主页无浮窗', async ({ browser }) => {
-    const { ctxA, ctxB, A, B, errsA, errsB } = await twoInRoom(browser)
+    const { ctxA, ctxB, A, errsA, errsB } = await twoInRoom(browser)
     const fab = A.locator('.fab')
     await A.reload()
     await expect(fab).toBeVisible({ timeout: 15000 })
@@ -85,7 +85,7 @@ test.describe('回到未完成对局浮窗', () => {
   })
 
   test('对局中刷新→浮窗→点击回联机对局', async ({ browser }) => {
-    const { ctxA, ctxB, A, B, errsA, errsB } = await twoInRoom(browser)
+    const { ctxA, ctxB, A, errsA, errsB } = await twoInRoom(browser)
     const fab = A.locator('.fab')
     await bothReadyOnline(A, B)
     await expect(fab).toHaveCount(0)
