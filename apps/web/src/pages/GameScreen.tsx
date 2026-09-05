@@ -104,6 +104,8 @@ export function GameScreen({ mode = 'single', onGameEvent, aiShotSelector }: Gam
   const [myMsg, setMyMsg] = useState<string | null>(null)
   const [shake, setShake] = useState(false)
   const [exitOpen, setExitOpen] = useState(false)
+  /** 预报点「选中待确认/取消」格（非我方回合高亮；我方回合一律清空） */
+  const [pfSel, setPfSel] = useState<Cell | null>(null)
   const shakeTimer = useRef(0)
   const sfxTimers = useRef<number[]>([])
   const oppBoardRef = useRef<HTMLDivElement | null>(null)
@@ -124,6 +126,15 @@ export function GameScreen({ mode = 'single', onGameEvent, aiShotSelector }: Gam
   /* ---------- v0.3.0 规则开关（config 由摆阵页 CustomConfig 写入 GridConfig.blitz/blind） ---------- */
   const isBlind = config?.blind ?? false
   const isBlitz = config?.blitz ?? false
+
+  /* ---------- 预报点队列（引擎权威）与逻辑回合签名（R2） ---------- */
+  const myPreFire: readonly Cell[] = (state?.preFire?.[me] ?? []) as readonly Cell[]
+  const myPreFireKeys = useMemo(() => new Set(myPreFire.map(cellKey)), [myPreFire])
+  // 逻辑签名只在“对局实质推进”（回合/阶段/局次/队列）时变化：
+  // blitz 时钟每 ~100ms 的纯计时写入不改变它，依赖它的“AI 出手 / 预报点自动上报”定时 effect
+  // 不会被时钟写入反复 cleanup + 重排导致 setTimeout 永不触发。
+  const turnSig = state ? `${session?.nonce ?? 0}|${state.phase}|${state.turn}|${state.turnNo}` : ''
+  const queueSig = state ? `${turnSig}|${myPreFire.length}|${myPreFire[0] ? cellKey(myPreFire[0]!) : ''}` : ''
 
   /* ---------- 着色工具（每局独立，新对局清空；v0.3.0 幽灵着色/快捷着色） ---------- */
   // 幽灵飞机（在场放置副本）的活动列表：由 refPlanes.placed 经 useLayoutEffect 同步（见下），
@@ -241,7 +252,8 @@ export function GameScreen({ mode = 'single', onGameEvent, aiShotSelector }: Gam
       fireAiShot(chooseShot(knowledge, difficulty, session.aiRng))
     }, 300 + Math.random() * 600)
     return () => window.clearTimeout(t)
-  }, [state, screen, session?.nonce, onGameEvent, aiShotSelector])
+    // 依赖逻辑回合签名而非整个 state：blitz 时钟写入（每 ~100ms 新 state）不得重排本定时器（R2）
+  }, [turnSig, screen, session?.nonce, onGameEvent, aiShotSelector])
 
   // 我方回合开始：清掉对方回合遗留的预报点选中；若有预报点待报则再清提示让「轮到你了…」可读
   useEffect(() => {
@@ -254,11 +266,6 @@ export function GameScreen({ mode = 'single', onGameEvent, aiShotSelector }: Gam
   }, [state, screen])
 
   /* ================= v0.3.0：预报点 / 超快棋（挂载于对战期） ================= */
-
-  // —— 预报点：我方队列以引擎 state.preFire 为权威（联机才用客户端队列）——
-  const myPreFire: readonly Cell[] = (state?.preFire?.[me] ?? []) as readonly Cell[]
-  const myPreFireKeys = useMemo(() => new Set(myPreFire.map(cellKey)), [myPreFire])
-  const [pfSel, setPfSel] = useState<Cell | null>(null)
 
   // 我方回合开始：预报点 FIFO 自动上报（每回合最多一个；队列空恢复手动报点）。
   // autoFiredTurnRef 记录已消费的回合号，避免同一回合内重复触发（applyShot 翻回合后自然复位）。
@@ -298,7 +305,8 @@ export function GameScreen({ mode = 'single', onGameEvent, aiShotSelector }: Gam
       450, // 回合翻转后稍作停顿，让状态条"轮到你了…"可读
     )
     return () => window.clearTimeout(t)
-  }, [state, screen])
+    // 依赖队列签名而非整个 state：blitz 时钟写入不得重排自动上报定时器（与 R2 同根因）
+  }, [queueSig, screen])
 
   // —— 超快棋：rAF 实时推进当前回合方时钟（象棋钟语义）——
   const timeoutLoserRef = useRef<0 | 1 | null>(null)
@@ -585,6 +593,9 @@ export function GameScreen({ mode = 'single', onGameEvent, aiShotSelector }: Gam
       shakeInput()
       return
     }
+    // R1 竞态防护：手动报点命中仍在预报点队列的坐标（自动上报 450ms 窗口内抢先手点）→
+    // 先撤掉该预报点再打，避免“真实章 + 残留 ?”同格双渲染与队列滞留
+    if (myPreFireKeys.has(cellKey(cell))) cancelPreFireAt(cell)
     const res: ShotResult | null = applyShotAt(cell)
     if (!res || !res.ok) {
       if (res?.error === 'already-shot') {
@@ -688,10 +699,14 @@ export function GameScreen({ mode = 'single', onGameEvent, aiShotSelector }: Gam
 
   // 我方在对手网格上的可见标记：盲棋只显示最近 N 个非击毁 + 全部击毁（同格重复条目去重保键唯一）
   const oppVisibleShots: Shot[] = isBlind ? dedupeShots(visibleMarks(state).player0) : myBoard.shotsFired
-  // 预报点以 outcome:'miss' 占位伪 shot 追加渲染（不进统计；引擎保证不与可见标记同格）
+  // 防御（R1）：预报点伪标记不与【已可见】报点格同格叠加——手动报点抢先于自动上报等竞态下，
+  // 队列可能暂留已报坐标；同格只渲染真实章，伪「?」隐藏直到队列被自动/取消清理（格位唯一、无重复 key）
+  const oppVisibleKeys = new Set(oppVisibleShots.map((s) => cellKey(s.coord)))
   const oppRenderShots: Shot[] = [
     ...oppVisibleShots,
-    ...myPreFire.map((c) => ({ coord: { r: c.r, c: c.c }, outcome: 'miss' as const })),
+    ...myPreFire
+      .filter((c) => !oppVisibleKeys.has(cellKey(c)))
+      .map((c) => ({ coord: { r: c.r, c: c.c }, outcome: 'miss' as const })),
   ]
 
   // 我方小网格 / 结算真实阵型的重复报点章去重（仅盲棋会出现同格多条；渲染格位唯一）
@@ -703,9 +718,10 @@ export function GameScreen({ mode = 'single', onGameEvent, aiShotSelector }: Gam
     (p) => p.id === -1 || !retiredGhostIds.has(String(p.id)),
   )
 
-  // 自定义报点渲染：预报点画「?」章，其余保持 StampMark（含反转设置）
+  // 自定义报点渲染：预报点伪标记画「?」章（与可见标记同格时不再画 ?，防止竞态遮蔽真实结果）；
+  // 其余保持 StampMark（含反转设置）
   const renderOppShot = (shot: Shot, size: number) =>
-    myPreFireKeys.has(cellKey(shot.coord)) ? (
+    myPreFireKeys.has(cellKey(shot.coord)) && !oppVisibleKeys.has(cellKey(shot.coord)) ? (
       <PreFireMark coord={shot.coord} size={size} />
     ) : (
       <StampMark outcome={shot.outcome} size={size * 0.82} cell={shot.coord} inverted={invertMarks} />
