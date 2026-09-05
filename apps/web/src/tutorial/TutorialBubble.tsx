@@ -13,6 +13,7 @@ export function TutorialBubble({
   skipLabel,
   onSkip,
   showHint = true,
+  anchor = 'bottom',
 }: {
   text: string
   onClick: () => void
@@ -20,6 +21,8 @@ export function TutorialBubble({
   onSkip: () => void
   /** 仅纯文本步（点击推进）显示「点击继续」；等待游戏事件的条件步不显示（v0.3.1） */
   showHint?: boolean
+  /** 锚点：底部（默认）／顶部（突显目标在输入栏/底部工具栏时上置，避免气泡遮挡） */
+  anchor?: 'bottom' | 'top'
 }) {
   const ref = useRef<HTMLDivElement | null>(null)
   const [pos, setPos] = useState<{ left?: number; top?: number; right?: number; bottom?: number } | null>(null)
@@ -35,7 +38,9 @@ export function TutorialBubble({
       if (!stage) return
       // 默认竖版：舞台底部；横版：参考网格下方右侧
       const portrait = stage.height > stage.width
-      if (portrait) {
+      if (anchor === 'top') {
+        setPos({ left: stage.left + (stage.width - bubble.width) / 2, top: 12 })
+      } else if (portrait) {
         setPos({ left: stage.left + (stage.width - bubble.width) / 2, bottom: 12 })
       } else {
         setPos({ right: 16, bottom: 64 })
@@ -47,12 +52,12 @@ export function TutorialBubble({
       window.clearTimeout(t)
       window.removeEventListener('resize', place)
     }
-  }, [text])
+  }, [text, anchor])
 
   return (
     <div
       ref={ref}
-      className="tutorial-bubble"
+      className={anchor === 'top' ? 'tutorial-bubble tutorial-bubble--top' : 'tutorial-bubble'}
       style={pos ?? undefined}
       role="dialog"
       aria-label="教程提示"

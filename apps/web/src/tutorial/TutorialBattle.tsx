@@ -485,6 +485,8 @@ export function TutorialBattle({ variant, fleet, onExitHome, onGoAdvanced }: Tut
   const showBubble = !!node && !free && r != null && segsNow.length > 0
   const segText = showBubble ? (segsNow[Math.min(r!.seg, segsNow.length - 1)] ?? '') : ''
   const highlight = !free && node?.highlight ? node.highlight : null
+  // 突显目标位于底部输入栏/工具栏时，气泡上置（A3：避免气泡遮住着色按钮等底部目标）
+  const bubbleAnchor = node?.highlight && (node.highlight.startsWith('.game__inputbar') || node.highlight.includes('coloring') || node.highlight.startsWith('.tutorial-confirm')) ? 'top' : 'bottom'
   const unitLabel = variant === 'basic' ? '对战基础' : '工具进阶'
 
   /** 跳过确认（确认 = 视为完成：basic→P3 / advanced→P5） */
@@ -527,6 +529,7 @@ export function TutorialBattle({ variant, fleet, onExitHome, onGoAdvanced }: Tut
           key={`${node!.id}-${r!.seg}`}
           text={segText}
           showHint={node!.kind === 'click'}
+          anchor={bubbleAnchor}
           onClick={onBubbleClick}
           skipLabel={`跳过 · ${unitLabel}`}
           onSkip={() => setSkipOpen(true)}

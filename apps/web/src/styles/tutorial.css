@@ -114,3 +114,10 @@
   color: var(--ink-faint);
   letter-spacing: 0.14em;
 }
+
+/* v0.3.1：顶部锚气泡（突显目标在底部输入栏/工具栏时上置，避免遮挡） */
+.tutorial-bubble--top::after {
+  top: -7px;
+  bottom: auto;
+  transform: rotate(-135deg);
+}
