@@ -9,13 +9,31 @@ import type {
   Cell,
   PlaneShape,
   PlacedPlane,
+  PlayerId,
   Rotation,
   Shot,
   ShotOutcome,
 } from '@aero/shared'
-import { SHAPE_MAX_CELLS, SHAPE_MIN_CELLS } from '@aero/shared'
+import {
+  BLIND_VISIBLE_RECENT,
+  BLITZ_BONUS_MS,
+  BLITZ_SECONDS_PER_PLANE,
+  PRE_FIRE_LIMIT,
+  SHAPE_MAX_CELLS,
+  SHAPE_MIN_CELLS,
+} from '@aero/shared'
 
-export type { Cell, PlaneShape, PlacedPlane, Rotation, Shot, ShotOutcome, GridConfig, Difficulty } from '@aero/shared'
+export type {
+  Cell,
+  PlaneShape,
+  PlacedPlane,
+  PlayerId,
+  Rotation,
+  Shot,
+  ShotOutcome,
+  GridConfig,
+  Difficulty,
+} from '@aero/shared'
 
 /** 编辑器坐标系边长（5×5） */
 export const SHAPE_SIZE = 5
@@ -223,6 +241,23 @@ export interface PlayerBoard {
 
 export type GamePhase = 'placing' | 'playing' | 'counterattack' | 'ended'
 
+/** 对局模式开关：blitz=超快棋、blind=盲棋（两者互不冲突，可组合） */
+export interface GameModeFlags {
+  blitz: boolean
+  blind: boolean
+}
+
+/** 创建对局时的模式选项（缺省即经典模式） */
+export interface GameOptions {
+  blitz?: boolean
+  blind?: boolean
+}
+
+/** 超快棋时钟（毫秒/方，索引 0=先手 1=后手）；仅 blitz 局存在于 state.blitz */
+export interface BlitzClock {
+  clocks: [number, number]
+}
+
 export interface GameState {
   phase: GamePhase
   players: [PlayerBoard, PlayerBoard] // 0=先手, 1=后手
@@ -230,15 +265,34 @@ export interface GameState {
   firstMover: 0 | 1
   turnNo: number // 从 1 开始
   winner: 0 | 1 | null
+  /** 模式开关；缺失视为经典模式（v0.3.0 起） */
+  mode?: GameModeFlags
+  /** 超快棋时钟；仅 blitz 局存在（v0.3.0 起） */
+  blitz?: BlitzClock
+  /** 每方预报点队列（上限 PRE_FIRE_LIMIT=10，FIFO）；缺失视为空队列（v0.3.0 起） */
+  preFire?: Record<PlayerId, Cell[]>
 }
 
+/** 读取模式（缺省经典） */
+const modeOf = (state: GameState): GameModeFlags => state.mode ?? { blitz: false, blind: false }
+
+/** 读取某玩家预报点队列（缺省空） */
+const preFireOf = (state: GameState, player: PlayerId): Cell[] => state.preFire?.[player] ?? []
+
+/**
+ * 创建对局（经典 / 超快棋 / 盲棋 / 组合）。options 缺省时即为经典模式，向后兼容旧调用。
+ * blitz：clocks 初始化为 10×planeCount×1000 ms/方；blind：开启重复报点与 3 标记可见规则。
+ */
 export function createGame(
   width: number,
   height: number,
   shape: PlaneShape,
   planeCount: number,
   firstMover: 0 | 1,
+  options?: GameOptions,
 ): GameState {
+  const blitzFlag = options?.blitz ?? false
+  const blindFlag = options?.blind ?? false
   const mkBoard = (): PlayerBoard => ({
     width,
     height,
@@ -248,15 +302,22 @@ export function createGame(
     receivedShots: [],
     shotsFired: [],
   })
-  void planeCount // planeCount 为对局级配置，由 validateFleet/setFleet 侧校验，状态中不落该字段
-  return {
+  const state: GameState = {
     phase: 'placing',
     players: [mkBoard(), mkBoard()],
     turn: firstMover,
     firstMover,
     turnNo: 1,
     winner: null,
+    mode: { blitz: blitzFlag, blind: blindFlag },
+    preFire: { 0: [], 1: [] },
   }
+  if (blitzFlag) {
+    // 初始限时：10×n 秒/方（n = 飞机架数）
+    const ms = BLITZ_SECONDS_PER_PLANE * planeCount * 1000
+    state.blitz = { clocks: [ms, ms] }
+  }
+  return state
 }
 
 /**
@@ -304,9 +365,13 @@ export interface ShotResult {
 /**
  * 报点裁决（纯函数）：
  * 1) 仅 playing / counterattack 阶段合法；
- * 2) 越界 → 'out-of-bounds'；3) 重复报点 → 'already-shot'；
+ * 2) 越界 → 'out-of-bounds'；
+ * 3) 非盲棋（blind=false）：重复报点 → 'already-shot'；盲棋允许对已报点格再次报点
+ *   （含残骸格，仍返回 miss 误导对手），跳过本拦截；
  * 4) 目标格判定：无飞机/已击毁飞机（无效打击）→ miss；存活飞机非机头 → hit；机头 → kill；
- * 5) 报点写入双方记录；6) 胜负与绝地反击判定；7) counterattack 阶段按 outcome 定胜负。
+ * 5) 报点写入双方记录；
+ * 6) 超快棋（blitz）：射击方每次成功报点 +1 秒时钟；
+ * 7) 胜负与绝地反击判定；8) counterattack 阶段按 outcome 定胜负。
  */
 export function applyShot(state: GameState, coord: Cell): ShotResult {
   // 1) 阶段合法性
@@ -323,8 +388,9 @@ export function applyShot(state: GameState, coord: Cell): ShotResult {
     return { ok: false, error: 'out-of-bounds' }
   }
 
-  // 3) 已报过（当前报点方的 shotsFired）
-  if (shooterBoard.shotsFired.some((s) => cellsEqual(s.coord, coord))) {
+  // 3) 已报过（当前报点方的 shotsFired）——仅经典模式拦截；盲棋允许重复报点
+  const { blind } = modeOf(state)
+  if (!blind && shooterBoard.shotsFired.some((s) => cellsEqual(s.coord, coord))) {
     return { ok: false, error: 'already-shot' }
   }
 
@@ -373,14 +439,23 @@ export function applyShot(state: GameState, coord: Cell): ShotResult {
   const players: [PlayerBoard, PlayerBoard] =
     shooter === 0 ? [newShooter, newTarget] : [newTarget, newShooter]
 
-  // 6) 胜负与绝地反击
+  // 6) 超快棋：射击方成功报点 +1 秒
+  let blitzNext: BlitzClock | undefined = state.blitz
+  const { blitz: blitzFlag } = modeOf(state)
+  if (blitzFlag && state.blitz) {
+    const clocks: [number, number] = [...state.blitz.clocks] as [number, number]
+    clocks[shooter] += BLITZ_BONUS_MS
+    blitzNext = { clocks }
+  }
+
+  // 7) 胜负与绝地反击
   let phase: GamePhase = state.phase
   let turn = state.turn
   let turnNo = state.turnNo
   let winner: 0 | 1 | null = state.winner
 
   if (state.phase === 'counterattack') {
-    // 7) 绝地反击的唯一一次报点：kill 则后手胜，否则先手胜
+    // 8) 绝地反击的唯一一次报点：kill 则后手胜，否则先手胜
     winner = outcome === 'kill' ? shooter : state.firstMover
     phase = 'ended'
   } else {
@@ -404,7 +479,15 @@ export function applyShot(state: GameState, coord: Cell): ShotResult {
     }
   }
 
-  const newState: GameState = { ...state, players, phase, turn, turnNo, winner }
+  const newState: GameState = {
+    ...state,
+    players,
+    phase,
+    turn,
+    turnNo,
+    winner,
+    blitz: blitzNext,
+  }
   const result: ShotResult = { ok: true, outcome, state: newState }
   if (killedPlaneId !== undefined) result.killedPlaneId = killedPlaneId
   if (winner !== null) result.winner = winner
@@ -452,4 +535,145 @@ export function killEfficiencyStats(state: GameState): { player0: number | null;
     }
   }
   return result
+}
+
+/* ================= v0.3.0：超快棋 / 盲棋 / 预报点 ================= */
+
+export interface BlitzAdvanceResult {
+  state: GameState
+  timedOut: boolean
+  winner?: PlayerId
+}
+
+/**
+ * 超快棋（blitz）时钟推进（纯函数）：递减指定玩家时钟 deltaMs 毫秒。
+ * - 仅 blitz 局可调用（state.blitz 缺失时抛错，属调用方误用）；
+ * - 递减至 ≤0 → 该玩家超时立即判负：phase='ended'、winner=对方；
+ * - 其余情况仅返回扣减后的新 state（winner 沿用原值）。
+ * 注：返回中额外携带新 state（引擎为纯函数、调用方需应用新时钟）；任务原签名未含 state，
+ * 此处为使其可消费而补上，语义（递减+超时判负）不变——见交付说明。
+ */
+export function advanceBlitzClock(state: GameState, player: PlayerId, deltaMs: number): BlitzAdvanceResult {
+  if (!state.blitz) {
+    throw new Error('advanceBlitzClock 仅适用于超快棋（blitz）对局（state.blitz 缺失）')
+  }
+  if (deltaMs <= 0) {
+    return { state, timedOut: false }
+  }
+  const clocks: [number, number] = [...state.blitz.clocks]
+  const remaining = Math.max(0, clocks[player]! - deltaMs)
+  clocks[player] = remaining
+  if (remaining > 0) {
+    return { state: { ...state, blitz: { clocks } }, timedOut: false }
+  }
+  const winner = (1 - player) as PlayerId
+  return {
+    state: { ...state, blitz: { clocks }, phase: 'ended', winner },
+    timedOut: true,
+    winner,
+  }
+}
+
+/** 可见标记表：player0/player1 = 各自在"对手网格"上应显示的标记（本人射击结果） */
+export interface VisibleMarks {
+  player0: Shot[]
+  player1: Shot[]
+}
+
+const copyShot = (s: Shot): Shot => ({ coord: { r: s.coord.r, c: s.coord.c }, outcome: s.outcome })
+
+/**
+ * 各玩家在对手网格上应显示的标记（纯函数，供 UI 渲染）：
+ * - 经典模式：全部报点标记（shotsFired 全量）；
+ * - 盲棋：只保留最近 BLIND_VISIBLE_RECENT(=3) 个非击毁标记（FIFO，先进先淘汰）
+ *   + 全部击毁标记（永不消失、不计入 3 个名额）；返回列表保持原报点顺序。
+ */
+export function visibleMarks(state: GameState): VisibleMarks {
+  const { blind } = modeOf(state)
+  const build = (player: PlayerId): Shot[] => {
+    const fired = state.players[player].shotsFired
+    if (!blind) return fired.map(copyShot)
+    // 盲棋：非击毁只保留时间上最近的 3 个
+    const recentNonKillIdx = new Set<number>()
+    let seen = 0
+    for (let i = fired.length - 1; i >= 0 && seen < BLIND_VISIBLE_RECENT; i--) {
+      const s = fired[i]!
+      if (s.outcome === 'kill') continue
+      recentNonKillIdx.add(i)
+      seen++
+    }
+    const out: Shot[] = []
+    for (let i = 0; i < fired.length; i++) {
+      const s = fired[i]!
+      if (s.outcome === 'kill' || recentNonKillIdx.has(i)) out.push(copyShot(s))
+    }
+    return out
+  }
+  return { player0: build(0), player1: build(1) }
+}
+
+/**
+ * 预报点（所有模式通用）：将坐标加入 player 的预报点队列（上限 PRE_FIRE_LIMIT=10，FIFO）。
+ * 校验失败返回错误码：
+ * - 'CELL_TAKEN'：该格已有可见标记（按 visibleMarks 对 player 的规则）或已在该玩家预报点中；
+ * - 'PRE_FIRE_FULL'：队列已满（上限 10）。
+ * 纯函数：成功返回新 state，失败返回原 state 与错误码。
+ */
+export function queuePreFire(
+  state: GameState,
+  player: PlayerId,
+  coord: Cell,
+): { ok: true; state: GameState } | { ok: false; error: 'CELL_TAKEN' | 'PRE_FIRE_FULL' } {
+  const queue = preFireOf(state, player)
+  // 该格已有可见标记（按盲棋规则过滤后 player 在对手网格上的标记）
+  const marks = visibleMarks(state)[player === 0 ? 'player0' : 'player1']
+  if (marks.some((s) => cellsEqual(s.coord, coord)) || queue.some((c) => cellsEqual(c, coord))) {
+    return { ok: false, error: 'CELL_TAKEN' }
+  }
+  if (queue.length >= PRE_FIRE_LIMIT) {
+    return { ok: false, error: 'PRE_FIRE_FULL' }
+  }
+  const next: Record<PlayerId, Cell[]> = {
+    0: [...preFireOf(state, 0)],
+    1: [...preFireOf(state, 1)],
+  }
+  next[player] = [...queue, { r: coord.r, c: coord.c }]
+  return { ok: true, state: { ...state, preFire: next } }
+}
+
+/**
+ * 取消预报点（纯函数）：从 player 队列移除指定坐标；不存在时返回原 state。
+ */
+export function cancelPreFire(state: GameState, player: PlayerId, coord: Cell): GameState {
+  const queue = preFireOf(state, player)
+  const idx = queue.findIndex((c) => cellsEqual(c, coord))
+  if (idx === -1) return state
+  const nextQueue = queue.filter((c) => !cellsEqual(c, coord))
+  const next: Record<PlayerId, Cell[]> = {
+    0: [...preFireOf(state, 0)],
+    1: [...preFireOf(state, 1)],
+  }
+  next[player] = nextQueue
+  return { ...state, preFire: next }
+}
+
+/**
+ * 预报点回合执行：轮到 player 时调用（需 state.turn === player）。
+ * 队列非空 → 取出队首（FIFO）执行一次正常报点并返回其 ShotResult（每回合只上报一个）；
+ * 队列空 → 返回 null（走正常回合）。
+ */
+export function takePreFireTurn(state: GameState, player: PlayerId): ShotResult | null {
+  if (state.turn !== player) {
+    throw new Error('takePreFireTurn 需在该玩家回合（state.turn）调用')
+  }
+  const queue = preFireOf(state, player)
+  if (queue.length === 0) return null
+  const [head, ...rest] = queue
+  const next: Record<PlayerId, Cell[]> = {
+    0: [...preFireOf(state, 0)],
+    1: [...preFireOf(state, 1)],
+  }
+  next[player] = rest
+  const stateWithoutHead: GameState = { ...state, preFire: next }
+  return applyShot(stateWithoutHead, head!)
 }

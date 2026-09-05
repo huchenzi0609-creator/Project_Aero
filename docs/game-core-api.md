@@ -12,8 +12,14 @@
 ## 导出清单（packages/game-core/src/index.ts）
 
 ```ts
-export type { Cell, PlaneShape, PlacedPlane, Rotation, Shot, ShotOutcome, GridConfig, Difficulty } from '@aero/shared'
+export type { Cell, PlaneShape, PlacedPlane, Rotation, Shot, ShotOutcome, GridConfig, Difficulty, PlayerId } from '@aero/shared'
+```
 
+> 模式开关（shared `GridConfig`，均可选、缺省 false、互不冲突）：`blitz`（超快棋）、`blind`（盲棋）；
+> 经典 = 两者皆否，自定义可任意组合。旧配置（无这两字段）向后兼容。
+> 常量（shared）：`BLITZ_SECONDS_PER_PLANE = 10`、`BLITZ_BONUS_MS = 1000`、`BLIND_VISIBLE_RECENT = 3`、`PRE_FIRE_LIMIT = 10`。
+
+```ts
 export const SHAPE_SIZE = 5
 
 /** 规范化：去重 cells、校验 head 在 cells 内（非法返回原样 + 由 validateShape 判定） */
@@ -57,6 +63,10 @@ export interface PlayerBoard {
 
 export type GamePhase = 'placing' | 'playing' | 'counterattack' | 'ended'
 
+export interface GameModeFlags { blitz: boolean; blind: boolean }        // 模式开关（v0.3.0 起）
+export interface GameOptions { blitz?: boolean; blind?: boolean }         // createGame 选项
+export interface BlitzClock { clocks: [number, number] }                 // 毫秒/方（0=先手 1=后手）
+
 export interface GameState {
   phase: GamePhase
   players: [PlayerBoard, PlayerBoard]   // 0=先手, 1=后手
@@ -64,9 +74,15 @@ export interface GameState {
   firstMover: 0 | 1
   turnNo: number                         // 从 1 开始
   winner: 0 | 1 | null
+  mode?: GameModeFlags                   // 缺失视为经典模式
+  blitz?: BlitzClock                     // 仅 blitz 局存在（初始 10×planeCount 秒/方）
+  preFire?: Record<PlayerId, Cell[]>     // 每方预报点队列（上限 10，FIFO）；缺失视为空
 }
 
-export function createGame(width: number, height: number, shape: PlaneShape, planeCount: number, firstMover: 0 | 1): GameState
+export function createGame(
+  width: number, height: number, shape: PlaneShape, planeCount: number, firstMover: 0 | 1,
+  options?: GameOptions,                 // v0.3.0：缺省经典；blitz 时初始化 clocks=10×planeCount×1000ms
+): GameState
 export function setFleet(state: GameState, player: 0 | 1, planes: PlacedPlane[]): { ok: true; state: GameState } | { ok: false; errors: string[] }
 export function isGameOver(state: GameState): boolean
 export function remainingPlanes(board: PlayerBoard): number
@@ -88,22 +104,56 @@ export function applyShot(state: GameState, coord: Cell): ShotResult
 export function killEfficiencyStats(state: GameState): { player0: number | null; player1: number | null }
 ```
 
+### 模式 API（v0.3.0 起）
+
+```ts
+/** 超快棋时钟推进：递减 player 时钟 deltaMs；扣至 ≤0 → 该玩家超时判负
+ * （phase='ended'、winner=对方、时钟归零）。仅 blitz 局可调用（否则抛错）。
+ * 返回带新 state（引擎纯函数，调用方需应用；任务原签名未含 state，见交付说明）。 */
+export function advanceBlitzClock(state: GameState, player: PlayerId, deltaMs: number): {
+  state: GameState; timedOut: boolean; winner?: PlayerId
+}
+
+/** 各玩家在"对手网格"上应显示的标记（本人射击结果；纯函数，供 UI 渲染） */
+export function visibleMarks(state: GameState): { player0: Shot[]; player1: Shot[] }
+
+/** 预报点入队：校验该格已有可见标记（按 visibleMarks 对该玩家的规则）或已在该玩家预报点中
+ *  → 'CELL_TAKEN'；队列满（≥10）→ 'PRE_FIRE_FULL'；成功返回新 state。 */
+export function queuePreFire(state: GameState, player: PlayerId, coord: Cell):
+  { ok: true; state: GameState } | { ok: false; error: 'CELL_TAKEN' | 'PRE_FIRE_FULL' }
+
+/** 预报点出队（取消）：移除该坐标；不存在时返回原 state */
+export function cancelPreFire(state: GameState, player: PlayerId, coord: Cell): GameState
+
+/** 预报点回合执行：轮到 player 时调用（需 state.turn === player）；队列非空 → 取队首（FIFO）
+ *  执行一次正常报点并返回其 ShotResult（每回合只上报一个）；队列空 → null（正常回合）。 */
+export function takePreFireTurn(state: GameState, player: PlayerId): ShotResult | null
+```
+
 ### applyShot 语义（必须逐条实现）
 
 1. 仅 `playing` / `counterattack` 阶段合法。
 2. `coord` 越界 → `{ ok: false, error: 'out-of-bounds' }`。
-3. 该格已被当前报点方报过（在 `shotsFired` 中）→ `{ ok: false, error: 'already-shot' }`。
+3. 经典模式（`mode.blind === false`）：该格已被当前报点方报过（在 `shotsFired` 中）→ `{ ok: false, error: 'already-shot' }`；
+   **盲棋（`blind === true`）允许对已报点格再次报点**（含残骸格，仍按 miss 处理），跳过本拦截。
 4. 目标方该格：
    - 无飞机，或属于**已击毁**飞机（无效打击）→ `outcome: 'miss'`；
    - 存活飞机的非机头格 → `outcome: 'hit'`；
    - 存活飞机的机头格 → `outcome: 'kill'`，该机加入 `destroyedPlaneIds`。**不产生任何残骸信息公开**。
 5. 报点记录：写入射击方 `shotsFired` 与目标方 `receivedShots`。
-6. 胜负与绝地反击（本步后判定）：
+6. 超快棋（`mode.blitz === true`）：射击方每次成功报点 → 该方时钟 +1000ms（记录于 `state.blitz.clocks`）。
+7. 胜负与绝地反击（本步后判定）：
    - 目标方机队全灭时：
      - 射击方是先手且**射击方剩余机数恰为 1** → 进入 `counterattack` 阶段：`turn` 切换为后手（= 1 - firstMover），仅此一次额外报点，`winner` 暂为 null；
      - 否则 → `winner = 射击方`，`phase = 'ended'`。
    - 未全灭：正常轮换 `turn = 1 - turn`，`turnNo + 1`。
-7. `counterattack` 阶段的报点：`outcome === 'kill'` → `winner = 射击方（后手）`；否则 `winner = firstMover`；均置 `phase = 'ended'`。
+8. `counterattack` 阶段的报点：`outcome === 'kill'` → `winner = 射击方（后手）`；否则 `winner = firstMover`；均置 `phase = 'ended'`。
+
+### 模式语义补充（v0.3.0）
+
+- **超快棋（blitz）**：初始限时 `10 × planeCount` 秒/方（`createGame` 初始化）；己方成功报点 +1 秒（applyShot 内自动）；`advanceBlitzClock` 供 UI/服务器各自按实际流逝推进时钟，超时即终局（reason `'blitz-timeout'`，shared `GameEndPayload.reason` 已扩展）。blitz 局忽略 byo-yomi（turnLimitMs/超时次数/机器代打均不适用，由消费方判定）。
+- **盲棋（blind）**：`visibleMarks` 对每方射击历史只保留最近 3 个非击毁标记 + 全部击毁标记（击毁不计入 3 个名额、永不消失，FIFO 淘汰）；经典模式返回全部标记。"禁用参考飞机拖放 / 着色工具"由 web 层按 config.blind 执行，core 不处理。
+- **预报点**（所有模式通用，替代"对方回合禁报点"）：非己方回合的报点先进 `preFire` 队列（上限 10），轮到自己时由 `takePreFireTurn` 按 FIFO 每回合自动上报一个。
 
 ## AI 模块（packages/game-core/src/ai/index.ts）
 
@@ -129,12 +179,12 @@ export function generateFleet(
 ): PlacedPlane[]
 ```
 
-### AI 难度语义
+### AI 难度语义（chooseShot 依 v0.2.7，generateFleet 依 v0.2.0）
 
-- **easy**：未报点格中均匀随机（含"遗忘"意味，不利用任何信息）。
+- **easy**：未报点格中均匀随机（不利用任何反馈信息）。
 - **normal**：有未处理的 `hit` 时随机围杀其 4 邻格；否则均匀随机。
-- **hard**：热图——枚举形状 4 旋转的全部合法摆放位，按与历史反馈的一致性加权（hit 格应被覆盖加分、kill 机头格被覆盖直接排除、**miss 格被覆盖直接排除**——修正说明：机队无重叠，存活飞机任意格被击只报 hit/kill，故 miss 格不可能属于任何存活飞机，覆盖 miss 的摆放必非存活摆放；经参数扫描实测，排除优于降权约 11.7 步），取最高分格，同分随机破平。
-- **hell**：hard 热图 + 对手布阵习惯先验（边缘/角落/分散度加权）+ 残骸多解建模（由机头位置与 hit 历史推断可能残骸，降低这些格的射击价值）；允许少量随机扰动（≤5%）。
-- **generateFleet**：easy/normal 均匀随机合法；hard 随机但惩罚聚集与贴边规律；hell 对抗热图的防御性摆位（大间距、角落/边缘偏好、非对称、增强残骸多解）。
+- **hard**（v0.2.7 起 = 原地狱算法）：覆盖密度热图——枚举形状 4 旋转全部合法摆放位按反馈一致性加权（hit 覆盖加分、kill 机头格/miss 格被覆盖直接排除——miss 格必不属于存活飞机，排除优于降权实测约 11.7 步），同分随机破平；叠加残骸多解建模（推断可能残骸格降权、剪除其 hit 的围杀候选）与边缘/角落习惯先验；允许 ≤5% 随机扰动。
+- **hell**（v0.2.7 起）：**机头概率热图（head-hunting）**——把候选摆放权重只累加到该摆放的**机头格**（每格 ≈ "某存活飞机机头在此"的后验）；覆盖 k 个 hit 权重 ×(1+5)^k（已命中飞机机头被约束到与 hit 兼容摆放的头部集合）；kill/miss 覆盖排除、残骸多解降权、习惯先验叠加；每次报点射向局部最可能的机头格（减少无效报点、直接爆头占比高），允许 ≤5% 随机扰动。
+- **generateFleet**：easy/normal 均匀随机合法；hard/hell 为「局部密铺 + 整体分散」簇算法（簇容量随机 1~3/2~3，簇内贴邻、簇首分散至 top-~2.5% 远离已有簇质心且带边缘/角落偏好的位置，hell 强度更高）；对任意形状通用，产物保证通过 validateFleet。
 
-性能要求：26×26 下 chooseShot 单次 < 50ms（纯枚举即可达标，无需 Worker）。
+性能要求：26×26 下 chooseShot 单次 < 50ms（纯枚举即可达标，实测 ≤2ms，无需 Worker）。

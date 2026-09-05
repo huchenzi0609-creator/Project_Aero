@@ -33,6 +33,8 @@ export interface Shot {
 export type Difficulty = 'easy' | 'normal' | 'hard' | 'hell'
 export type GameMode = 'small' | 'medium' | 'large' | 'custom'
 export type GamePhase = 'placing' | 'playing' | 'counterattack' | 'ended'
+/** 玩家编号：0=先手, 1=后手 */
+export type PlayerId = 0 | 1
 
 /* ---------- 常量 ---------- */
 
@@ -52,6 +54,15 @@ export const OVERTIME_CHANCES = 3
 export const REDUCED_TURN_LIMIT_MS = 10_000
 export const RECONNECT_GRACE_MS = 60_000
 export const MACHINE_TAKEOVER_DIFFICULTY: Difficulty = 'normal'
+
+/** 超快棋（blitz）：每方初始限时 = 10 × 飞机架数（秒） */
+export const BLITZ_SECONDS_PER_PLANE = 10
+/** 超快棋（blitz）：己方每成功报点一次 +1 秒（毫秒） */
+export const BLITZ_BONUS_MS = 1_000
+/** 盲棋（blind）：对手网格上最多保留的最近非击毁报点标记数（击毁标记永久保留、不计入此数） */
+export const BLIND_VISIBLE_RECENT = 3
+/** 预报点队列上限（每玩家） */
+export const PRE_FIRE_LIMIT = 10
 
 /** 默认飞机：4 行 × 5 列，共 10 格（机头 1、机翼 5、机身 1、机尾 3） */
 export const DEFAULT_PLANE_SHAPE: PlaneShape = {
@@ -79,6 +90,12 @@ export interface GridConfig {
   allowMoveRefPlane?: boolean
   /** 联机每步限时（毫秒）；缺省用默认值；0 表示不限时 */
   turnLimitMs?: number
+  /** 超快棋：双方初始限时 10×n 秒（n=飞机架数），每成功报点 +1 秒，超时判负；
+   *  开启时忽略 byo-yomi（turnLimitMs/超时次数/机器代打）。缺省 false（经典） */
+  blitz?: boolean
+  /** 盲棋：允许对已报点格重复报点；对手网格只显示最近 3 个非击毁标记 + 全部击毁标记；
+   *  禁用参考飞机拖放与着色工具由 web 层执行。缺省 false（经典） */
+  blind?: boolean
 }
 
 export const PRESETS: Record<'small' | 'medium' | 'large', GridConfig> = {
@@ -118,6 +135,8 @@ export const gridConfigSchema = z.object({
   shape: planeShapeSchema,
   allowMoveRefPlane: z.boolean().optional(),
   turnLimitMs: z.number().int().min(0).optional(),
+  blitz: z.boolean().optional(),
+  blind: z.boolean().optional(),
 })
 
 export const coordInputSchema = z
@@ -167,8 +186,8 @@ export interface ShotResultPayload {
 }
 
 export interface GameEndPayload {
-  winner: 0 | 1
-  reason: 'all-destroyed' | 'counterattack' | 'resign' | 'disconnect' | 'timeout-takeover'
+  winner: PlayerId
+  reason: 'all-destroyed' | 'counterattack' | 'resign' | 'disconnect' | 'timeout-takeover' | 'blitz-timeout'
   layouts: { player0: PlacedPlane[]; player1: PlacedPlane[] }
   stats: {
     turnCount: number
