@@ -20,13 +20,14 @@ import { TutorialSpotlight } from './TutorialSpotlight'
 import '../styles/tutorial.css'
 
 const T1_STEPS: TutorialStep[] = [
-  { key: 't11', text: ['欢迎来到《飞机杀》！我们先来学习如何摆阵吧！'] },
+  { key: 't11', text: ['欢迎来到《飞机杀》！我们先来学习如何摆阵吧！'], highlight: 'bubble' },
   { key: 't12', text: ['这是飞机待选栏，可以从这里把飞机拖到网格中。'], highlight: '.placement__tray' },
-  { key: 't13', text: ['现在就试试看吧！把飞机拖到网格里！'], highlight: '.placement__tray', wait: 'planePlaced' },
-  { key: 't14', text: ['好极了！现在尝试把剩余的飞机全部拖到网格里！'], wait: 'allPlanesPlaced' },
-  { key: 't15', text: ['单击飞机可以使飞机旋转90度，试试看！'], wait: 'planeRotated' },
-  { key: 't16', text: ['太棒了！确保你的飞机不重叠不越界之后，就可以开始游戏了！'] },
-  { key: 't17', text: ['点击“确认布阵”开始游戏'], highlight: '.tutorial-confirm' },
+  { key: 't13', text: ['现在就试试看吧！把飞机拖到网格里！'], wait: 'planePlaced' },
+  { key: 't14', text: ['好极了！现在尝试把剩余的飞机全部拖到网格里！'] },
+  { key: 't15', text: [], wait: 'allPlanesPlaced' },
+  { key: 't16', text: ['单击飞机可以使飞机旋转90度，试试看！'], wait: 'planeRotated' },
+  { key: 't17', text: ['太棒了！确保你的飞机不重叠不越界之后，就可以开始游戏了！'] },
+  { key: 't18', text: ['点击“确认布阵”开始游戏'], highlight: '.tutorial-confirm' },
 ]
 
 export function TutorialPlacement({
@@ -93,9 +94,14 @@ export function TutorialPlacement({
     onExitHome()
   }
 
-  const highlight = step.index >= 0 && step.step?.highlight ? step.step.highlight : null
+  // 突显目标映射：'bubble' = 气泡自身；确认步（t18）仅在阵形合法后点亮（B3 突显语义）
+  const rawHighlight = step.index >= 0 && step.step?.highlight ? step.step.highlight : null
+  const highlight =
+    rawHighlight === '.tutorial-confirm' && !check.ok ? null : rawHighlight === 'bubble' ? '.tutorial-bubble' : rawHighlight
   const showBubble = step.index >= 0 && step.segments.length > 0
   const segText = showBubble ? (step.segments[Math.min(step.seg, step.segments.length - 1)] ?? '') : ''
+  // A6：仅纯文本步（无 wait）显示「点击继续」
+  const stepWait = Boolean(step.step?.wait)
 
   return (
     <div className={`placement placement--${orientation}`}>
@@ -143,6 +149,7 @@ export function TutorialPlacement({
         <TutorialBubble
           key={`${step.step.key}-${step.seg}`}
           text={segText}
+          showHint={!stepWait}
           onClick={() => step.click()}
           skipLabel="跳过单元"
           onSkip={() => onDone(grid)} // 跳过摆阵：以当前（可能部分）阵型容错——不足则父级随机补齐
