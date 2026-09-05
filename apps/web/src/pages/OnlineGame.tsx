@@ -18,8 +18,9 @@ import { useSettingsStore } from '../store/settingsStore'
 import { useToastStore } from '../store/toastStore'
 import { connectClient, onV030, v030Api } from '../online/client'
 import type { GridConfigV030 } from '../online/protocol'
-import { BlitzClock } from '../online/BlitzClock'
-import { PreFireMark } from '../online/PreFireMark'
+import { BlitzClock } from '../components/v030/BlitzClock'
+import { PreFireMark } from '../components/v030/PreFireMark'
+import { blindVisibleMarks } from '../components/v030/BlindMarks'
 import { prefireAdd, prefireRemove, prefireShift, sameCell } from '../online/prefire'
 import { useEffectiveOrientation, useViewport } from '../hooks/useOrientation'
 import type { Viewport } from '../hooks/useOrientation'
@@ -419,12 +420,10 @@ export function OnlineGame() {
     return killEfficiencyStats(synth)
   }, [gameEnd, config, you, myShots, oppShots, mineLayout, oppLayout])
 
-  /* ---------- 盲棋：对手网格可见报点 = 击毁永存 + 最近 3 个非击毁（FIFO） ---------- */
+  /* ---------- 盲棋：对手网格可见报点 = 击毁永存 + 最近 3 个非击毁（FIFO，共享工具） ---------- */
   const visibleShots = useMemo(() => {
     if (!modeBlind) return myShots
-    const kills = myShots.filter((s) => s.outcome === 'kill')
-    const recent = myShots.filter((s) => s.outcome !== 'kill').slice(-3)
-    return [...recent, ...kills]
+    return blindVisibleMarks(myShots)
   }, [modeBlind, myShots])
 
   // 可见标记格集合（预报点不可置于其上；盲棋按可见集判定，非盲棋按全量）
@@ -447,19 +446,14 @@ export function OnlineGame() {
   )
   const invertMarks = useSettingsStore((s) => s.invertMarks)
   const renderPreFireShot = useCallback(
-    (shot: Shot, size: number) => {
+    (shot: Shot, cellSize: number) => {
       if (prefireKeys.has(`${shot.coord.r},${shot.coord.c}`)) {
-        return (
-          <PreFireMark
-            coord={shot.coord}
-            cellSize={size}
-            selected={selectedPrefire !== null && sameCell(selectedPrefire, shot.coord)}
-          />
-        )
+        // 预报点（v030 共享组件；纸感「?」，选中由输入框坐标/高亮反馈）
+        return <PreFireMark coord={shot.coord} size={cellSize * 0.72} />
       }
-      return <StampMark outcome={shot.outcome} size={size * 0.82} cell={shot.coord} inverted={invertMarks} />
+      return <StampMark outcome={shot.outcome} size={cellSize * 0.82} cell={shot.coord} inverted={invertMarks} />
     },
-    [prefireKeys, selectedPrefire, invertMarks],
+    [prefireKeys, invertMarks],
   )
 
   // 我方回合开始：预报点 FIFO 自动上报（每回合一个，队列空则恢复手动）
