@@ -34,9 +34,13 @@ test.describe('主页', () => {
     await page.getByRole('button', { name: '新手教程' }).click()
     await expect(page.locator('h1.page__title').filter({ hasText: '新手教程' })).toBeVisible()
     await expect(page.locator('.paper-modal__dialog')).toContainText('您是否了解本游戏的基本规则？')
+    // v0.3.2：P2 两项分别为「还不了解」（基础）与「我已了解」（直达进阶），不再回主页
     await expect(page.locator('.paper-modal__dialog')).toContainText('还不了解')
-    // 我已了解 = 跳过教程返回主页
-    await page.locator('.paper-modal__dialog').getByRole('button', { name: '我已了解' }).click()
+    await expect(page.locator('.paper-modal__dialog')).toContainText('我已了解')
+    // 关闭入口弹窗 → 教程宿主页「← 返回主页」退出，回到主页
+    await page.locator('.paper-modal__dialog').getByLabel('关闭对话框').click()
+    await expect(page.getByRole('button', { name: '← 返回主页' })).toBeVisible()
+    await page.getByRole('button', { name: '← 返回主页' }).click()
     await expect(page.getByRole('heading', { name: '飞机杀' })).toBeVisible()
 
     // 练习模式面板：四子模式入口可见 → 返回主页
