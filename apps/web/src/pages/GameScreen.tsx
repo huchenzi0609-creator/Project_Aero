@@ -499,13 +499,37 @@ export function GameScreen({ mode = 'single', onGameEvent, aiShotSelector, hideS
   }, [refPlanes.placed, onGameEvent])
 
   // 快捷着色：整机被批量着色 → 回收幽灵 + 退出着色模式（ColoringTool 只发事件，回收由页面执行）
+  const ghostPointerDownRef = useRef(false)
   const handleGhostBatch = (id: string, cells: Cell[]) => {
     setGhostRects((prev) => prev.filter((g) => g.id !== id))
     setRetiredGhostIds((prev) => new Set(prev).add(id))
     if (coloring.coloringMode) coloring.toggleMode()
-    onGameEvent?.({ type: 'ghostBatchColored', id, cells })
+    // A4：仅当本次批量着色由【着色模式 + pointerdown 直接命中幽灵】触发时标记 deliberate，
+    // 教程据此才推进 T3-11（拖拽擦过/普通涂色跨格误触不计数）
+    const viaGhostPointerDown = ghostPointerDownRef.current
+    ghostPointerDownRef.current = false
+    onGameEvent?.({ type: 'ghostBatchColored', id, cells, viaGhostPointerDown })
   }
   ghostBatchHandlerRef.current = handleGhostBatch
+
+  // 着色模式下 pointerdown 直接命中幽灵图层（capture 阶段监听，不阻断棋盘着色交互）
+  useEffect(() => {
+    if (!isColoring || screen !== 'battle') return
+    const board = oppBoardRef.current
+    if (!board) return
+    const onDown = (ev: PointerEvent) => {
+      const rect = board.getBoundingClientRect()
+      const r = Math.floor((ev.clientY - rect.top) / mainCell)
+      const c = Math.floor((ev.clientX - rect.left) / mainCell)
+      if (c >= 0 && r >= 0 && config && r < config.height && c < config.width) {
+        ghostPointerDownRef.current = ghostRectAt(ghostRects, { r, c }) !== null
+      } else {
+        ghostPointerDownRef.current = false
+      }
+    }
+    board.addEventListener('pointerdown', onDown, true)
+    return () => board.removeEventListener('pointerdown', onDown, true)
+  }, [isColoring, screen, ghostRects, mainCell, config])
 
   // 着色入口包装：进入着色模式/选色发 enteredColoring；单格染色发 cellColored（幽灵批染不发，走 ghostBatchColored）
   const toggleColoringMode = () => {
