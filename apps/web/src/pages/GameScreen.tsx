@@ -552,18 +552,19 @@ export function GameScreen({ mode = 'single', onGameEvent, aiShotSelector, hideS
     }
   }
 
-  // 盲棋重复报点 → 同一格位在可见窗口内可能出现多条标记；渲染前去重（保留末条，格位唯一）
+  // 同格多标记渲染去重（R3：教程残局 preKill 等使同一格可能出现重复 receivedShots 记录，
+  // 以及盲棋重复报点——同一格位渲染多条会触发 PaperGrid 重复 React key）。
+  // 保留【首个】条目并按原顺序输出：先发标记语义更关键（如机头击毁 ★，后到的重复 miss 不得覆盖）。
   const dedupeShots = (list: readonly Shot[]): Shot[] => {
     const seen = new Set<string>()
     const out: Shot[] = []
-    for (let i = list.length - 1; i >= 0; i--) {
-      const s = list[i]!
+    for (const s of list) {
       const k = cellKey(s.coord)
       if (seen.has(k)) continue
       seen.add(k)
       out.push(s)
     }
-    return out.reverse()
+    return out
   }
 
   // v0.2.9 平均击杀效率：从首次命中到击毁的平均报点步数（越低越高效）；无击毁 = null。
@@ -738,9 +739,11 @@ export function GameScreen({ mode = 'single', onGameEvent, aiShotSelector, hideS
       .map((c) => ({ coord: { r: c.r, c: c.c }, outcome: 'miss' as const })),
   ]
 
-  // 我方小网格 / 结算真实阵型的重复报点章去重（仅盲棋会出现同格多条；渲染格位唯一）
-  const myReceivedShots = isBlind ? dedupeShots(myBoard.receivedShots) : myBoard.receivedShots
-  const myResultShots = isBlind ? dedupeShots(myBoard.shotsFired) : myBoard.shotsFired
+  // 我方小网格 / 结算真实阵型的报点章无条件去重（R3：教程残局 preKill 残骸格 + 教学 AI 重复报点
+  // 会使同一格出现多条 receivedShots；盲棋重复报点同理）。渲染层格位唯一、杜绝重复 key；
+  // 裁决语义在引擎 state 中完整保留，此处仅影响展示。
+  const myReceivedShots = dedupeShots(myBoard.receivedShots)
+  const myResultShots = dedupeShots(myBoard.shotsFired)
 
   // 对手网格上实际渲染的幽灵：隐藏已被快捷着色回收的（placed 内部仍保留，拖拽/重叠逻辑不受影响）
   const visibleShownPlanes = refPlanes.shownPlanes.filter(
