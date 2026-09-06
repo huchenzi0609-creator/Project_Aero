@@ -63,8 +63,12 @@ export interface PlayerBoard {
 
 export type GamePhase = 'placing' | 'playing' | 'counterattack' | 'ended'
 
-export interface GameModeFlags { blitz: boolean; blind: boolean }        // 模式开关（v0.3.0 起）
-export interface GameOptions { blitz?: boolean; blind?: boolean }         // createGame 选项
+export interface GameModeFlags { blitz: boolean; blind: boolean; counterattack?: boolean } // 模式开关（v0.3.0 起；counterattack v0.3.6 起、缺省 true）
+export interface GameOptions {
+  blitz?: boolean
+  blind?: boolean
+  counterattack?: boolean // 绝地反击开关（缺省 true；false=禁用，仅显式关闭时写入 state.mode）
+} // createGame 选项
 export interface BlitzClock { clocks: [number, number] }                 // 毫秒/方（0=先手 1=后手）
 
 export interface GameState {
@@ -177,8 +181,8 @@ export function createEndgameState(
 6. 超快棋（`mode.blitz === true`）：射击方每次成功报点 → 该方时钟 +1000ms（记录于 `state.blitz.clocks`）。
 7. 胜负与绝地反击（本步后判定）：
    - 目标方机队全灭时：
-     - 射击方是先手且**射击方剩余机数恰为 1** → 进入 `counterattack` 阶段：`turn` 切换为后手（= 1 - firstMover），仅此一次额外报点，`winner` 暂为 null；
-     - 否则 → `winner = 射击方`，`phase = 'ended'`。
+     - 射击方是先手且**射击方剩余机数恰为 1**，且绝地反击未被禁用（`mode.counterattack !== false`）→ 进入 `counterattack` 阶段：`turn` 切换为后手（= 1 - firstMover），仅此一次额外报点，`winner` 暂为 null；
+     - 否则 → `winner = 射击方`，`phase = 'ended'`（含 `counterattack: false` 的禁用情形，如教程·基础）。
    - 未全灭：正常轮换 `turn = 1 - turn`，`turnNo + 1`。
 8. `counterattack` 阶段的报点：`outcome === 'kill'` → `winner = 射击方（后手）`；否则 `winner = firstMover`；均置 `phase = 'ended'`。
 

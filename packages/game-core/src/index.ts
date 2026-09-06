@@ -242,16 +242,20 @@ export interface PlayerBoard {
 
 export type GamePhase = 'placing' | 'playing' | 'counterattack' | 'ended'
 
-/** 对局模式开关：blitz=超快棋、blind=盲棋（两者互不冲突，可组合） */
+/** 对局模式开关：blitz=超快棋、blind=盲棋（两者互不冲突，可组合）；
+ *  counterattack=绝地反击（缺省 true；false = 禁用绝地反击，如教程·基础，v0.3.6 起） */
 export interface GameModeFlags {
   blitz: boolean
   blind: boolean
+  counterattack?: boolean
 }
 
 /** 创建对局时的模式选项（缺省即经典模式） */
 export interface GameOptions {
   blitz?: boolean
   blind?: boolean
+  /** 绝地反击开关（缺省 true；传 false 时先手全歼不再触发反击，直接判胜） */
+  counterattack?: boolean
 }
 
 /** 超快棋时钟（毫秒/方，索引 0=先手 1=后手）；仅 blitz 局存在于 state.blitz */
@@ -310,7 +314,12 @@ export function createGame(
     firstMover,
     turnNo: 1,
     winner: null,
-    mode: { blitz: blitzFlag, blind: blindFlag },
+    mode: {
+      blitz: blitzFlag,
+      blind: blindFlag,
+      // counterattack 缺省 true，仅在显式关闭时落字段（保持 mode 旧结构向后兼容）
+      ...(options?.counterattack === false ? { counterattack: false } : {}),
+    },
     preFire: { 0: [], 1: [] },
   }
   if (blitzFlag) {
@@ -463,13 +472,14 @@ export function applyShot(state: GameState, coord: Cell): ShotResult {
     const targetFleetDestroyed = remainingPlanes(newTarget) === 0
     if (targetFleetDestroyed) {
       const shooterLeft = remainingPlanes(newShooter)
-      if (shooter === state.firstMover && shooterLeft === 1) {
-        // 先手全歼且自身恰剩 1 架 → 进入绝地反击，交给后手恰好一次
+      const counterattackEnabled = (modeOf(state).counterattack ?? true) !== false
+      if (shooter === state.firstMover && shooterLeft === 1 && counterattackEnabled) {
+        // 先手全歼且自身恰剩 1 架（且未禁用绝地反击）→ 进入绝地反击，交给后手恰好一次
         phase = 'counterattack'
         turn = (1 - state.firstMover) as 0 | 1
         winner = null
       } else {
-        // 非先手全歼，或先手剩 ≥2 架 → 直接判胜
+        // 非先手全歼、先手剩 ≥2 架，或绝地反击被禁用（如教程·基础）→ 直接判胜
         phase = 'ended'
         winner = shooter
       }
