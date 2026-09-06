@@ -10,11 +10,11 @@
  *   持续非法持续显示；转合法立即切换；点击「确认布阵」→ 沿玩家阵型进单元2。
  * 气泡持久性（§7.4）：wait 节点文本常驻、点击不消失、无「点击继续」。
  */
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { PlacedPlane } from '@aero/shared'
+import { PRESETS } from '@aero/shared'
 import { useEffectiveOrientation } from '../hooks/useOrientation'
 import { useToastStore } from '../store/toastStore'
-import { useAppStore } from '../store/appStore'
 import { PaperButton } from '../components/ui/PaperButton'
 import { PaperModal } from '../components/ui/PaperModal'
 import { FleetPlacementBoard, fleetCheckState } from '../components/placement/FleetPlacementBoard'
@@ -45,7 +45,8 @@ export function TutorialPlacement({
   onExitHome: () => void
 }) {
   const orientation = useEffectiveOrientation()
-  const config = useAppStore((s) => s.gridConfig)
+  // v0.3.6：教程摆阵固定 10×10（PRESETS.small），与全局/自定义配置解耦
+  const config = useMemo(() => ({ ...PRESETS.small }), [])
   const toast = useToastStore((s) => s.push)
   const { width, height, planeCount } = config
 
@@ -178,7 +179,7 @@ export function TutorialPlacement({
   }
 
   return (
-    <div className={`placement placement--${orientation}`}>
+    <div className={`placement placement--${orientation} tutorial-placement`}>
       <header className="placement__head">
         <PaperButton size="sm" variant="ghost" onClick={exit}>
           ← 退出教程

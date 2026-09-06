@@ -127,9 +127,12 @@ export const useGameStore = create<GameStoreState>()((set, get) => ({
     return { ok: true }
   },
 
-  // 教程单元2：与 begin 同流程，仅强制先手 = 我方（createGame firstMover 0），经典模式
+  // 教程单元2：与 begin 同流程，仅强制先手 = 我方（createGame firstMover 0），经典模式；
+  // v0.3.6：禁用绝地反击（counterattack:false）——先手全歼直接判胜，教学不进入反击分支
   beginTutorialBattle: (config, myPlanes) => {
-    let state = createGame(config.width, config.height, config.shape, config.planeCount, 0)
+    let state = createGame(config.width, config.height, config.shape, config.planeCount, 0, {
+      counterattack: false,
+    })
     const mine = setFleet(state, 0, myPlanes)
     if (!mine.ok) return { ok: false, errors: mine.errors }
     state = mine.state
