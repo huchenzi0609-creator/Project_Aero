@@ -355,7 +355,9 @@
   justify-content: center;
   padding: 24px;
   background: rgba(58, 46, 28, 0.38);
-  animation: fadeIn 160ms ease-out;
+  /* v0.3.5：改用独占 keyframes 名，避免与 m6.css 的全局 @keyframes fadeIn（translate(-50%,…)）同名冲突，
+     导致弹窗入场瞬间整体左移半屏再回中。首帧即居中（纯淡入，无位移/无 transform）。 */
+  animation: paperModalFadeIn 160ms ease-out;
 }
 .paper-modal__dialog {
   width: min(480px, 100%);
@@ -364,7 +366,8 @@
   border-radius: var(--radius-card);
   box-shadow: var(--shadow-card);
   padding: 20px 22px;
-  animation: modalIn 180ms var(--ease-paper);
+  /* v0.3.5：入场仅居中淡入 + 中心缩放（transform-origin 默认中心），不改变最终位置 */
+  animation: paperModalIn 180ms var(--ease-paper);
 }
 .paper-modal__head {
   display: flex;
@@ -556,6 +559,19 @@
 @keyframes fadeIn {
   from {
     opacity: 0;
+  }
+}
+/* v0.3.5：弹窗专属入场（独占命名，规避同名 keyframes 被 m6.css 覆盖）；
+   纯淡入 + 中心缩放，首帧即居中、不产生任何左右位移 */
+@keyframes paperModalFadeIn {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes paperModalIn {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
   }
 }
 @keyframes spin {

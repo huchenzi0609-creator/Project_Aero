@@ -41,7 +41,6 @@ export function Rules() {
             </h2>
             <p className="rules__p">
               对战在正方形网格上进行：小型 10×10、中型 15×15、大型 20×20，或自定义（10–26）。
-              横坐标为字母（A 起），纵坐标为数字（1 起），报点如 A5。
             </p>
             <p className="rules__p">
               默认飞机为 4 行 × 5 列共 10 格：机头 1、机翼 5、机身 1、机尾 3，左右对称，四向旋转均合法。
@@ -92,7 +91,7 @@ export function Rules() {
             </ul>
             <p className="rules__p">
               被击毁飞机的其余格位一律不公开；之后对残骸任意格报点，按“击空”返回。
-              <strong>残骸与空格在对方眼中不可区分</strong>——误导对手是核心策略。
+              请注意，<strong>残骸与空格在对方眼中不可区分</strong>。
             </p>
             <div className="rules__diagram-row">
               <figure className="rules__fig">
