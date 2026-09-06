@@ -516,11 +516,15 @@ export function GameScreen({ mode = 'single', onGameEvent, aiShotSelector, hideS
   ghostBatchHandlerRef.current = handleGhostBatch
 
   // 着色模式下 pointerdown 直接命中幽灵图层（capture 阶段监听，不阻断棋盘着色交互）
+  // 着色手势接线（v0.3.4，M3 契约）：capture 阶段在棋盘容器转发 gestureStart/Move/End——
+  // pointerdown capture 先于 PaperGrid 对按下格的 onPaint 染色执行，使 hook 能分辨“点击幽灵”与“拖拽路径”。
+  // 同时保留 viaGhostPointerDown（deliberate 教程事件）判定：pointerdown 命中幽灵。
   useEffect(() => {
     if (!isColoring || screen !== 'battle') return
     const board = oppBoardRef.current
     if (!board) return
     const onDown = (ev: PointerEvent) => {
+      // 1) 命中幽灵判定（capture，先于染色）
       const rect = board.getBoundingClientRect()
       const r = Math.floor((ev.clientY - rect.top) / mainCell)
       const c = Math.floor((ev.clientX - rect.left) / mainCell)
@@ -529,10 +533,22 @@ export function GameScreen({ mode = 'single', onGameEvent, aiShotSelector, hideS
       } else {
         ghostPointerDownRef.current = false
       }
+      // 2) 手势开始
+      coloring.gestureStart(ev.clientX, ev.clientY)
     }
+    const onMove = (ev: PointerEvent) => coloring.gestureMove(ev.clientX, ev.clientY)
+    const onEnd = () => coloring.gestureEnd()
     board.addEventListener('pointerdown', onDown, true)
-    return () => board.removeEventListener('pointerdown', onDown, true)
-  }, [isColoring, screen, ghostRects, mainCell, config])
+    board.addEventListener('pointermove', onMove, true)
+    board.addEventListener('pointerup', onEnd, true)
+    board.addEventListener('pointercancel', onEnd, true)
+    return () => {
+      board.removeEventListener('pointerdown', onDown, true)
+      board.removeEventListener('pointermove', onMove, true)
+      board.removeEventListener('pointerup', onEnd, true)
+      board.removeEventListener('pointercancel', onEnd, true)
+    }
+  }, [isColoring, screen, ghostRects, mainCell, config, coloring])
 
   // 着色入口包装：进入着色模式/选色发 enteredColoring；单格染色发 cellColored（幽灵批染不发，走 ghostBatchColored）
   const toggleColoringMode = () => {
