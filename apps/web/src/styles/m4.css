@@ -397,7 +397,8 @@
   padding: 20px;
   background: rgba(245, 239, 224, 0.94);
   overflow: auto;
-  animation: fadeIn 260ms ease-out;
+  /* v0.3.6：独占命名，规避 m6.css 同名 @keyframes fadeIn（translate(-50%,…)）抢占导致左移闪烁 */
+  animation: resultFadeIn 260ms ease-out;
 }
 .result__card {
   width: min(780px, 100%);
@@ -548,5 +549,10 @@
   from {
     opacity: 0;
     transform: scale(0.97);
+  }
+}
+@keyframes resultFadeIn {
+  from {
+    opacity: 0;
   }
 }
