@@ -65,10 +65,22 @@
 }
 .practice__mode-card {
   width: 100%;
+  /* v0.3.8：内容统一左对齐（竖版/横版一致），图标与标题行同基线 */
   justify-content: flex-start;
+  align-items: center;
   gap: 14px;
   text-align: left;
   padding: 14px 16px;
+}
+/* 文字区：左对齐纵向堆叠（不随按钮默认居中/继承 text-align 而偏移） */
+.practice__mode-text {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  min-width: 0;
+  flex: 1 1 auto;
+  text-align: left;
 }
 .practice__badge {
   flex: none;
@@ -78,11 +90,13 @@
   width: 44px;
   height: 44px;
   border-radius: 50%;
-  font-size: 22px;
-  font-weight: 600;
+  padding: 0;
   background: var(--paper-sheet-2);
   border: 1.5px solid var(--pencil);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7), 0 2px 4px rgba(84, 66, 38, 0.2);
+}
+.practice__badge svg {
+  display: block;
 }
 .practice__badge--classic {
   color: var(--ink);
@@ -102,6 +116,7 @@
 .practice__mode-label {
   display: block;
   font-size: 19px;
+  text-align: left;
 }
 .practice__mode-sub {
   display: block;
@@ -109,6 +124,7 @@
   color: var(--ink-soft);
   margin-top: 2px;
   line-height: 1.5;
+  text-align: left;
 }
 
 /* 尺寸 + AI 难度（经典 / 超快棋 / 盲棋共用） */

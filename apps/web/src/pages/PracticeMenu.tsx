@@ -24,35 +24,30 @@ type SizeKey = 'small' | 'medium' | 'large'
 const MODE_CARDS: ReadonlyArray<{
   key: PracticeMode | 'custom'
   label: string
-  badge: string
   badgeClass: string
   sub: string
 }> = [
   {
     key: 'classic',
     label: '经典模式',
-    badge: '经',
     badgeClass: 'practice__badge--classic',
     sub: '常规对局：先摆阵，再随机先后手轮流报点。',
   },
   {
     key: 'blitz',
     label: '超快棋模式',
-    badge: '快',
     badgeClass: 'practice__badge--blitz',
     sub: '开局倒计时 10×n 秒（3/5/7 架为 30/50/70 秒），超时判负。',
   },
   {
     key: 'blind',
     label: '盲棋模式',
-    badge: '盲',
     badgeClass: 'practice__badge--blind',
     sub: '不记旧报点，禁用参考飞机与着色。',
   },
   {
     key: 'custom',
     label: '自定义模式',
-    badge: '自',
     badgeClass: 'practice__badge--custom',
     sub: '自定棋盘尺寸与飞机形状，全部校验通过才可开战。',
   },
@@ -68,6 +63,74 @@ const MODE_TITLES: Record<PracticeMode, string> = {
   classic: '经典模式',
   blitz: '超快棋模式',
   blind: '盲棋模式',
+}
+
+/** 圆形徽标内图标尺寸（px；徽标 44px，四周留白，不触边框） */
+const BADGE_ICON_SIZE = 26
+
+/** 默认飞机（经典）—— 俯视轮廓（近似默认 10 格纸飞机形状，左右对称） */
+const ICON_PLANE_PATH =
+  'M12 3.6 C13.2 3.6 14 5.2 14.2 6.6 L20.2 10.5 C21.1 11.1 20.9 12.4 19.9 12.6 ' +
+  'L15.4 13.5 L16.2 19.8 C16.4 20.7 15.6 21.3 14.8 20.7 L12 18.9 L9.2 20.7 ' +
+  'C8.4 21.3 7.6 20.7 7.8 19.8 L8.6 13.5 L4.1 12.6 C3.1 12.4 2.9 11.1 3.8 10.5 ' +
+  'L9.8 6.6 C10 5.2 10.8 3.6 12 3.6 Z'
+
+/** 闪电（超快棋） */
+const ICON_ZAP_POINTS = '13 2 3 14 12 14 11 22 21 10 12 10 13 2'
+
+/** 徽标图标：SVG 内联，颜色取徽标 currentColor（与既有配色一致） */
+function ModeIcon({ kind }: { kind: PracticeMode | 'custom' }) {
+  if (kind === 'blitz') {
+    return (
+      <svg width={BADGE_ICON_SIZE} height={BADGE_ICON_SIZE} viewBox="0 0 24 24" aria-hidden="true">
+        <polygon points={ICON_ZAP_POINTS} fill="currentColor" />
+      </svg>
+    )
+  }
+  if (kind === 'blind') {
+    return (
+      <svg
+        width={BADGE_ICON_SIZE}
+        height={BADGE_ICON_SIZE}
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={1.8}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+      >
+        {/* 眼睛轮廓 */}
+        <path d="M3 12 C5.6 6.9 9.6 5.6 12 5.6 C14.4 5.6 18.4 6.9 21 12 C18.4 17.1 14.4 18.4 12 18.4 C9.6 18.4 5.6 17.1 3 12 Z" />
+        {/* 瞳孔 */}
+        <circle cx="12" cy="12" r="2.7" fill="currentColor" stroke="none" />
+        {/* 斜杠（不可视） */}
+        <path d="M4.8 19.2 L19.2 4.8" strokeWidth={2.4} />
+      </svg>
+    )
+  }
+  if (kind === 'custom') {
+    return (
+      <svg
+        width={BADGE_ICON_SIZE}
+        height={BADGE_ICON_SIZE}
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={2.6}
+        strokeLinecap="round"
+        aria-hidden="true"
+      >
+        <path d="M12 5 v14 M5 12 h14" />
+      </svg>
+    )
+  }
+  // classic：默认飞机俯视轮廓
+  return (
+    <svg width={BADGE_ICON_SIZE} height={BADGE_ICON_SIZE} viewBox="0 0 24 24" aria-hidden="true">
+      <path d={ICON_PLANE_PATH} fill="currentColor" />
+    </svg>
+  )
 }
 
 /** 模式 → 配置标记（超快棋 blitz / 盲棋 blind，可与经典互相独立组合） */
@@ -173,9 +236,9 @@ export function PracticeMenu({ onExit }: { onExit?: () => void }) {
             onClick={() => (m.key === 'custom' ? goCustom() : setSetup(m.key))}
           >
             <span className={['practice__badge', m.badgeClass].join(' ')} aria-hidden="true">
-              {m.badge}
+              <ModeIcon kind={m.key} />
             </span>
-            <span>
+            <span className="practice__mode-text">
               <span className="practice__mode-label">{m.label}</span>
               <span className="practice__mode-sub">{m.sub}</span>
             </span>
