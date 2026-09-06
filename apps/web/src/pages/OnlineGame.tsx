@@ -693,8 +693,6 @@ export function OnlineGame() {
       statusThem = true
     } else if (myMsg) {
       statusText = myMsg
-    } else if (yourTurn && prefire.length > 0) {
-      statusText = `轮到你了——预报点将自动上报（${prefire.length} 个）`
     } else if (yourTurn) {
       statusText = `轮到我方报点 · 第 ${turnNo} 回合`
     } else {
