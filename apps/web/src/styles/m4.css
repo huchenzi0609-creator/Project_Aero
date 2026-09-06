@@ -198,7 +198,8 @@
   justify-content: center;
   padding: 24px;
   background: rgba(58, 46, 28, 0.5);
-  animation: fadeIn 220ms ease-out;
+  /* v0.3.6：独占命名，规避 m6.css 同名 @keyframes fadeIn（translate(-50%,…)）抢占导致左移闪烁 */
+  animation: gameBannerFadeIn 220ms ease-out;
 }
 .game-banner__card {
   display: flex;
@@ -210,7 +211,8 @@
   border: 1px solid rgba(96, 78, 50, 0.45);
   border-radius: var(--radius-card);
   box-shadow: var(--shadow-card-hover);
-  animation: modalIn 200ms var(--ease-paper);
+  /* v0.3.6：居中淡入 + 中心缩放（无位移），独占命名 */
+  animation: gameBannerCardIn 200ms var(--ease-paper);
 }
 .game-banner__label {
   font-size: 13px;
@@ -529,4 +531,22 @@
 .game--portrait .result__actions {
   gap: 10px;
   margin-top: 4px;
+}
+
+/* ---------- v0.3.6：先后手横幅专属入场（独占命名） ----------
+   与 v0.3.5 PaperModal 同源：全局同名 @keyframes（m6.css fadeIn 含 translate(-50%,…)）
+   后定义者胜，会使 fixed 居中横幅入场瞬间左移再回中。
+   此处独占命名：纯淡入 + 中心缩放，首帧即居中、不产生位移；
+   不改动其他元素仍在使用中的 fadeIn / modalIn / aiFlash / shakeX 等定义与引用。 */
+
+@keyframes gameBannerFadeIn {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes gameBannerCardIn {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
 }
