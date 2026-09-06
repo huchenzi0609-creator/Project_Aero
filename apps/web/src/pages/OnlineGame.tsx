@@ -373,15 +373,10 @@ export function OnlineGame() {
     if (gameEnd) setGhostRects([])
   }, [gameEnd])
 
-  // 幽灵真消灭：M3 正为 useRefPlanes 增加 removePlaced(id)，尚未落盘前按签名接线（可选链空操作，
-  // 落盘后自动生效）；完成整机批量着色 → 真实移除该幽灵 + 退出着色模式（ColoringTool 只发事件）
-  interface RefPlanesWithRemove {
-    removePlaced?: (id: string) => void
-  }
-  const removePlaced =
-    (refPlanes as unknown as RefPlanesWithRemove).removePlaced
+  // 幽灵真消灭：整机批量着色完成（gestureEnd 结算 onGhostBatch）→ removePlaced 真移除该幽灵
+  // + 退出着色模式（ColoringTool 只发事件，页面端执行回收）
   const handleGhostBatch = (id: string) => {
-    removePlaced?.(id)
+    refPlanes.removePlaced(id)
     if (coloring.coloringMode) coloring.toggleMode()
   }
   ghostBatchHandlerRef.current = handleGhostBatch
@@ -855,7 +850,26 @@ export function OnlineGame() {
             .filter(Boolean)
             .join(' ')}
         >
-          <div className="coloring-stage">
+          {/* v0.3.4 手势接线：capture 转发 pointer 事件给 useColoring（gestureStart/Move/End），
+              判定「点击幽灵 = 整机批染 + onGhostBatch」vs「拖拽经过 = 仅路径格染色」。
+              pointerdown 的 capture 先于 PaperGrid 对按下格的 onPaint 执行（顺序天然正确） */}
+          <div
+            className="coloring-stage"
+            onPointerDownCapture={(e) => {
+              if (!isColoring) return
+              coloring.gestureStart(e.clientX, e.clientY)
+            }}
+            onPointerMoveCapture={(e) => {
+              if (!isColoring) return
+              coloring.gestureMove(e.clientX, e.clientY)
+            }}
+            onPointerUpCapture={() => {
+              if (isColoring) coloring.gestureEnd()
+            }}
+            onPointerCancelCapture={() => {
+              if (isColoring) coloring.gestureEnd()
+            }}
+          >
             <PaperGrid
               width={config.width}
               height={config.height}
