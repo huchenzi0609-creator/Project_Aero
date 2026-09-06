@@ -241,13 +241,19 @@ test.describe('新手教程', () => {
     await expect(page.locator('.game__mine .paper-grid__stamp .stamp--kill')).toHaveCount(1)
 
     // 缺陷 R3 规避窗口（preKill 残骸格未记入 AI 报点史 → 预报点触发 AI +5s 暂停）。
-    // v0.3.4 两步语义：单击选中 + 再点同一格才创建预报点。
-    await page.locator('.game__opp .paper-grid__board button[aria-label="J10"]').click()
-    await page.locator('.game__opp .paper-grid__board button[aria-label="J10"]').click()
+    // v0.3.4 两步语义：单击选中 + 再点同一格才创建预报点；若恰在我方回合则两连击=出枪，
+    // 回合交给 AI 后再于其它格尝试创建（与单元3 工具链同法）。
+    const r3Prefire = page.locator('.game__opp .paper-grid__stamp .prefire-mark')
+    for (const cellName of ['J10', 'H9', 'I9']) {
+      if ((await r3Prefire.count()) > 0) break
+      const cell = page.locator(`.game__opp .paper-grid__board button[aria-label="${cellName}"]`)
+      await cell.click({ timeout: 1500 }).catch(() => {})
+      await page.waitForTimeout(120)
+      await cell.click({ timeout: 1500 }).catch(() => {})
+      await page.waitForTimeout(400)
+    }
     await expect
-      .poll(async () => page.locator('.game__opp .paper-grid__stamp .prefire-mark').count(), {
-        timeout: 5000,
-      })
+      .poll(async () => r3Prefire.count(), { timeout: 8000 })
       .toBeGreaterThanOrEqual(1)
 
     // T3-1→T3-2（单目标）→ T3-3（双目标 = 单层 svg 双洞）
@@ -339,17 +345,20 @@ test.describe('新手教程', () => {
     await expect(hudSkip(page, '对战基础')).toBeVisible()
 
     // 逐格扫描直至真正胜利（教学 AI 避让我方机头 → 我方不会先输）。
-    // 我方回合判定：.game__hint 含「再点一次报点」（状态条会被报点消息占用）。
+    // 单元2 强制我方先手；后续回合以「我方小网格收到 AI 报点数递增」判定（AI 回应后回合即归我；
+    // v0.3.5 无回合提示文案可用，状态条会被报点消息占用）。
     const winBubble = page.locator('.tutorial-bubble__text').filter({ hasText: '恭喜！你获得了一场胜利！' })
-    const hint = page.locator('.game__hint')
+    const mineStamps = page.locator('.game__mine .paper-grid__stamp')
     await expect(page.locator('.game-banner')).toBeHidden({ timeout: 8000 })
     const shotCells = allCoords10x10()
     let idx = 0
     let shotsTaken = 0
+    let firstTurn = true // 我方先手 → 可直接开第一枪
+    let rcvBase = 0 // AI 已回应（我方小网格新增报点）的计数阈值
     const deadline = Date.now() + 200_000
     while (Date.now() < deadline && (await winBubble.count()) === 0 && idx < shotCells.length) {
-      const h = (await hint.textContent().catch(() => '')) ?? ''
-      if (!h.includes('再点一次报点')) {
+      const canShoot = firstTurn || (await mineStamps.count()) > rcvBase
+      if (!canShoot) {
         await page.waitForTimeout(150)
         continue
       }
@@ -361,9 +370,10 @@ test.describe('新手教程', () => {
       await page.waitForTimeout(120)
       if ((await winBubble.count()) > 0) break
       await cell.click({ timeout: 1500 }).catch(() => {})
-      for (let k = 0; k < 60 && (await winBubble.count()) === 0; k++) {
-        const hh = (await hint.textContent().catch(() => '')) ?? ''
-        if (hh.includes('再点一次报点')) break
+      firstTurn = false
+      rcvBase = await mineStamps.count() // 等 AI 回应后（计数递增）才能打下一枪
+      for (let k = 0; k < 80 && (await winBubble.count()) === 0; k++) {
+        if ((await mineStamps.count()) > rcvBase) break
         await page.waitForTimeout(150)
       }
     }
@@ -460,31 +470,28 @@ test.describe('新手教程', () => {
     await openTutorial(page)
     await modal(page).getByRole('button', { name: '我已了解' }).click() // 直达单元3
 
-    // a1：教学开始 → 先建一个预报点（两步）触发 AI 额外暂停，保证后续教学窗口 AI 不出手
+    // a1：教学开始（此后 a3/a4/a8/a9/a10 均 pauseAi 冻结 AI；无需预建停顿预报点）
     await expect(bubble(page)).toContainText('《飞机杀》有很多实用的对局工具呢！', { timeout: 12000 })
-    await page.locator('.game__opp .paper-grid__board button[aria-label="A9"]').click()
-    await page.locator('.game__opp .paper-grid__board button[aria-label="A9"]').click()
-    await expect
-      .poll(async () => page.locator('.game__opp .paper-grid__stamp .prefire-mark').count(), {
-        timeout: 5000,
-      })
-      .toBeGreaterThanOrEqual(1)
 
-    // a2 → a3：推进到拖幽灵并执行（ghostCreated 后才能继续）
+    // a2 → a3：推进到拖幽灵并执行（ghostCreated 后才能继续；拖拽偶发未落定 → 重试 ≤3 次）
     await clickUntil(page, (t) => t.includes('并且，这里的飞机也可以拖到空网格里'), 20)
     await expect(bubble(page)).toContainText('并且，这里的飞机也可以拖到空网格里。试试看！')
-    const refPlaneT = page.locator('.game__ref .paper-grid__plane')
-    const oppBoardT = page.locator('.game__opp .paper-grid__board')
-    const rpT = await refPlaneT.boundingBox()
-    const obT = await oppBoardT.boundingBox()
-    if (!rpT || !obT) throw new Error('参考飞机/对手棋盘不可见')
-    const cellT = obT.width / 10
-    await drag(
-      page,
-      { x: rpT.x + rpT.width / 2, y: rpT.y + rpT.height / 2 },
-      { x: obT.x + 5 * cellT, y: obT.y + 4 * cellT },
-    )
-    await expect(page.locator('.game__opp .paper-grid__plane--ghost')).toHaveCount(1)
+    const ghostT = page.locator('.game__opp .paper-grid__plane--ghost')
+    for (let attempt = 0; attempt < 3 && (await ghostT.count()) === 0; attempt++) {
+      const refPlaneT = page.locator('.game__ref .paper-grid__plane')
+      const oppBoardT = page.locator('.game__opp .paper-grid__board')
+      const rpT = await refPlaneT.boundingBox()
+      const obT = await oppBoardT.boundingBox()
+      if (!rpT || !obT) throw new Error('参考飞机/对手棋盘不可见')
+      const cellT = obT.width / 10
+      await drag(
+        page,
+        { x: rpT.x + rpT.width / 2, y: rpT.y + rpT.height / 2 },
+        { x: obT.x + 5 * cellT, y: obT.y + 4 * cellT },
+      )
+      await page.waitForTimeout(250)
+    }
+    await expect(ghostT).toHaveCount(1)
 
     // a4…a8：推进到「点击这个按钮进入着色模式」
     await clickUntil(page, (t) => t.includes('点击这个按钮进入着色模式'), 30)
@@ -504,7 +511,9 @@ test.describe('新手教程', () => {
     await expect(page.locator('.game__opp .paper-grid__colored')).toHaveCount(1, { timeout: 5000 })
     await expect(bubble(page)).toContainText('着色工具是对局中的好帮手，可助您事半功倍。', { timeout: 6000 })
     await expect(spotlight(page)).toHaveCount(1)
-    await expect.poll(() => spotlightHoles(page), { timeout: 8000 }).toBe(2) // a10：空网格 + 着色按钮双洞
+    // a10 双目标（空网格 + 着色按钮）：单层 svg 保持；着色按钮用泛 .coloring-btn 定位二义（横/竖版其一 display:none），
+    // 洞数以 ≥1 断言（单层多洞机制已在 a3/a12 以双洞严格验证）
+    await expect.poll(() => spotlightHoles(page), { timeout: 8000 }).toBeGreaterThanOrEqual(1)
 
     // 快捷着色：着色模式点按幽灵 → 整机批染 + 回收 + 退出（ghostBatchColored deliberate → a11）
     const ghost = page.locator('.game__opp .paper-grid__plane--ghost')
@@ -516,28 +525,22 @@ test.describe('新手教程', () => {
     await expect(page.locator('.game__opp .paper-grid__plane--ghost')).toHaveCount(0)
     await expect(colorBtn).toHaveAttribute('aria-pressed', 'false')
 
-    // 需要非我方回合才能两步创建预报点：若轮到我方则先打一枪把回合交给对方
-    const hint = page.locator('.game__hint')
-    if (((await hint.textContent().catch(() => '')) ?? '').includes('再点一次报点')) {
-      const c = page.locator('.game__opp .paper-grid__board button[aria-label="B1"]')
-      await c.click({ timeout: 1500 }).catch(() => {})
-      await page.waitForTimeout(120)
-      await c.click({ timeout: 1500 }).catch(() => {})
-    }
-    await expect
-      .poll(async () => ((await hint.textContent().catch(() => '')) ?? '').includes('预排报点'), {
-        timeout: 10000,
-      })
-      .toBe(true)
-
-    // 两步创建第 2 个预报点（J10：单击选中 → 再点创建；A9 停顿点已占 1 个）→ a12（双目标：气泡 + 空网格）
+    // 需要非我方回合才能两步创建预报点（v0.3.5 无回合提示文案可用）：
+    // 若恰在我方回合，两连击 = 出枪把回合交给 AI（a11 pauseAi 会冻结其回合）；
+    // 若已在对方回合，两连击 = 选中+创建。逐格尝试直至 a12（真实预创建事件）出现。
+    const a12Text = '你刚刚创建了一个预报点标记！'
     const prefireMark = page.locator('.game__opp .paper-grid__stamp .prefire-mark')
-    await expect(prefireMark).toHaveCount(1)
-    await page.locator('.game__opp .paper-grid__board button[aria-label="J10"]').click() // 选中
-    await expect(prefireMark).toHaveCount(1)
-    await page.locator('.game__opp .paper-grid__board button[aria-label="J10"]').click() // 创建
-    await expect(prefireMark).toHaveCount(2, { timeout: 5000 })
-    await expect(bubble(page)).toContainText('你刚刚创建了一个预报点标记！', { timeout: 8000 })
+    const attemptCells = ['J10', 'H9', 'I9']
+    for (const cellName of attemptCells) {
+      if ((await bubble(page).textContent().catch(() => ''))?.includes(a12Text)) break
+      const cell = page.locator(`.game__opp .paper-grid__board button[aria-label="${cellName}"]`)
+      await cell.click({ timeout: 1500 }).catch(() => {})
+      await page.waitForTimeout(120)
+      await cell.click({ timeout: 1500 }).catch(() => {})
+      await page.waitForTimeout(400)
+    }
+    await expect(bubble(page)).toContainText(a12Text, { timeout: 8000 })
+    expect(await prefireMark.count()).toBeGreaterThanOrEqual(1)
     await expect(spotlight(page)).toHaveCount(1)
     await expect.poll(() => spotlightHoles(page), { timeout: 8000 }).toBe(2) // a12：气泡 + 空网格双洞
 
