@@ -16,7 +16,7 @@ function onePlane(id = 0, origin: { r: number; c: number } = { r: 0, c: 0 }): Pl
 
 /** 1v1 开局（p0=先手）；options 控制模式 */
 function newGame(options?: { counterattack?: boolean }): GameState {
-  let g = createGame(W, H, DEFAULT_PLANE_SHAPE, 1, 0, options)
+  const g = createGame(W, H, DEFAULT_PLANE_SHAPE, 1, 0, options)
   const s0 = setFleet(g, 0, [onePlane(0)])
   if (!s0.ok) throw new Error('setFleet p0 失败')
   const s1 = setFleet(s0.state, 1, [onePlane(1)])
