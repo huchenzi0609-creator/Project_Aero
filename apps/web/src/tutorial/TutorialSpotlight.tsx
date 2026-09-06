@@ -11,6 +11,7 @@
  * - z-index 低于教程弹窗（.paper-modal 60），弹窗为豁免对象不被压暗。
  */
 import { useEffect, useRef, useState } from 'react'
+import { mergeHoleRects } from './spotlightMerge'
 
 export interface TargetRect {
   left: number
@@ -69,18 +70,22 @@ export function TutorialSpotlight({ target }: { target?: string | string[] | nul
 
   if (targets.length === 0 || rects.length === 0) return null
 
-  // 单层 SVG：外圈矩形 + evenodd 挖洞（多洞不叠加亮度）
+  // 先对洞矩形（含 PAD 外扩）做并集合并：保证洞互不重叠，evenodd 下单层亮度始终一致
+  // （重叠洞子路径在 evenodd 下会被反向填充而变暗 —— v0.3.5 修复）
   const W = window.innerWidth
   const H = window.innerHeight
+  const outer = rects
+    .map((r) => ({
+      left: Math.max(0, r.left - PAD),
+      top: Math.max(0, r.top - PAD),
+      right: Math.min(W, r.left + r.width + PAD),
+      bottom: Math.min(H, r.top + r.height + PAD),
+    }))
+    .map((r) => ({ left: r.left, top: r.top, width: r.right - r.left, height: r.bottom - r.top }))
+  const merged = mergeHoleRects(outer)
   const frame = `M0 0 H${W} V${H} H0 Z`
-  const holes = rects
-    .map((r) => {
-      const l = Math.max(0, r.left - PAD)
-      const t = Math.max(0, r.top - PAD)
-      const rr = Math.min(W, r.left + r.width + PAD)
-      const b = Math.min(H, r.top + r.height + PAD)
-      return `M${l} ${t} H${rr} V${b} H${l} Z`
-    })
+  const holes = merged
+    .map((r) => `M${r.left} ${r.top} H${r.left + r.width} V${r.top + r.height} H${r.left} Z`)
     .join(' ')
 
   return (
