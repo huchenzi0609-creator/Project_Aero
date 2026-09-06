@@ -139,10 +139,9 @@ export function GameScreen({ mode = 'single', onGameEvent, aiShotSelector, hideS
   const queueSig = state ? `${turnSig}|${myPreFire.length}|${myPreFire[0] ? cellKey(myPreFire[0]!) : ''}` : ''
 
   /* ---------- 着色工具（每局独立，新对局清空；v0.3.0 幽灵着色/快捷着色） ---------- */
-  // 幽灵飞机（在场放置副本）的活动列表：由 refPlanes.placed 经 useLayoutEffect 同步（见下），
-  // 回收 = 从本列表移除；渲染过滤走 retiredGhostIds（双状态分开驱动，避免快照着色的点击滞后）。
+  // 幽灵飞机（在场放置副本）的活动列表：由 refPlanes.placed 经 useLayoutEffect 同步。
+  // v0.3.4：幽灵回收走 M3 契约 useRefPlanes.removePlaced(id: string) 真移除；ghostRects 随 placed 自动更新。
   const [ghostRects, setGhostRects] = useState<GhostRect[]>([])
-  const [retiredGhostIds, setRetiredGhostIds] = useState<ReadonlySet<string>>(new Set())
   // onGhostBatch 需要引用在 useColoring 之后才定义的处理器（coloring 依赖），用 ref 桥接取最新闭包
   const ghostBatchHandlerRef = useRef<(id: string, cells: Cell[]) => void>(() => {})
   const coloring = useColoring({
@@ -180,7 +179,6 @@ export function GameScreen({ mode = 'single', onGameEvent, aiShotSelector, hideS
     timeoutLoserRef.current = null
     autoFiredTurnRef.current = null
     endReportedRef.current = false
-    setRetiredGhostIds(new Set())
     setGhostRects([])
     seenGhostIdsRef.current = new Set()
     coloring.reset()
@@ -479,15 +477,16 @@ export function GameScreen({ mode = 'single', onGameEvent, aiShotSelector, hideS
 
   /* ================= v0.3.0：幽灵飞机同步 / 快捷着色 / 教程事件包装 ================= */
 
+  // M3 并行实现 useRefPlanes.removePlaced(id: string)；未落盘前动态探测（按契约接线，缺失时回退展示态移除）
+  const removePlacedRef = (refPlanes as unknown as { removePlaced?: (id: string) => void }).removePlaced
+
   // placed 每次变化 → useLayoutEffect 同步活动幽灵列表（绘制前完成，避免拖入后点击滞后一帧）
   useLayoutEffect(() => {
     if (!config) return
     setGhostRects(
-      (refPlanes.placed ?? [])
-        .filter((p) => !retiredGhostIds.has(String(p.id)))
-        .map((p) => ({ id: String(p.id), cells: occupiedCells(p, config.shape) })),
+      (refPlanes.placed ?? []).map((p) => ({ id: String(p.id), cells: occupiedCells(p, config.shape) })),
     )
-  }, [refPlanes.placed, retiredGhostIds, config])
+  }, [refPlanes.placed, config])
 
   // 幽灵诞生事件（拖入成功 → placed 新增条目）
   const seenGhostIdsRef = useRef<Set<string>>(new Set())
@@ -498,11 +497,15 @@ export function GameScreen({ mode = 'single', onGameEvent, aiShotSelector, hideS
     seenGhostIdsRef.current = new Set(ids)
   }, [refPlanes.placed, onGameEvent])
 
-  // 快捷着色：整机被批量着色 → 回收幽灵 + 退出着色模式（ColoringTool 只发事件，回收由页面执行）
+  // 快捷着色：整机被批量着色 → 真移除幽灵（removePlaced）+ 退出着色模式（ColoringTool 只发事件，回收由页面执行）
   const ghostPointerDownRef = useRef(false)
   const handleGhostBatch = (id: string, cells: Cell[]) => {
-    setGhostRects((prev) => prev.filter((g) => g.id !== id))
-    setRetiredGhostIds((prev) => new Set(prev).add(id))
+    if (typeof removePlacedRef === 'function') {
+      removePlacedRef(id)
+    } else {
+      // 回退：M3 removePlaced 未落盘时从展示/命中列表移除（placed 仍保留，M3 合并后自动真移除）
+      setGhostRects((prev) => prev.filter((g) => g.id !== id))
+    }
     if (coloring.coloringMode) coloring.toggleMode()
     // A4：仅当本次批量着色由【着色模式 + pointerdown 直接命中幽灵】触发时标记 deliberate，
     // 教程据此才推进 T3-11（拖拽擦过/普通涂色跨格误触不计数）
@@ -642,7 +645,28 @@ export function GameScreen({ mode = 'single', onGameEvent, aiShotSelector, hideS
     presentMyShot(cell, res)
   }
 
-  /** 非我方回合点击空网格 = 创建预报点；已预报格 = 点选 / 再点取消（上限 10，FIFO 由引擎裁决） */
+  /** 立即创建预报点（坐标输入路径 / 点击两步确认的第二步；上限 10，FIFO 由引擎裁决） */
+  const addPrefire = (cell: Cell) => {
+    const res = queuePreFireAt(cell)
+    if (!res) return
+    if (!res.ok) {
+      if (res.error === 'PRE_FIRE_FULL') {
+        toast('预报点已达上限（10 个），请先取消部分预报点。', 'error')
+        shakeInput()
+      } else {
+        // CELL_TAKEN：该格已有可见标记（经典全量 / 盲棋可见窗口）
+        toast('该格已经报过点了', 'error')
+        shakeInput()
+      }
+      return
+    }
+    setPfSel(null)
+    setInput('')
+    onGameEvent?.({ type: 'preFireCreated', coord: { r: cell.r, c: cell.c } })
+  }
+
+  /** 非我方回合点击（v0.3.4 两步）：空网格首次单击仅选中（复用选中高亮），再点同一格创建；
+   *  已预报格 = 点选 / 再点取消；点他格改选。坐标输入仍为一步创建（addPrefire）。 */
   const onPrefireTap = (cell: Cell) => {
     if (screen !== 'battle' || state.phase !== 'playing' || isColoring) return
     if (myPreFireKeys.has(cellKey(cell))) {
@@ -659,22 +683,13 @@ export function GameScreen({ mode = 'single', onGameEvent, aiShotSelector, hideS
       setInput(formatCoord(cell))
       return
     }
-    const res = queuePreFireAt(cell)
-    if (!res) return
-    if (!res.ok) {
-      if (res.error === 'PRE_FIRE_FULL') {
-        toast('预报点已达上限（10 个），请先取消部分预报点。', 'error')
-        shakeInput()
-      } else {
-        // CELL_TAKEN：该格已有可见标记（经典全量 / 盲棋可见窗口）
-        toast('该格已经报过点了', 'error')
-        shakeInput()
-      }
+    // 空网格：两步——第一次单击仅选中，第二次单击同一格才创建
+    if (pfSel && pfSel.r === cell.r && pfSel.c === cell.c) {
+      addPrefire(cell)
       return
     }
-    setPfSel(null)
+    setPfSel(cell)
     setInput(formatCoord(cell))
-    onGameEvent?.({ type: 'preFireCreated', coord: { r: cell.r, c: cell.c } })
   }
 
   const onOppCellClick = (cell: Cell) => {
@@ -710,7 +725,7 @@ export function GameScreen({ mode = 'single', onGameEvent, aiShotSelector, hideS
       return
     }
     if (state.turn !== me) {
-      // 对方回合：输入命中预报点 = 取消该预报点；空网格 = 创建（与点击一致）
+      // 对方回合：输入命中预报点 = 取消该预报点；空网格 = 一步创建（坐标输入行为不变）
       if (myPreFireKeys.has(cellKey(cell))) {
         if (cancelPreFireAt(cell)) {
           setPfSel(null)
@@ -719,7 +734,7 @@ export function GameScreen({ mode = 'single', onGameEvent, aiShotSelector, hideS
         }
         return
       }
-      onPrefireTap(cell)
+      addPrefire(cell)
       return
     }
     doShot(cell)
@@ -744,11 +759,6 @@ export function GameScreen({ mode = 'single', onGameEvent, aiShotSelector, hideS
   // 裁决语义在引擎 state 中完整保留，此处仅影响展示。
   const myReceivedShots = dedupeShots(myBoard.receivedShots)
   const myResultShots = dedupeShots(myBoard.shotsFired)
-
-  // 对手网格上实际渲染的幽灵：隐藏已被快捷着色回收的（placed 内部仍保留，拖拽/重叠逻辑不受影响）
-  const visibleShownPlanes = refPlanes.shownPlanes.filter(
-    (p) => p.id === -1 || !retiredGhostIds.has(String(p.id)),
-  )
 
   // 自定义报点渲染：预报点伪标记画「?」章（与可见标记同格时不再画 ?，防止竞态遮蔽真实结果）；
   // 其余保持 StampMark（含反转设置）
@@ -893,7 +903,7 @@ export function GameScreen({ mode = 'single', onGameEvent, aiShotSelector, hideS
                   ? { active: true, color: coloring.currentColor, onPaint: paintCellAt }
                   : undefined
               }
-              planes={visibleShownPlanes}
+              planes={refPlanes.shownPlanes}
               shape={config.shape}
               planesLayer={
                 isColoring
