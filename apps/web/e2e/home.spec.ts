@@ -19,8 +19,8 @@ test.describe('主页', () => {
     await expect(page.getByRole('button', { name: '对战模式' })).toBeVisible()
     await expect(page.getByRole('button', { name: '设置' })).toBeVisible()
     await expect(page.getByRole('button', { name: '规则说明' })).toBeVisible()
-    // 版本角标 v0.3.7
-    await expect(page.locator('.home__version')).toHaveText('v0.3.7')
+    // 版本角标 v0.3.8
+    await expect(page.locator('.home__version')).toHaveText('v0.3.8')
     // 新手教程位于练习模式之上（y 序）
     const tutorialY = await page.getByRole('button', { name: '新手教程' }).boundingBox()
     const practiceY = await page.getByRole('button', { name: '练习模式' }).boundingBox()

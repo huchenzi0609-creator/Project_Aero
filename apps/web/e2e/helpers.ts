@@ -81,8 +81,8 @@ export async function openOnline(page: Page): Promise<void> {
 /** 对战模式（自定义房间卡）：房主建房（默认小型，可选开超快棋/盲棋）→ 返回房码并停留摆阵页 */
 export async function createRoomHost(page: Page, opts: { blitz?: boolean; blind?: boolean } = {}) {
   await openOnline(page)
-  if (opts.blitz) await page.locator('label', { hasText: '超快棋（' }).click()
-  if (opts.blind) await page.locator('label', { hasText: '盲棋（' }).click()
+  if (opts.blitz) await page.locator('.online__customcard label.online__check', { hasText: /^超快棋$/ }).click()
+  if (opts.blind) await page.locator('.online__customcard label.online__check', { hasText: /^盲棋$/ }).click()
   const createBtn = page.getByRole('button', { name: '创建房间' })
   await expect(createBtn).toBeEnabled({ timeout: 15000 }) // 等 v0.3 客户端连上服务器
   await createBtn.click()

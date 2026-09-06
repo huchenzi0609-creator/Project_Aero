@@ -73,7 +73,7 @@ test.describe('回到未完成对局浮窗', () => {
     // 确认退出摆阵：leaveRoom 清理房间 → 主页不再出现浮窗
     await A.getByRole('button', { name: '← 退出' }).click()
     await A.getByRole('button', { name: '确认退出' }).click()
-    await expect(A.locator('.online__card-title').first()).toBeVisible({ timeout: 10000 })
+    await expect(A.getByRole('heading', { name: '对战模式' })).toBeVisible({ timeout: 10000 })
     await A.getByRole('button', { name: '← 返回主页' }).click()
     await expect(A.getByRole('heading', { name: '飞机杀' })).toBeVisible({ timeout: 10000 })
     await expect(fab).toHaveCount(0)

@@ -147,9 +147,9 @@ test.describe('自定义模式', () => {
     const errs = watchErrors(page)
     await openOnline(page)
 
-    // 三板块标题
+    // 三板块标题（v0.3.8 紧凑结构：标题与勾选同行）
     for (const t of ['经典模式', '超快棋模式', '盲棋模式']) {
-      await expect(page.locator('.online__card-title').filter({ hasText: t })).toBeVisible()
+      await expect(page.locator('.online__modecard__name').filter({ hasText: t })).toBeVisible()
     }
 
     const group = (title: string) => page.getByRole('group', { name: `${title}档位勾选` })
@@ -179,12 +179,12 @@ test.describe('自定义模式', () => {
     await page.getByRole('button', { name: '取消匹配' }).click()
     await expect(page.getByText('正在匹配对手…')).toBeHidden()
 
-    // 自定义房间板块渲染：档位 + 超快棋/盲棋开关 + 房码输入 + 加入已有对局
+    // 自定义房间板块渲染：档位 + 超快棋/盲棋开关（v0.3.8 无括注说明）+ 房码输入 + 加入已有对局
     const customCard = page.locator('.paper-card').filter({ hasText: '自定义房间' })
     await expect(customCard).toBeVisible()
     await expect(customCard.getByRole('group', { name: '创建房间档位' }).getByRole('button')).toHaveCount(3)
-    await expect(customCard.locator('label', { hasText: '超快棋（' })).toBeVisible()
-    await expect(customCard.locator('label', { hasText: '盲棋（' })).toBeVisible()
+    await expect(customCard.locator('label.online__check', { hasText: /^超快棋$/ })).toBeVisible()
+    await expect(customCard.locator('label.online__check', { hasText: /^盲棋$/ })).toBeVisible()
     await expect(page.getByLabel('房码输入')).toBeVisible()
     await expect(page.getByRole('button', { name: '加入已有对局' })).toBeVisible()
     await expect(customCard.getByRole('button', { name: '创建房间' })).toBeVisible()
