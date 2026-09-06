@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [0.3.6] - 2026-08-31
+
 ### Fixed
 
 - 开局"先后手"横幅不再闪烁：m4.css 同名 @keyframes 冲突改独占命名（gameBannerFadeIn/gameBannerCardIn）
