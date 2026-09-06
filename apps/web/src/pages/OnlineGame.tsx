@@ -486,7 +486,9 @@ export function OnlineGame() {
     }
     prevYourTurnRef.current = yourTurn
   }, [yourTurn])
-  useEffect(() => {
+  // v0.3.6：自动上报用 useLayoutEffect（React 提交后同帧同步执行）——轮到即发，无下一帧/宏任务延迟，
+  // 且与 queueAutoTurn 的手动禁用配合，杜绝同帧用户点击抢先；turnNo 去重防同回合重入
+  useLayoutEffect(() => {
     if (!phaseInGame || !yourTurn) return
     const fired = autoFiredTurnRef.current
     if (fired.turnNo === turnNo) return
@@ -526,7 +528,12 @@ export function OnlineGame() {
 
   const isPlaying = phase === 'playing' || phase === 'counterattack'
   // v0.3：非我方回合不再拦截报点（改预报点机制），故禁点条件移除 !yourTurn
-  const canShoot = isPlaying && yourTurn && socketStatus === 'connected' && !isColoring
+  // v0.3.6：常规回合（playing）且预报点队列非空时，本回合由自动上报接管——
+  // 手动报点路径禁用（防抢先于自动上报），队列清空后自动恢复手动；
+  // 绝地反击（counterattack）保持原状：手动可用、自动上报不 gate。
+  const queueAutoTurn = phase === 'playing' && yourTurn && prefire.length > 0
+  const canShoot =
+    isPlaying && yourTurn && socketStatus === 'connected' && !isColoring && !queueAutoTurn
 
   const alreadyShot = (cell: Cell) =>
     myShots.some((s) => s.coord.r === cell.r && s.coord.c === cell.c)
@@ -646,6 +653,8 @@ export function OnlineGame() {
       }
       return
     }
+    // 我方回合但自动上报接管中（queueAutoTurn，常规回合）：点击无手动操作（等自动上报发出）
+    if (yourTurn) return
     // 非我方回合 → 预报点（取代原「还没轮到您报点」提示）
     handlePrefireTap(cell)
   }
@@ -672,6 +681,8 @@ export function OnlineGame() {
       doShot(cell)
       return
     }
+    // 我方回合但自动上报接管中（queueAutoTurn，常规回合）：坐标输入不触发手动报点
+    if (yourTurn) return
     // 非我方回合 → 预报点（坐标输入一次生效：创建 / 选中 / 取消）
     commitPrefireInput(cell)
   }
@@ -746,10 +757,12 @@ export function OnlineGame() {
   const oppDisconnSec = oppDisconnect ? Math.max(0, oppDisconnect.graceMs - (now - oppDisconnect.since)) : 0
 
   /* ---------- v0.3 输入栏可用性 / 提示（非我方回合改为预报点输入，不再禁用） ---------- */
-  const inputDisabled = !isPlaying || socketStatus !== 'connected' || isColoring
+  // 自动上报接管回合（queueAutoTurn）：输入与确认禁用，避免手动坐标确认抢先
+  const inputDisabled = !isPlaying || socketStatus !== 'connected' || isColoring || queueAutoTurn
   let hintText = ''
   if (isColoring) hintText = '着色模式：点按染色 · 按住拖动画线 · 再点同色擦除'
   else if (modeBlind) hintText = '盲棋：不记旧报点，参考飞机与着色已禁用'
+  else if (queueAutoTurn) hintText = '预报点自动上报中…（每回合一个，队列清空后恢复手动报点）'
   else if (canShoot) hintText = '点击棋盘选格，再点一次报点 · 或输入坐标回车'
   else if (isPlaying)
     hintText = '等待对方报点：可点击空格预排「?」预报点（≤10），轮到自动上报'
