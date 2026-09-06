@@ -13,11 +13,11 @@
   ```
 - 撤销访问：删除服务器 `/home/admin/.ssh/authorized_keys` 中 `aero-deploy@feijisha.online` 行。
 
-## 2. 部署清单（2026-08-31 实况）
+## 2. 部署清单（2026-09-06 实况：v0.3.7）
 
 | 项 | 位置/说明 |
 |---|---|
-| 应用代码 | `/opt/aero`（v0.2.10；**注意：服务器端非 git 仓库**，由 tar 上传，见 §5） |
+| 应用代码 | `/opt/aero`（**v0.3.7**，2026-09-06 由 v0.2.10 升级部署；**回滚点 `/opt/aero.bak.v0210`**；服务器端非 git 仓库，由 tar 上传，见 §5） |
 | 数据库 | `/opt/aero-data/aero.db`（node:sqlite；游客账号/战绩持久化） |
 | 进程 | PM2 `aero-server`：cwd=/opt/aero，script=`apps/server/node_modules/.bin/tsx`，**interpreter=bash**，args=`apps/server/src/index.ts`，env `NODE_ENV=production PORT=3001 DATA_DIR=/opt/aero-data` |
 | 开机自启 | systemd `aero.service`（admin 用户执行 `pm2 resurrect`，已 enable；**注意：2026-08-31 部署后未整机重启，开机 resurrect 尚未实测**——pm2 守护进程实为 21:08 手动启动，见 §4 重启条目） |
@@ -47,11 +47,15 @@
 
 ## 5. 更新/回滚流程（服务器端非 git 仓库）
 
-1. 本机：`cd /Users/huchenzi/Ready4AI/Project_Aero && tar --exclude='Aero/node_modules' --exclude='Aero/.git' --exclude='Aero/data' --exclude='Aero/apps/web/dist' -czf /tmp/aero-src.tar.gz Aero`
-2. 上传解压：`scp /tmp/aero-src.tar.gz admin@116.62.121.70:/tmp/`，服务器上 `/tmp` 解压后 `cp -a aero-extract/Aero/. /opt/aero/`（**勿直接在 /opt 解压**，admin 无 /opt 写权限）
-3. `/opt/aero`：`pnpm install && pnpm --filter @aero/web build`
-4. `pm2 reload aero-server`；验证 `/health` 与 pub-smoke。
-- 回滚 = 重新上传旧版本 tar 覆盖 + 重建 + reload；数据库不回滚（备份先行）。
+**部署实操要点（2026-09-06 v0.3.7 验证过）：**
+- 依赖零变化时可**本地构建 dist 并随 tar 上传**（tar 含 apps/web/dist），服务器**无需 pnpm install/build**，node_modules 用"整树克隆旧目录再覆盖新代码"的方式复用。
+- 标准步骤：① DB 手动备份 `cp /opt/aero-data/aero.db /home/admin/backup/aero-predeploy-$(date +%F-%H%M).db`；② `sudo mv /opt/aero /opt/aero.bak.v<旧版本>`（建立回滚点，先确认该名不存在）；③ `/tmp` 解压新 tar（以 admin 解压保持所有权）；④ `sudo cp -a /opt/aero.bak.v<旧版本> /opt/aero`（克隆含 node_modules）；⑤ `sudo cp -a /tmp/解压目录/Aero/. /opt/aero/` 覆盖新代码+dist；⑥ 完整性检查（tsx 路径 / dist 角标 / package.json 版本）；⑦ `pm2 restart aero-server`（**勿用 --update-env**，会覆盖 DATA_DIR）；⑧ 验证 /health 与 pub-smoke，DB md5 复检（应与部署前一致）。
+- 回滚 = `sudo mv /opt/aero.bak.v<旧版本> /opt/aero` + `pm2 restart aero-server` + 验证；数据库不回滚（备份先行）。
+- 服务器现役 node_modules 复用前提：新版本无新增依赖（对比 `git diff v<旧tag> HEAD -- package.json apps/*/package.json`）。
+
+1. 本机：`cd /Users/huchenzi/Ready4AI/Project_Aero && tar --exclude='Aero/node_modules' --exclude='Aero/.git' --exclude='Aero/data' -czf /tmp/aero-src.tar.gz Aero`（dist 已本地构建时**不要**排除 apps/web/dist）
+2. 上传解压：`scp /tmp/aero-src.tar.gz admin@116.62.121.70:/tmp/`，服务器上 `/tmp` 解压后按上述实操要点覆盖（**勿直接在 /opt 解压**，admin 无 /opt 写权限，用 sudo mv/cp）
+3. `pm2 restart aero-server`；验证 `/health` 与 pub-smoke。
 - 可选：若用户把仓库推送到 GitHub，可在服务器 `git init` + 配置 remote 后改用 `git pull`（需用户确认远程为最新）。
 
 ## 6. 踩坑记录（都是本次实战验证过的）
