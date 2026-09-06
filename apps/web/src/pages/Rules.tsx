@@ -81,13 +81,12 @@ export function Rules() {
               <span className="rules__no">②</span> 报点与反馈
             </h2>
             <p className="rules__p">
-              双方轮流报点，格式“字母+数字”，大小写与空格均容错。
-              重复报点或非法坐标判<strong>无效打击</strong>，该次不消耗回合。
+              双方轮流报点，格式为“字母+数字”。
             </p>
             <ul className="rules__ul">
-              <li className="rules__li">无飞机 → <strong>击空</strong>（✗ 黑叉）</li>
-              <li className="rules__li">命中非机头部件 → <strong>击中</strong>（◯ 深绿空心圈）</li>
-              <li className="rules__li">命中机头 → <strong>击毁</strong>（★ 深红五角星，仅标机头格）</li>
+              <li className="rules__li">无飞机 → <strong>击空</strong>（✗）</li>
+              <li className="rules__li">命中非机头部件 → <strong>击中</strong>（◯）</li>
+              <li className="rules__li">命中机头 → <strong>击毁</strong>（★）</li>
             </ul>
             <p className="rules__p">
               被击毁飞机的其余格位一律不公开；之后对残骸任意格报点，按“击空”返回。
