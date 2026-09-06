@@ -179,7 +179,7 @@ export function TutorialPlacement({
   }
 
   return (
-    <div className={`placement placement--${orientation}`}>
+    <div className={`placement placement--${orientation} tutorial-placement`}>
       <header className="placement__head">
         <PaperButton size="sm" variant="ghost" onClick={exit}>
           ← 退出教程

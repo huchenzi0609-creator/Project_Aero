@@ -118,3 +118,12 @@
   transform: rotate(-135deg);
 }
 
+
+/* ============ v0.3.7 教程摆阵：竖版网格垂直位置与正常对局一致 ============
+   正常摆阵页 footer 含 3 项校验清单 + 状态（高约 58px）；教程页 footer 仅状态行（矮 33px），
+   使主体 flex 更高、网格垂直居中位置偏移。给竖版教程 footer 加不可见占位高度对齐：
+   （视觉为空白，aria-hidden 占位仅撑高；横版布局对 footer 高度不敏感，不设） */
+.placement--portrait.tutorial-placement .placement__foot {
+  min-height: 58px;
+  align-items: center;
+}
