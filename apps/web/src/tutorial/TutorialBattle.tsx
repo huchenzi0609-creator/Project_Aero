@@ -166,8 +166,9 @@ function buildAdvancedNodes(): FlowNode[] {
       id: 'a9',
       kind: 'quiet',
       text: [T3_PAINT],
-      wait: (e) => e.type === 'cellColored',
-      quietMs: 3000,
+      // v0.3.4：活动事件 = 单格染色 或 快捷着色；静默窗口 3s → 1s（1 秒内无活动才继续）
+      wait: (e) => e.type === 'cellColored' || e.type === 'ghostBatchColored',
+      quietMs: 1000,
       highlight: null,
       next: 'a10',
       pauseAi: true,
@@ -179,7 +180,8 @@ function buildAdvancedNodes(): FlowNode[] {
       // v0.3.2：仅【着色模式开启 + 直接点击幽灵飞机】的批量着色事件才推进（deliberate）
       wait: (e) => e.type === 'ghostBatchColored' && e.viaGhostPointerDown === true,
       next: 'a11',
-      highlight: 'bubble',
+      // v0.3.4：多目标突显 —— 空网格 + 着色工具按钮（按钮按横/竖版解析可见目标）
+      highlight: ['.game__opp', '.coloring-btn'],
       pauseAi: true,
     },
     {
@@ -188,10 +190,11 @@ function buildAdvancedNodes(): FlowNode[] {
       text: T3_BATCH,
       wait: (e) => e.type === 'preFireCreated',
       next: 'a12',
-      highlight: 'bubble',
+      // v0.3.4：T3-11 取消全部突显
+      highlight: null,
       pauseAi: true,
     },
-    { id: 'a12', kind: 'click', text: T3_PRE, after: null, highlight: 'bubble', pauseAi: true },
+    { id: 'a12', kind: 'click', text: T3_PRE, after: null, highlight: ['.tutorial-bubble', '.game__opp'], pauseAi: true },
   ]
   return nodes
 }
@@ -247,6 +250,8 @@ export function TutorialBattle({ variant, fleet, onExitHome, onGoAdvanced }: Tut
   }, [nodes])
 
   const [startFailed, setStartFailed] = useState(false)
+  // v0.3.4：对局已成功开启（begin 后）——此后 session 一旦被清空（对局内退出/结算离开）→ 收口回主页
+  const startedRef = useRef(false)
   const [p3Open, setP3Open] = useState(false)
   const [p5Open, setP5Open] = useState(false)
   const [free, setFree] = useState(false)
@@ -410,6 +415,7 @@ export function TutorialBattle({ variant, fleet, onExitHome, onGoAdvanced }: Tut
           setStartFailed(true)
           return
         }
+        startedRef.current = true
       } else {
         const rng = mulberry32(((Date.now() ^ Math.floor(Math.random() * 0xffffffff)) >>> 0) || 1)
         try {
@@ -424,6 +430,7 @@ export function TutorialBattle({ variant, fleet, onExitHome, onGoAdvanced }: Tut
             setStartFailed(true)
             return
           }
+          startedRef.current = true
         } catch (err) {
           toast(err instanceof Error ? err.message : '教程对局生成失败', 'error')
           setStartFailed(true)
@@ -449,11 +456,14 @@ export function TutorialBattle({ variant, fleet, onExitHome, onGoAdvanced }: Tut
     if (wonNow() && runRef.current && runRef.current.nodeId !== 'win') goNode('win')
   }, [sessionLive, free, variant])
 
-  // v0.3.2 继续对局收口：free 后玩家从结算离开（GameScreen 清 session）→ 由宿主收口回主页，
-  // 且此间不再渲染 GameScreen（避免"对局会话不存在"错误页闪现）
+  // v0.3.4 退出收口（任意阶段）：对局开始后 session 一旦被清空
+  // （对局内「退出」确认 / 结算页「返回主页」均清 session 且 view 不变）→ 宿主收口回主页，
+  // 此间不再渲染 GameScreen，杜绝"对局会话不存在"错误页闪现。
+  // 注意：begin 在 effect 内同步完成，本 effect 触发时须以最新 store 为准（闭包 sessionLive
+  // 可能仍是 begin 前的 null），避免开局瞬间误收口。
   useEffect(() => {
-    if (free && !sessionLive) onExitHome()
-  }, [free, sessionLive, onExitHome])
+    if (startedRef.current && !useGameStore.getState().session) onExitHome()
+  }, [sessionLive, onExitHome])
 
   // 终局兜底：单元3 任何时刻对局结束（含玩家在工具步骤前获胜/超时）→ 直接 P5
   useEffect(() => {
@@ -511,14 +521,19 @@ export function TutorialBattle({ variant, fleet, onExitHome, onGoAdvanced }: Tut
   const showBubble = !!node && !free && r != null && segsNow.length > 0
   const segText = showBubble ? (segsNow[Math.min(r!.seg, segsNow.length - 1)] ?? '') : ''
   // 突显解析：'bubble'=气泡自身；着色按钮横/竖版分别位于 stage 浮层 / 输入栏（另一侧 display:none）
-  let rawHighlight: string | string[] | null = !free && node?.highlight ? node.highlight : null
-  if (typeof rawHighlight === 'string') {
-    if (rawHighlight === 'bubble') rawHighlight = '.tutorial-bubble'
-    else if (rawHighlight.includes('.coloring-btn')) {
-      rawHighlight = orientation === 'portrait' ? '.game__inputbar .coloring-btn' : '.coloring-stage__btn .coloring-btn'
+  const resolveTarget = (t: string): string => {
+    if (t === 'bubble') return '.tutorial-bubble'
+    if (t.includes('.coloring-btn')) {
+      return orientation === 'portrait' ? '.game__inputbar .coloring-btn' : '.coloring-stage__btn .coloring-btn'
     }
+    return t
   }
-  const highlight = rawHighlight
+  const rawHighlight: string | string[] | null = !free && node?.highlight ? node.highlight : null
+  const highlight = Array.isArray(rawHighlight)
+    ? rawHighlight.map(resolveTarget)
+    : rawHighlight
+      ? resolveTarget(rawHighlight)
+      : null
   // 突显目标位于底部输入栏时气泡上置（避免遮挡底部按钮）；其余保持默认（多目标含输入栏也上置）
   const hlText = Array.isArray(node?.highlight) ? node.highlight.join(' ') : (node?.highlight ?? '')
   const bubbleAnchor =
@@ -543,8 +558,8 @@ export function TutorialBattle({ variant, fleet, onExitHome, onGoAdvanced }: Tut
     )
   }
 
-  // v0.3.2：free 模式会话已被结算页清空 → 交给 effect 收口回主页，不再渲染 GameScreen
-  if (free && !sessionLive) return null
+  // v0.3.4：对局已开始且会话被清空（任意阶段退出/结算离开）→ 交给 effect 收口，不渲染 GameScreen
+  if (startedRef.current && !sessionLive) return null
 
   return (
     <>
