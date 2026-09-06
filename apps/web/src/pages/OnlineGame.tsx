@@ -762,7 +762,8 @@ export function OnlineGame() {
   let hintText = ''
   if (isColoring) hintText = '着色模式：点按染色 · 按住拖动画线 · 再点同色擦除'
   else if (modeBlind) hintText = '盲棋：不记旧报点，参考飞机与着色已禁用'
-  else if (queueAutoTurn) hintText = '预报点自动上报中…（每回合一个，队列清空后恢复手动报点）'
+  // 自动上报接管回合（queueAutoTurn）：不显示"自动上报"类提示（与 v0.3.5 删除意图一致）
+  else if (queueAutoTurn) hintText = ''
   else if (canShoot) hintText = '点击棋盘选格，再点一次报点 · 或输入坐标回车'
   else if (isPlaying)
     hintText = '等待对方报点：可点击空格预排「?」预报点（≤10），轮到自动上报'
