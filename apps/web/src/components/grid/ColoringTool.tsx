@@ -1,10 +1,15 @@
 /**
  * ColoringTool —— 对局工具（v0.2.2，单机 + 联机）：着色 + 样式参考飞机拖拽。
- * v0.3.0：新增幽灵飞机（ghostRects）着色支持 —— useColoring(opts) 增补
- * `paintAt` 入口：着色模式下点/拖到幽灵飞机占据格 → 整架批量着色（语义与放置副本
- * 一致：同色=整机还原未染色，异色=整机染当前色）；开启快捷着色（quickColor，默认
- * 读 settingsStore.quickColor = true）且整机被着色时，额外回调 onGhostBatch(id, cells)
- * —— 组件只发事件，页面据此退出着色模式并回收幽灵（页面端 ghost 状态管理属 M4/M6）。
+ * v0.3.0：新增幽灵飞机（ghostRects）着色支持 —— useColoring(opts) 增补 `paintAt` 入口
+ * （整机批量染/擦 + 快捷着色回调 onGhostBatch，组件只发事件，页面回收幽灵）。
+ * v0.3.4：着色【仅点击批量】—— paintAt 不再对拖拽路径中的幽灵格做整机批染：
+ *   只有「点击」（pointerdown 与 pointerup 位移 ≤ 拖拽阈值 6px，且按下格命中幽灵飞机）
+ *   才整机批染并（开启快捷着色时）回调 onGhostBatch；
+ *   真实拖拽路径擦过幽灵格按普通路径格染色（不批量、不回调）。
+ *   判定依赖页面以 capture 监听棋盘 pointerdown/move/up 并转发
+ *   gestureStart(x,y) / gestureMove(x,y) / gestureEnd()（详见 ColoringState）。
+ * v0.3.4：useRefPlanes 新增 removePlaced(id: string) —— 把幽灵飞机（放置副本）从
+ *   placed 数组真移除（含拖拽中残留同步清理），移除后原位置即可重新放置。
  *
  * - useColoring：着色状态 hook（色块列表 / 模式开关 / 当前颜色 / 调色板开关），
  *   每局独立、新对局由调用方 reset 清空，不持久化。
@@ -60,12 +65,14 @@ export interface GhostColoringOptions {
   quickColor?: boolean
   /**
    * 幽灵飞机被整机批量【着色】后的回调（组件只发事件）。
-   * 页面据此退出着色模式并消灭该幽灵飞机；同一幽灵可能在一条拖拽路径中被命中多次，
-   * 回调按 id 幂等处理即可（页面移除幽灵后 ghostRects 会随之更新）。
-   * 注意：与放置副本批量着色一致，整机【擦除】还原为未染色时【不】触发本回调。
+   * 页面据此退出着色模式并消灭该幽灵飞机（v0.3.4：建议调 useRefPlanes.removePlaced(id) 真移除）。
+   * 注意：仅「点击命中幽灵且整机被着色」触发；拖拽路径擦过幽灵、或整机【擦除】还原为未染色时【不】触发。
    */
   onGhostBatch?: (id: string, cells: Cell[]) => void
 }
+
+/** 点击 vs 拖拽的位移阈值（px，与摆放/拖拽手势一致） */
+export const COLORING_CLICK_DRAG_THRESHOLD_PX = 6
 
 /** 返回覆盖该格位的幽灵飞机（无则 null） */
 export function ghostRectAt(
@@ -98,14 +105,50 @@ export interface ColoringState {
   /** 整机批量染/擦：hitColor 与当前色相同 → 整机还原为未染色；否则整机染当前色（覆盖） */
   paintPlane: (planeCells: Cell[], hitColor: ColoringColor | null) => void
   /**
-   * v0.3.0 着色入口（建议作为 PaperGrid `coloring.onPaint` 的实参）：
-   * 坐标命中幽灵飞机（ghostRects）时执行整机批量染/擦（paintPlane 语义）；
-   * 若快捷着色开启且整机被着色，再回调 onGhostBatch(id, cells)（由页面回收幽灵）。
-   * 未命中幽灵时与 paintCell 完全一致。
+   * v0.3.0 / v0.3.4 着色入口（建议作为 PaperGrid `coloring.onPaint` 的实参）。
+   *
+   * 整机批量染/擦（paintPlane 语义）【仅点击】触发：
+   * - 点击 = pointerdown 与 pointerup 位移 ≤ COLORING_CLICK_DRAG_THRESHOLD_PX（6px），
+   *   且按下格命中幽灵飞机（ghostRects）。
+   * - 点击幽灵：整机批量染/擦；若快捷着色开启且整机被着色，再回调 onGhostBatch(id, cells)
+   *   （页面据此退出着色模式并回收幽灵）。
+   * - 真实拖拽路径经过幽灵格：按普通路径格染色（不整机批量、不触发 onGhostBatch）。
+   * - 未命中幽灵时与 paintCell 完全一致。
+   *
+   * ⚠ 点击判定依赖页面喂入手势事件（本 hook 无法从 PaperGrid 的单格 onPaint 流中分辨点击/拖拽）：
+   * 在着色棋盘容器上以 capture 监听 pointerdown/pointermove/pointerup|pointercancel，
+   * 按下期间转发 gestureStart(x, y) / gestureMove(x, y)，结束时调用 gestureEnd()。
+   * （pointerdown 的 capture 先于 PaperGrid 的染色调用执行，顺序天然正确。）
+   * 若页面未喂入手势事件（gesture.active=false），本函数保守退化为普通单格染色——不误伤拖拽，
+   * 但也不会做幽灵整机批染；接入三个手势方法后即获得完整语义。
    */
   paintAt: (coord: Cell, brush: PaintBrush) => void
+  /**
+   * v0.3.4 手势开始：页面在着色棋盘上用 capture 监听 pointerdown 后调用
+   * （须先于 PaperGrid 对按下格发起的 onPaint）。x/y 为视口坐标（用于位移判定）。
+   */
+  gestureStart: (x: number, y: number) => void
+  /** v0.3.4 手势移动：capture 监听 pointermove（按下期间）调用；位移超过阈值即标记拖拽 */
+  gestureMove: (x: number, y: number) => void
+  /** v0.3.4 手势结束：capture 监听 pointerup / pointercancel 调用；点击时结算暂存的幽灵整机批染 */
+  gestureEnd: () => void
   /** 新对局清空（每局独立） */
   reset: () => void
+}
+
+/** 手势追踪内部状态（点击/拖拽判定） */
+interface GestureTrack {
+  active: boolean
+  downX: number
+  downY: number
+  /** 手势内第一个被着色的格（PaperGrid 在 pointerdown 时先行染色 → 即按下格） */
+  startCell: Cell | null
+  /** 位移已超过拖拽阈值或已出现第二格 → 本次为拖拽，路径格一律普通染色 */
+  dragged: boolean
+  /** 点击候选：按下格命中幽灵，等待 gestureEnd 结算为整机批染 */
+  pending:
+    | { ghost: GhostRect; coord: Cell; hit: ColoringColor | null; brush: PaintBrush }
+    | null
 }
 
 export function useColoring(options?: GhostColoringOptions): ColoringState {
@@ -115,6 +158,24 @@ export function useColoring(options?: GhostColoringOptions): ColoringState {
   const [coloringMode, setColoringMode] = useState(false)
   const [currentColor, setCurrentColor] = useState<ColoringColor>('yellow')
   const [paletteOpen, setPaletteOpen] = useState(false)
+
+  /** 手势追踪：供 paintAt 分辨「点击」与「拖拽路径」（由页面 capture 转发指针事件） */
+  const gestureRef = useRef<GestureTrack>({
+    active: false,
+    downX: 0,
+    downY: 0,
+    startCell: null,
+    dragged: false,
+    pending: null,
+  })
+
+  /** 拖拽被确认时：把暂存的"点击候选"按普通路径格结算（按下格普通单格染色） */
+  const flushPendingAsPlain = () => {
+    const g = gestureRef.current
+    const p = g.pending
+    g.pending = null
+    if (p) paintCell(p.coord, p.brush)
+  }
 
   const paintCell = (coord: Cell, brush: PaintBrush) => {
     setColoredCells((prev) => {
@@ -148,18 +209,66 @@ export function useColoring(options?: GhostColoringOptions): ColoringState {
   }
 
   const paintAt = (coord: Cell, brush: PaintBrush) => {
-    const ghost = ghostRectAt(ghostRects, coord)
-    if (!ghost) {
-      paintCell(coord, brush)
-      return
+    const g = gestureRef.current
+    // 手势开始后首个被染色的格 = 按下格（PaperGrid 在 pointerdown 先染起始格）
+    if (g.active && g.startCell === null) g.startCell = coord
+    // 出现第二格（或位移超阈值）→ 本次实为拖拽：先结算暂存候选为普通格
+    if (g.pending && !(g.startCell && g.startCell.r === coord.r && g.startCell.c === coord.c)) {
+      flushPendingAsPlain()
+      g.dragged = true
     }
-    const hit =
-      coloredCells.find((c) => c.coord.r === coord.r && c.coord.c === coord.c)?.color ?? null
-    const painting = brush === 'paint' && hit !== currentColor
-    setColoredCells((prev) => applyPlane(prev, ghost.cells, hit))
-    // 快捷着色：整机被着色 → 通知页面回收幽灵（擦除不回收）
-    if (quickColor && painting && onGhostBatch) {
-      onGhostBatch(ghost.id, ghost.cells)
+    // 点击候选：按下格命中幽灵飞机 → 暂存整机批染，待 gestureEnd 结算
+    if (g.active && !g.dragged && !g.pending) {
+      const startHit = g.startCell && g.startCell.r === coord.r && g.startCell.c === coord.c
+      if (startHit) {
+        const ghost = ghostRectAt(ghostRects, coord)
+        if (ghost) {
+          const hit = coloredCells.find((c) => c.coord.r === coord.r && c.coord.c === coord.c)?.color ?? null
+          g.pending = { ghost, coord, hit, brush }
+          return // 暂存：本格不立即染色
+        }
+      }
+    }
+    paintCell(coord, brush)
+  }
+
+  /** 手势开始（页面 capture pointerdown 转发；须先于 PaperGrid 染起始格） */
+  const gestureStart = (x: number, y: number) => {
+    gestureRef.current = {
+      active: true,
+      downX: x,
+      downY: y,
+      startCell: null,
+      dragged: false,
+      pending: null,
+    }
+  }
+
+  /** 手势移动（页面 capture pointermove 转发；按下期间）：位移超阈值 → 判定拖拽 */
+  const gestureMove = (x: number, y: number) => {
+    const g = gestureRef.current
+    if (!g.active) return
+    if (Math.hypot(x - g.downX, y - g.downY) >= COLORING_CLICK_DRAG_THRESHOLD_PX) {
+      g.dragged = true
+      flushPendingAsPlain()
+    }
+  }
+
+  /** 手势结束（页面 capture pointerup / pointercancel 转发）：点击 → 结算整机批染 */
+  const gestureEnd = () => {
+    const g = gestureRef.current
+    if (!g.active) return
+    g.active = false
+    const p = g.pending
+    g.pending = null
+    if (p && !g.dragged) {
+      // 点击命中幽灵：整机批量染/擦（paintPlane 语义）
+      const painting = p.brush === 'paint' && p.hit !== currentColor
+      setColoredCells((prev) => applyPlane(prev, p.ghost.cells, p.hit))
+      // 快捷着色：整机被着色 → 通知页面回收幽灵（擦除不回收）
+      if (quickColor && painting && onGhostBatch) {
+        onGhostBatch(p.ghost.id, p.ghost.cells)
+      }
     }
   }
 
@@ -173,6 +282,14 @@ export function useColoring(options?: GhostColoringOptions): ColoringState {
     setColoredCells([])
     setColoringMode(false)
     setPaletteOpen(false)
+    gestureRef.current = {
+      active: false,
+      downX: 0,
+      downY: 0,
+      startCell: null,
+      dragged: false,
+      pending: null,
+    }
   }
 
   return {
@@ -186,6 +303,9 @@ export function useColoring(options?: GhostColoringOptions): ColoringState {
     paintCell,
     paintPlane,
     paintAt,
+    gestureStart,
+    gestureMove,
+    gestureEnd,
     reset,
   }
 }
@@ -282,6 +402,13 @@ export interface RefPlanesState {
   overlappedIds: number[]
   startRefDrag: (e: React.PointerEvent<HTMLDivElement>) => void
   startPlacedDrag: (e: React.PointerEvent<HTMLDivElement>, plane: PlacedPlane) => void
+  /**
+   * v0.3.4 幽灵真消灭：把 id 对应的放置副本（幽灵飞机）从 placed 数组【真实移除】，
+   * 移除后该位置即可重新放置；若该副本正处于拖拽中则同步结束拖拽（清理残留预览）。
+   * id 按字符串比较（放置副本 id 为自增数字，传入 String(id) 即可；页面端幽灵
+   * GhostRect.id 即 String(placed.id)，可直接透传）。
+   */
+  removePlaced: (id: string) => void
   /** 新对局清空 */
   reset: () => void
 }
@@ -516,6 +643,13 @@ export function useRefPlanes(input: RefPlanesInput): RefPlanesState {
     updateDrag(null)
   }
 
+  /** v0.3.4：真移除放置副本（幽灵飞机）；若正处于拖拽中同步结束拖拽 */
+  const removePlaced = (id: string) => {
+    setPlaced((prev) => prev.filter((p) => String(p.id) !== id))
+    const d = dragRef.current
+    if (d && d.source === 'placed' && String(d.id) === id) updateDrag(null)
+  }
+
   return {
     refRotation,
     placed,
@@ -530,6 +664,7 @@ export function useRefPlanes(input: RefPlanesInput): RefPlanesState {
         source: 'placed',
         fromOrigin: plane.origin,
       }),
+    removePlaced,
     reset,
   }
 }
