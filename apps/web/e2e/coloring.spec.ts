@@ -103,14 +103,15 @@ test.describe('对局着色工具', () => {
     const refPlane = page.locator('.game__ref .paper-grid__plane')
     await expect(refPlane).toBeVisible()
 
-    // 拖参考飞机到中央对手棋盘 → 放置副本（ghost）
+    // 拖参考飞机到中央对手棋盘 → 放置副本（ghost），记录落点
     const oppBoard = page.locator('.game__opp .paper-grid__board')
     const rp = await refPlane.boundingBox()
     const ob = await oppBoard.boundingBox()
     if (!rp || !ob) throw new Error('参考飞机/棋盘不可见')
+    const dropPx = { x: ob.x + ob.width / 2, y: ob.y + ob.height / 2 }
     await page.mouse.move(rp.x + rp.width / 2, rp.y + rp.height / 2)
     await page.mouse.down()
-    await page.mouse.move(ob.x + ob.width / 2, ob.y + ob.height / 2, { steps: 10 })
+    await page.mouse.move(dropPx.x, dropPx.y, { steps: 10 })
     await page.mouse.up()
     const placed = page.locator('.game__opp .paper-grid__plane--ghost')
     await expect(placed).toHaveCount(1)
@@ -126,6 +127,81 @@ test.describe('对局着色工具', () => {
     // 点击幽灵中心（命中其机体格 → 整机批量着色）
     await page.mouse.click(pb.x + pb.width / 2, pb.y + pb.height / 2)
     await expect(page.locator('.game__opp .paper-grid__colored--yellow')).toHaveCount(10)
+    await expect(page.locator('.game__opp .paper-grid__plane--ghost')).toHaveCount(0)
+    await expect(btn).toHaveAttribute('aria-pressed', 'false')
+
+    // v0.3.4 幽灵真消灭：回收后再把参考飞机拖到同一落点应成功（不再报「重叠」类错误）
+    const rp2 = await refPlane.boundingBox()
+    if (!rp2) throw new Error('参考飞机不可见')
+    await page.mouse.move(rp2.x + rp2.width / 2, rp2.y + rp2.height / 2)
+    await page.mouse.down()
+    await page.mouse.move(dropPx.x, dropPx.y, { steps: 10 })
+    await page.mouse.up()
+    await expect(page.locator('.game__opp .paper-grid__plane--ghost')).toHaveCount(1)
+    await expect(page.locator('.toast').filter({ hasText: /重叠|不可放置/ })).toHaveCount(0)
+
+    expect(errs()).toEqual([])
+  })
+
+  test('拖拽穿过幽灵仅路径染色：不批染、不回收、不退出着色；点按才触发快捷着色', async ({ page }) => {
+    const errs = watchErrors(page)
+    await startSingleSmallGame(page)
+
+    // 拖参考飞机到中央对手棋盘（与上例同一落点）
+    const refPlane = page.locator('.game__ref .paper-grid__plane')
+    await expect(refPlane).toBeVisible()
+    const oppBoard = page.locator('.game__opp .paper-grid__board')
+    const rp = await refPlane.boundingBox()
+    const ob = await oppBoard.boundingBox()
+    if (!rp || !ob) throw new Error('参考飞机/棋盘不可见')
+    const dropPx = { x: ob.x + ob.width / 2, y: ob.y + ob.height / 2 }
+    await page.mouse.move(rp.x + rp.width / 2, rp.y + rp.height / 2)
+    await page.mouse.down()
+    await page.mouse.move(dropPx.x, dropPx.y, { steps: 10 })
+    await page.mouse.up()
+    const placed = page.locator('.game__opp .paper-grid__plane--ghost')
+    await expect(placed).toHaveCount(1)
+    const pb = await placed.boundingBox()
+    if (!pb) throw new Error('放置副本不可见')
+
+    // 进入着色
+    const btn = page.locator('.coloring-stage__btn button')
+    await btn.click()
+    await expect(btn).toHaveAttribute('aria-pressed', 'true')
+
+    // 拖拽横向穿过幽灵所在行（起点在幽灵左侧、终点在右侧）→ 仅路径染色
+    const cell = ob.width / 10
+    const ghostRowFrac = Math.floor((pb.y - ob.y) / cell)
+    const ghostColFrac = Math.floor((pb.x - ob.x) / cell)
+    const row = Math.max(0, Math.min(9, ghostRowFrac + 1)) // 默认形状第 2 行全占
+    const fromCol = Math.max(0, ghostColFrac - 2)
+    const toCol = Math.min(9, ghostColFrac + 6)
+    const a = oppCell(page, `${String.fromCharCode(65 + fromCol)}${row + 1}`)
+    const b = oppCell(page, `${String.fromCharCode(65 + toCol)}${row + 1}`)
+    const ba = await a.boundingBox()
+    const bb = await b.boundingBox()
+    if (!ba || !bb) throw new Error('路径端点不可见')
+    await page.mouse.move(ba.x + ba.width / 2, ba.y + ba.height / 2)
+    await page.mouse.down()
+    await page.mouse.move(bb.x + bb.width / 2, bb.y + bb.height / 2, { steps: Math.max(4, Math.abs(toCol - fromCol)) })
+    await page.mouse.up()
+
+    // 拖拽路径染色（>0 且 <10 —— 未触发整机批染）；幽灵仍在、着色模式未退出
+    const colored = page.locator('.game__opp .paper-grid__colored--yellow')
+    const n = await colored.count()
+    expect(n).toBeGreaterThan(0)
+    expect(n).toBeLessThan(10)
+    await expect(page.locator('.game__opp .paper-grid__plane--ghost')).toHaveCount(1)
+    await expect(btn).toHaveAttribute('aria-pressed', 'true')
+
+    // 点按幽灵格 → 快捷着色（整机批染 + 回收 + 退出；含拖拽路径色，总数增加）
+    const beforeTotal = await page.locator('.game__opp .paper-grid__colored--yellow').count()
+    const pb2 = await page.locator('.game__opp .paper-grid__plane--ghost').boundingBox()
+    if (!pb2) throw new Error('幽灵不可见')
+    await page.mouse.click(pb2.x + pb2.width / 2, pb2.y + pb2.height / 2)
+    await expect
+      .poll(async () => page.locator('.game__opp .paper-grid__colored--yellow').count(), { timeout: 5000 })
+      .toBeGreaterThan(beforeTotal)
     await expect(page.locator('.game__opp .paper-grid__plane--ghost')).toHaveCount(0)
     await expect(btn).toHaveAttribute('aria-pressed', 'false')
 

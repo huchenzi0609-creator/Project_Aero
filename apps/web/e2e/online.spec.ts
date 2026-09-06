@@ -44,12 +44,15 @@ test.describe('联机全流程', () => {
       timeout: 20000,
     })
 
-    // ---- 非当前回合禁报点：点击空网格 = 创建「?」预报点（无"还没轮到"提示） ----
+    // ---- 非当前回合禁报点：点空网格两步创建「?」（v0.3.4：先选中、再点同一格才创建） ----
     const aText = await A.locator('.game__status-text').innerText()
     const active = aText.includes('轮到我方报点') ? A : B
     const inactive = active === A ? B : A
     await expect(inactive.locator('.game__opp .paper-grid__stamp .prefire-mark')).toHaveCount(0)
-    await inactive.locator('.game__opp .paper-grid__board button[aria-label="A1"]').click()
+    const a1 = inactive.locator('.game__opp .paper-grid__board button[aria-label="A1"]')
+    await a1.click() // 第 1 次：仅选中（尚未创建）
+    await expect(inactive.locator('.game__opp .paper-grid__stamp .prefire-mark')).toHaveCount(0)
+    await a1.click() // 第 2 次：创建「?」
     await expect(inactive.locator('.game__opp .paper-grid__stamp .prefire-mark')).toHaveCount(1)
 
     // ---- v0.2.9 空网格外缘随回合变色：回合方=深绿（mine）、非回合方=深红（theirs），恰一方轮到 ----

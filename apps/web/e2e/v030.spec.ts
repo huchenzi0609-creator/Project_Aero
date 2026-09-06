@@ -173,35 +173,46 @@ test.describe('v0.3.0 预报点', () => {
     const prefire = A.locator('.game__opp .paper-grid__stamp .prefire-mark')
     await expect(A.locator('.game__status-text')).toContainText(/轮到我方报点|等待对方报点/, { timeout: 15000 })
 
-    // 自检当前是否轮到 A：点击 A2，若无「?」出现（= 仍是己方回合的高亮）则 A 先打一枪把回合交给 B
-    await oppCell(A, 'A2').click()
-    if ((await prefire.count()) === 0) {
+    // v0.3.4 两步：第一次单击仅选中（不高亮差异也正确），第二次单击同一格才创建。
+    // 若 A 先手 → A 先打一枪把回合交给 B（我方回合点格是报点而非预报点，必须避免）
+    const aText = await A.locator('.game__status-text').innerText()
+    if (aText.includes('轮到我方报点')) {
       const passCell = oppCell(A, 'B1')
       await passCell.click({ timeout: 2000 }).catch(() => {})
       await A.waitForTimeout(120)
       await passCell.click({ timeout: 2000 }).catch(() => {})
-      // 回合翻转后（B 的回合）再点 A2 创建「?」；未翻转则轮询补点
-      await A.waitForTimeout(600)
-      for (let k = 0; k < 8 && (await prefire.count()) === 0; k++) {
-        await oppCell(A, 'A2').click()
-        await A.waitForTimeout(350)
-      }
+      // 我方已出枪（出现报点章）→ 已进入 B 的回合
+      await expect
+        .poll(async () => A.locator('.game__opp .paper-grid__stamp').count(), { timeout: 10000 })
+        .toBeGreaterThanOrEqual(1)
     }
+
+    // 两步创建第 1 个「?」（A2：单击选中 → 再点创建）
+    await oppCell(A, 'A2').click()
+    await expect(prefire).toHaveCount(0)
+    await expect(AInput).toHaveValue(/A2|a2/i)
+    await oppCell(A, 'A2').click()
     await expect(prefire).toHaveCount(1, { timeout: 5000 })
 
-    // 非我方回合：继续点其余 9 个不同空格 → 累计 10 个「?」；第 11 个提示上限
+    // 其余 9 个不同空格，各两步创建 → 累计 10 个「?」
     const cells = ['B2', 'C2', 'D2', 'E2', 'F2', 'G2', 'H2', 'I2', 'J2', 'A3']
     for (let i = 0; i < 9; i++) {
-      await oppCell(A, cells[i]!).click()
+      await oppCell(A, cells[i]!).click() // 选中
+      await oppCell(A, cells[i]!).click() // 创建
       await expect(prefire).toHaveCount(i + 2, { timeout: 5000 })
     }
+
+    // 第 11 个（A3 已满）：两步尝试 → 上限提示，数量保持 10
     await oppCell(A, 'A3').click()
-    await expect(A.locator('.toast').filter({ hasText: '预报点已达上限' }).first()).toBeVisible()
+    await expect(prefire).toHaveCount(10)
+    await oppCell(A, 'A3').click()
+    await expect(A.locator('.toast').filter({ hasText: '预报点已达数量上限' }).first()).toBeVisible()
     await expect(prefire).toHaveCount(10)
 
-    // 选中预报点后再点同一格取消 → toast「预报点已取消。」（选中无独立高亮，仅输入框回填坐标）
-    await oppCell(A, 'B2').click() // 选中
+    // 点选已有预报点 → 再点同一格取消 → toast「预报点已取消。」
+    await oppCell(A, 'B2').click() // 选中（改选）
     await expect(AInput).toHaveValue(/B2|b2/i)
+    await expect(prefire).toHaveCount(10)
     await oppCell(A, 'B2').click() // 再点 = 取消
     await expect(A.locator('.toast').filter({ hasText: '预报点已取消。' }).first()).toBeVisible()
     await expect(prefire).toHaveCount(9)

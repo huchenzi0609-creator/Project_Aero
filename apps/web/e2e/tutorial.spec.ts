@@ -240,11 +240,15 @@ test.describe('新手教程', () => {
       .toBeGreaterThanOrEqual(9)
     await expect(page.locator('.game__mine .paper-grid__stamp .stamp--kill')).toHaveCount(1)
 
-    // 缺陷 R3 规避窗口（preKill 残骸格未记入 AI 报点史 → 预报点触发 AI +5s 暂停）
-    await page
-      .locator('.game__opp .paper-grid__board button[aria-label="J10"]')
-      .click({ timeout: 1500 })
-      .catch(() => {})
+    // 缺陷 R3 规避窗口（preKill 残骸格未记入 AI 报点史 → 预报点触发 AI +5s 暂停）。
+    // v0.3.4 两步语义：单击选中 + 再点同一格才创建预报点。
+    await page.locator('.game__opp .paper-grid__board button[aria-label="J10"]').click()
+    await page.locator('.game__opp .paper-grid__board button[aria-label="J10"]').click()
+    await expect
+      .poll(async () => page.locator('.game__opp .paper-grid__stamp .prefire-mark').count(), {
+        timeout: 5000,
+      })
+      .toBeGreaterThanOrEqual(1)
 
     // T3-1→T3-2（单目标）→ T3-3（双目标 = 单层 svg 双洞）
     await clickBubble(page) // a1 → a2
@@ -422,6 +426,126 @@ test.describe('新手教程', () => {
     // 确认退出 → 主页（title 飞机杀）
     await page.getByRole('button', { name: '← 退出教程' }).click()
     await modal(page).getByRole('button', { name: '确认退出' }).click()
+    await expect(page.getByRole('heading', { name: '飞机杀' })).toBeVisible()
+
+    expect(errs()).toEqual([])
+  })
+
+  test('教程对局内「← 退出」→「确认退出」→ 直达主页（无错误页）', async ({ page }) => {
+    test.setTimeout(120_000)
+    const errs = watchErrors(page)
+
+    await openTutorial(page)
+    await modal(page).getByRole('button', { name: '还不了解' }).click()
+    await expect(bubble(page)).toContainText('欢迎来到《飞机杀》！我们先来学习如何摆阵吧！', { timeout: 8000 })
+    // 跳过单元1 → 进入单元2 对局
+    await page.locator('.tutorial-bubble__skip', { hasText: '跳过单元' }).click()
+    await modal(page).getByRole('button', { name: '确认' }).click()
+    await expect(bubble(page)).toContainText('是时候学习如何对战了！', { timeout: 10000 })
+    await expect(page.locator('.game-banner')).toBeHidden({ timeout: 8000 })
+
+    // 对局内退出 → 二次确认 → 直达主页
+    await page.getByRole('button', { name: '← 退出' }).click()
+    await expect(page.locator('.paper-modal__dialog')).toContainText('确认退出对局？')
+    await page.locator('.paper-modal__dialog').getByRole('button', { name: '确认退出' }).click()
+    await expect(page.getByRole('heading', { name: '飞机杀' })).toBeVisible({ timeout: 10000 })
+
+    expect(errs()).toEqual([])
+  })
+
+  test('单元3 工具链：涂色 1s 静默 → a10 双目标 → 快捷着色批染 → 两步预报点 → a12 双目标 → P5 回主页', async ({ page }) => {
+    test.setTimeout(240_000)
+    const errs = watchErrors(page)
+
+    await openTutorial(page)
+    await modal(page).getByRole('button', { name: '我已了解' }).click() // 直达单元3
+
+    // a1：教学开始 → 先建一个预报点（两步）触发 AI 额外暂停，保证后续教学窗口 AI 不出手
+    await expect(bubble(page)).toContainText('《飞机杀》有很多实用的对局工具呢！', { timeout: 12000 })
+    await page.locator('.game__opp .paper-grid__board button[aria-label="A9"]').click()
+    await page.locator('.game__opp .paper-grid__board button[aria-label="A9"]').click()
+    await expect
+      .poll(async () => page.locator('.game__opp .paper-grid__stamp .prefire-mark').count(), {
+        timeout: 5000,
+      })
+      .toBeGreaterThanOrEqual(1)
+
+    // a2 → a3：推进到拖幽灵并执行（ghostCreated 后才能继续）
+    await clickUntil(page, (t) => t.includes('并且，这里的飞机也可以拖到空网格里'), 20)
+    await expect(bubble(page)).toContainText('并且，这里的飞机也可以拖到空网格里。试试看！')
+    const refPlaneT = page.locator('.game__ref .paper-grid__plane')
+    const oppBoardT = page.locator('.game__opp .paper-grid__board')
+    const rpT = await refPlaneT.boundingBox()
+    const obT = await oppBoardT.boundingBox()
+    if (!rpT || !obT) throw new Error('参考飞机/对手棋盘不可见')
+    const cellT = obT.width / 10
+    await drag(
+      page,
+      { x: rpT.x + rpT.width / 2, y: rpT.y + rpT.height / 2 },
+      { x: obT.x + 5 * cellT, y: obT.y + 4 * cellT },
+    )
+    await expect(page.locator('.game__opp .paper-grid__plane--ghost')).toHaveCount(1)
+
+    // a4…a8：推进到「点击这个按钮进入着色模式」
+    await clickUntil(page, (t) => t.includes('点击这个按钮进入着色模式'), 30)
+    await expect(bubble(page)).toContainText('点击这个按钮进入着色模式，长按可以选择颜色。')
+    await expect(spotlight(page)).toHaveCount(1)
+
+    // 进入着色模式（a8 wait enteredColoring → a9 涂色引导，quiet 1s）
+    const colorBtn = page.locator('.coloring-stage__btn button')
+    await expect(colorBtn).toBeVisible()
+    await colorBtn.click()
+    await expect(colorBtn).toHaveAttribute('aria-pressed', 'true')
+    await expect(bubble(page)).toContainText('试试看给空网格涂色，点击和拖动都可以！', { timeout: 8000 })
+
+    // 涂一个空网格格（a9 活动）→ ~1s 静默 → a10（双目标突显：空网格 + 着色按钮）
+    const emptyCell = page.locator('.game__opp .paper-grid__board button[aria-label="A1"]')
+    await emptyCell.click({ timeout: 2000 }).catch(() => {})
+    await expect(page.locator('.game__opp .paper-grid__colored')).toHaveCount(1, { timeout: 5000 })
+    await expect(bubble(page)).toContainText('着色工具是对局中的好帮手，可助您事半功倍。', { timeout: 6000 })
+    await expect(spotlight(page)).toHaveCount(1)
+    await expect.poll(() => spotlightHoles(page), { timeout: 8000 }).toBe(2) // a10：空网格 + 着色按钮双洞
+
+    // 快捷着色：着色模式点按幽灵 → 整机批染 + 回收 + 退出（ghostBatchColored deliberate → a11）
+    const ghost = page.locator('.game__opp .paper-grid__plane--ghost')
+    await expect(ghost).toHaveCount(1)
+    const gb = await ghost.boundingBox()
+    if (!gb) throw new Error('幽灵不可见')
+    await page.mouse.click(gb.x + gb.width / 2, gb.y + gb.height / 2)
+    await expect(bubble(page)).toContainText('你刚刚对幽灵飞机下的方格进行了一次批量着色！', { timeout: 8000 })
+    await expect(page.locator('.game__opp .paper-grid__plane--ghost')).toHaveCount(0)
+    await expect(colorBtn).toHaveAttribute('aria-pressed', 'false')
+
+    // 需要非我方回合才能两步创建预报点：若轮到我方则先打一枪把回合交给对方
+    const hint = page.locator('.game__hint')
+    if (((await hint.textContent().catch(() => '')) ?? '').includes('再点一次报点')) {
+      const c = page.locator('.game__opp .paper-grid__board button[aria-label="B1"]')
+      await c.click({ timeout: 1500 }).catch(() => {})
+      await page.waitForTimeout(120)
+      await c.click({ timeout: 1500 }).catch(() => {})
+    }
+    await expect
+      .poll(async () => ((await hint.textContent().catch(() => '')) ?? '').includes('预排报点'), {
+        timeout: 10000,
+      })
+      .toBe(true)
+
+    // 两步创建第 2 个预报点（J10：单击选中 → 再点创建；A9 停顿点已占 1 个）→ a12（双目标：气泡 + 空网格）
+    const prefireMark = page.locator('.game__opp .paper-grid__stamp .prefire-mark')
+    await expect(prefireMark).toHaveCount(1)
+    await page.locator('.game__opp .paper-grid__board button[aria-label="J10"]').click() // 选中
+    await expect(prefireMark).toHaveCount(1)
+    await page.locator('.game__opp .paper-grid__board button[aria-label="J10"]').click() // 创建
+    await expect(prefireMark).toHaveCount(2, { timeout: 5000 })
+    await expect(bubble(page)).toContainText('你刚刚创建了一个预报点标记！', { timeout: 8000 })
+    await expect(spotlight(page)).toHaveCount(1)
+    await expect.poll(() => spotlightHoles(page), { timeout: 8000 }).toBe(2) // a12：气泡 + 空网格双洞
+
+    // P5：跳过确认 → 完成教程 → 主页
+    await hudSkip(page, '工具进阶').click()
+    await confirmSkip(page)
+    await expect(modal(page)).toContainText('进阶教程已完成，是否完成对局？')
+    await modal(page).getByRole('button', { name: '完成教程' }).click()
     await expect(page.getByRole('heading', { name: '飞机杀' })).toBeVisible()
 
     expect(errs()).toEqual([])
