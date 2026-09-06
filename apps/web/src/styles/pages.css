@@ -497,6 +497,78 @@
   color: var(--ink-soft);
   margin: 0 0 14px;
 }
+/* v0.3.8 对战模式菜单紧凑卡（无说明文字；标题与勾选同行/行块化，横版竖版共用） */
+.online__modecard {
+  padding: 9px 14px;
+}
+.online__modecard__head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  min-height: 26px;
+}
+.online__modecard__name {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  min-width: 74px;
+  white-space: nowrap;
+}
+.online__modecard__checks {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.online__check-label {
+  font-size: 14px;
+  white-space: nowrap;
+}
+.online__matchcard {
+  padding: 9px 14px;
+}
+.online__matchrow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  min-height: 32px;
+}
+.online__summary {
+  color: var(--ink-soft);
+  font-size: 13.5px;
+}
+.online__matching-text {
+  font-size: 14px;
+}
+.online__customcard {
+  padding: 11px 14px;
+}
+.online__customcard__title {
+  font-size: 16px;
+  font-weight: 600;
+  margin: 0 0 7px;
+}
+.online__customrow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.online__custom-switches {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+}
+.online__customjoin {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
 .online__form {
   display: flex;
   gap: 10px;
@@ -913,52 +985,93 @@
     gap: 4px;
   }
 
-  /* ---- OnlineMenu：竖版纵向堆叠（局域网在上 → 公网在下 → 自定义房），疏朗易用 ---- */
+  /* ---- OnlineMenu：竖版（v0.3.8）——去说明文字后的紧凑单列；390×667 无滚动完整可见 ---- */
   .online__grid {
     grid-template-columns: 1fr;
-    gap: 14px;
+    gap: 8px;
   }
   .online__span2 {
     grid-column: 1 / -1;
   }
-  .online__card-title {
-    font-size: 15px;
-    margin-bottom: 10px;
+  .online .online__modecard {
+    padding: 5px 10px;
   }
-  .online__tiers {
-    display: flex;
-    flex-wrap: wrap;
+  .online__modecard__head {
+    gap: 8px;
+    min-height: 22px;
+  }
+  .online__modecard__name {
+    font-size: 13.5px;
+    min-width: 62px;
+  }
+  .online__modecard__checks {
+    gap: 10px;
+  }
+  .online__check-label {
+    font-size: 13px;
+  }
+  .online .online__matchcard {
+    padding: 6px 10px;
+  }
+  .online__matchrow {
+    min-height: 26px;
     gap: 8px;
   }
-  .online__tiers .paper-btn {
-    font-size: 13px;
-    padding: 8px 10px;
-    line-height: 1.25;
+  .online__summary {
+    font-size: 12.5px;
   }
-  .online__form {
-    gap: 8px;
-    margin-top: 12px;
-  }
-  .online__form .paper-btn {
-    font-size: 13px;
-    padding: 8px 12px;
-  }
-  .online__codeinput {
-    flex: 1 1 100px;
-    min-width: 100px;
-    max-width: 160px;
-    font-size: 15px;
-    padding: 8px 10px;
+  .online .online__matchrow .paper-btn {
+    font-size: 13.5px;
+    padding: 6px 18px;
   }
   .online__matching {
-    padding: 10px 2px;
+    padding: 2px 0;
     gap: 8px;
   }
-  .online__span2 .paper-btn {
-    width: 100%;
+  .online__matching-text {
+    font-size: 13px;
   }
-  .online .paper-card {
-    padding: 14px 16px;
+  .online .online__matching .paper-btn {
+    font-size: 12.5px;
+    padding: 5px 10px;
+  }
+  .online .online__customcard {
+    padding: 8px 10px;
+  }
+  .online__customcard__title {
+    font-size: 14.5px;
+    margin-bottom: 5px;
+  }
+  .online__customrow {
+    gap: 6px;
+    margin-bottom: 6px;
+  }
+  .online__custom-switches {
+    gap: 8px;
+  }
+  .online__custom-switches .online__check-label {
+    font-size: 12.5px;
+  }
+  .online__tiers {
+    gap: 6px;
+  }
+  .online .online__tiers .paper-btn {
+    font-size: 12.5px;
+    padding: 4px 9px;
+    line-height: 1.3;
+  }
+  .online__customjoin {
+    gap: 6px;
+  }
+  .online .online__customjoin .paper-btn {
+    font-size: 12.5px;
+    padding: 6px 10px;
+  }
+  .online .online__codeinput {
+    font-size: 14px;
+    padding: 6px 8px;
+    min-width: 92px;
+    max-width: 118px;
   }
 }
 
