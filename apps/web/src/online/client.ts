@@ -107,9 +107,19 @@ function serverUrl(): string | undefined {
   return url || undefined
 }
 
+/**
+ * 双通道部署（v0.3.7）：根路径跑 v0.2 通道，/beta 子路径跑 v0.3 通道。
+ * Vite BASE_URL 恒以 / 结尾（根部署 = '/'，beta = '/beta/'），据此拼 Socket.IO path：
+ * 根部署 /socket.io 与现行为完全一致；beta 部署 /beta/socket.io 连到 v0.3 后端。
+ */
+function socketIoPath(): string {
+  return `${import.meta.env.BASE_URL}socket.io`
+}
+
 function ensureSocket(): RawSocket {
   if (socket) return socket
   socket = io(serverUrl() ?? '/', {
+    path: socketIoPath(),
     autoConnect: false,
     reconnection: true,
     reconnectionDelay: 500,
