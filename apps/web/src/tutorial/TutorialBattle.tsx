@@ -194,7 +194,7 @@ function buildAdvancedNodes(): FlowNode[] {
       highlight: null,
       pauseAi: true,
     },
-    { id: 'a12', kind: 'click', text: T3_PRE, after: null, highlight: ['.tutorial-bubble', '.game__opp'], pauseAi: true },
+    { id: 'a12', kind: 'click', text: T3_PRE, after: null, highlight: ['.game__opp'], pauseAi: true },
   ]
   return nodes
 }
@@ -522,18 +522,21 @@ export function TutorialBattle({ variant, fleet, onExitHome, onGoAdvanced }: Tut
   const segText = showBubble ? (segsNow[Math.min(r!.seg, segsNow.length - 1)] ?? '') : ''
   // 突显解析：'bubble'=气泡自身；着色按钮横/竖版分别位于 stage 浮层 / 输入栏（另一侧 display:none）
   const resolveTarget = (t: string): string => {
-    if (t === 'bubble') return '.tutorial-bubble'
     if (t.includes('.coloring-btn')) {
       return orientation === 'portrait' ? '.game__inputbar .coloring-btn' : '.coloring-stage__btn .coloring-btn'
     }
     return t
   }
   const rawHighlight: string | string[] | null = !free && node?.highlight ? node.highlight : null
-  const highlight = Array.isArray(rawHighlight)
-    ? rawHighlight.map(resolveTarget)
-    : rawHighlight
-      ? resolveTarget(rawHighlight)
-      : null
+  // v0.3.9：'bubble' 突显 = 整屏压暗无洞（气泡 z 高于遮罩、豁免开洞，暗背景使其轮廓突出）
+  const bubbleDim = rawHighlight === 'bubble'
+  const highlight = bubbleDim
+    ? null
+    : Array.isArray(rawHighlight)
+      ? rawHighlight.map(resolveTarget)
+      : rawHighlight
+        ? resolveTarget(rawHighlight)
+        : null
   // 突显目标位于底部输入栏时气泡上置（避免遮挡底部按钮）；其余保持默认（多目标含输入栏也上置）
   const hlText = Array.isArray(node?.highlight) ? node.highlight.join(' ') : (node?.highlight ?? '')
   const bubbleAnchor =
@@ -577,10 +580,12 @@ export function TutorialBattle({ variant, fleet, onExitHome, onGoAdvanced }: Tut
         </div>
       ) : null}
 
-      {!anyModalOpen && (showBubble || highlight) ? <TutorialSpotlight target={highlight} /> : null}
+      {!anyModalOpen && (showBubble || highlight || bubbleDim) ? (
+        <TutorialSpotlight target={highlight} dim={bubbleDim} />
+      ) : null}
       {showBubble && !anyModalOpen ? (
         <TutorialBubble
-          key={`${node!.id}-${r!.seg}`}
+          key={node!.id}
           text={segText}
           showHint={node!.kind === 'click'}
           anchor={bubbleAnchor}

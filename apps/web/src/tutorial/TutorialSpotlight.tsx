@@ -32,7 +32,14 @@ function targetRectOf(selector: string): TargetRect | null {
   return { left: b.left, top: b.top, width: b.width, height: b.height }
 }
 
-export function TutorialSpotlight({ target }: { target?: string | string[] | null }) {
+export function TutorialSpotlight({
+  target,
+  dim = false,
+}: {
+  target?: string | string[] | null
+  /** 整屏压暗、无洞（气泡突显专用：target 忽略）。false 时 target 为空 = 不渲染遮罩 */
+  dim?: boolean
+}) {
   const targets = Array.isArray(target) ? target : target ? [target] : []
   const [rects, setRects] = useState<TargetRect[]>([])
   const targetsRef = useRef(targets)
@@ -68,6 +75,10 @@ export function TutorialSpotlight({ target }: { target?: string | string[] | nul
     }
   }, [target])
 
+  // dim：整屏暗层（无洞）
+  if (dim) {
+    return <div className="tutorial-spotlight tutorial-spotlight--dim" aria-hidden="true" />
+  }
   if (targets.length === 0 || rects.length === 0) return null
 
   // 先对洞矩形（含 PAD 外扩）做并集合并：保证洞互不重叠，evenodd 下单层亮度始终一致

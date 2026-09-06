@@ -162,13 +162,16 @@ export function TutorialPlacement({
   // 突显目标：'bubble'=气泡自身（welcome/rotateHint）；tray；棋盘（rotateWait 引导旋转）；
   // detect 合法 → 确认按钮（随合法性即时切换）；非法 → 无突显（页面全亮）；thanks 无突显
   const highlightFor = (p: Phase): string | null => {
-    if (p === 'welcome' || p === 'rotateHint') return '.tutorial-bubble'
+    if (p === 'welcome' || p === 'rotateHint') return 'bubble'
     if (p === 'tray') return '.placement__tray'
     if (p === 'rotateWait') return '.placement__board-wrap'
     if (p === 'detect') return check.ok ? '.tutorial-confirm' : null
     return null
   }
-  const highlight = highlightFor(phase)
+  // v0.3.9：'bubble' 突显 = 整屏压暗无洞（气泡 z 高于遮罩豁免，暗背景突出其轮廓）
+  const rawHl = highlightFor(phase)
+  const bubbleDim = rawHl === 'bubble'
+  const highlight = bubbleDim ? null : rawHl
 
   const exit = () => {
     setExitOpen(true)
@@ -219,10 +222,10 @@ export function TutorialPlacement({
       </footer>
 
       {/* 教程层（detect 非法 → highlight null → 无遮罩全亮）；「点击继续」仅 click 节点显示 */}
-      <TutorialSpotlight target={highlight} />
+      <TutorialSpotlight target={highlight} dim={bubbleDim} />
       {segments.length > 0 ? (
         <TutorialBubble
-          key={`${phase}-${segIdx}-${highlight ?? 'none'}`}
+          key={`${phase}`}
           text={segText}
           showHint={isClickNode}
           onClick={clickSeg}

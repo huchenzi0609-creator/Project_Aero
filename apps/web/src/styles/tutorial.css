@@ -127,3 +127,10 @@
   min-height: 58px;
   align-items: center;
 }
+
+/* ============ v0.3.9 ============
+   「突显对话气泡」= 整屏压暗、无洞（气泡 z 210 > 遮罩 56，气泡天然豁免压暗；
+   背景整体压暗使气泡轮廓被精确突显）。 */
+.tutorial-spotlight--dim {
+  background: rgba(58, 46, 28, 0.4);
+}

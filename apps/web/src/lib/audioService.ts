@@ -6,9 +6,9 @@
  *   规避移动端自动播放限制；resume 失败/环境不支持时静默降级为 no-op。
  * - 音效：铅笔沙沙（报点）、盖章（结果）、重章+纸裂（击毁）、纸张翻动（切页）、
  *   胜负小旋律（win/lose）；均为振荡器+噪声包络程序合成。
- * - BGM：低频暖音和弦垫 + 慢速滤波噪声循环（柔和纸张氛围），独立增益。
- * - 音量：接 settingsStore 的 bgmVolume / sfxVolume（读值即可，无需响应式订阅）；
- *   静音（0）跳过播放；prefers-reduced-motion 时不自动启动 BGM。
+ * - 音量：接 settingsStore 的 sfxVolume（读值即可，无需响应式订阅）；静音（0）跳过播放。
+ * - v0.3.9：移除常驻背景噪音（bgm 循环/噪声垫）——bgmVolume 字段保留（存档兼容）但不再播放；
+ *   playBgm/stopBgm/setBgmVolume 保留为空实现，兼容旧调用方。
  */
 import { useSettingsStore } from '../store/settingsStore'
 
@@ -21,14 +21,6 @@ type Ctx = AudioContext
 let ctx: Ctx | null = null
 let noiseBuf: AudioBuffer | null = null
 let disabled = false
-
-function reducedMotion(): boolean {
-  return (
-    typeof window !== 'undefined' &&
-    typeof window.matchMedia === 'function' &&
-    window.matchMedia('(prefers-reduced-motion: reduce)').matches
-  )
-}
 
 function createCtx(): Ctx | null {
   if (typeof window === 'undefined') return null
@@ -50,7 +42,7 @@ function ensureCtx(): Ctx | null {
   return ctx ?? createCtx()
 }
 
-/** 首次用户交互时调用：创建并 resume 上下文，按设置启动 BGM */
+/** 首次用户交互时调用：创建并 resume 上下文（BGM 已移除，不再启动背景噪音） */
 export function unlock(): void {
   const c = ensureCtx()
   if (!c) return
@@ -59,7 +51,6 @@ export function unlock(): void {
       /* 自动播放策略拒绝：保持静默，后续交互会再次尝试 */
     })
   }
-  if (c.state === 'running' && !reducedMotion()) startBgm()
 }
 
 /* ---------------------------------------------------------------- 合成工具 */
@@ -219,125 +210,21 @@ export function playSfx(name: SfxName): void {
   SFX_PLAYERS[name](c, dest)
 }
 
-/* ---------------------------------------------------------------- BGM */
+/* ---------------------------------------------------------------- BGM（v0.3.9：已移除背景噪音） */
 
-interface BgmNodes {
-  gain: GainNode
-  stops: Array<() => void>
-}
-
-let bgm: BgmNodes | null = null
-
-function startBgm(): void {
-  const c = ensureCtx()
-  if (!c || bgm) return
-  const settings = useSettingsStore.getState()
-  if (settings.bgmVolume <= 0) return
-
-  const gain = c.createGain()
-  gain.gain.value = settings.bgmVolume
-  gain.connect(c.destination)
-
-  const sources: AudioScheduledSourceNode[] = []
-  const stops: Array<() => void> = []
-  const now = c.currentTime
-
-  // 暖音垫：Cmaj7 低频和弦，微失谐三角波 → 低通 → 增益
-  const padFilter = c.createBiquadFilter()
-  padFilter.type = 'lowpass'
-  padFilter.frequency.value = 720
-  padFilter.Q.value = 0.5
-  padFilter.connect(gain)
-
-  const chord = [130.81, 196.0, 246.94, 329.63] // C3 G3 B3 E4
-  for (const f of chord) {
-    const osc = c.createOscillator()
-    osc.type = 'triangle'
-    osc.frequency.value = f
-    osc.detune.value = Math.random() * 8 - 4 // ±4 音分
-    const g = c.createGain()
-    g.gain.value = 0.014
-    osc.connect(g)
-    g.connect(padFilter)
-    osc.start(now)
-    sources.push(osc)
-    stops.push(() => osc.stop())
-  }
-
-  // 慢速 LFO：垫音滤波截止 450↔1100Hz 轻微呼吸
-  const lfo = c.createOscillator()
-  lfo.type = 'sine'
-  lfo.frequency.value = 0.07
-  const lfoDepth = c.createGain()
-  lfoDepth.gain.value = 320
-  lfo.connect(lfoDepth)
-  lfoDepth.connect(padFilter.frequency)
-  lfo.start(now)
-  sources.push(lfo)
-  stops.push(() => lfo.stop())
-
-  // 慢速滤波噪声：纸面沙沙氛围
-  const noiseGain = c.createGain()
-  noiseGain.gain.value = 0.012
-  const noiseFilter = c.createBiquadFilter()
-  noiseFilter.type = 'bandpass'
-  noiseFilter.frequency.value = 520
-  noiseFilter.Q.value = 0.6
-  const nSrc = noiseSource(c)
-  nSrc.connect(noiseFilter)
-  noiseFilter.connect(noiseGain)
-  noiseGain.connect(gain)
-  nSrc.start(now)
-  sources.push(nSrc)
-  stops.push(() => nSrc.stop())
-
-  // 噪声呼吸 LFO
-  const nLfo = c.createOscillator()
-  nLfo.type = 'sine'
-  nLfo.frequency.value = 0.05
-  const nLfoGain = c.createGain()
-  nLfoGain.gain.value = 0.006
-  nLfo.connect(nLfoGain)
-  nLfoGain.connect(noiseGain.gain)
-  nLfo.start(now)
-  sources.push(nLfo)
-  stops.push(() => nLfo.stop())
-
-  bgm = {
-    gain,
-    stops: [
-      () => sources.forEach((s) => s.stop()),
-      () => padFilter.disconnect(),
-      () => noiseFilter.disconnect(),
-      () => gain.disconnect(),
-    ],
-  }
-}
-
+/** 背景噪音循环已彻底移除；playBgm 保留为空实现以兼容旧调用方（不再有任何音频节点） */
 export function playBgm(): void {
-  startBgm()
+  /* no-op：v0.3.9 起不再播放背景噪音 */
 }
 
 export function stopBgm(): void {
-  if (!bgm) return
-  bgm.stops.forEach((s) => s())
-  bgm = null
+  /* no-op：已无 bgm 节点可停 */
 }
 
 /* ---------------------------------------------------------------- 音量 */
 
-export function setBgmVolume(v: number): void {
-  const c = ensureCtx()
-  if (!c) return
-  if (v <= 0) {
-    stopBgm()
-    return
-  }
-  if (bgm) {
-    bgm.gain.gain.setTargetAtTime(v, c.currentTime, 0.05)
-  } else if (c.state === 'running' && !reducedMotion()) {
-    startBgm()
-  }
+export function setBgmVolume(_v: number): void {
+  /* no-op：bgm 已移除；settingsStore.bgmVolume 字段保留（存档结构兼容），不再消费 */
 }
 
 export function setSfxVolume(_v: number): void {

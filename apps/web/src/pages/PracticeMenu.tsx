@@ -10,7 +10,7 @@
  * 组件既可直接由路由挂载（缺省返回主页），也可由 Home 内嵌（通过 onExit 回到 Home 面板）。
  */
 import { useState } from 'react'
-import { PRESETS } from '@aero/shared'
+import { DEFAULT_PLANE_SHAPE, PRESETS } from '@aero/shared'
 import type { GridConfig } from '@aero/shared'
 import { useAppStore } from '../store/appStore'
 import { DIFFICULTY_OPTIONS, useSettingsStore } from '../store/settingsStore'
@@ -68,15 +68,35 @@ const MODE_TITLES: Record<PracticeMode, string> = {
 /** 圆形徽标内图标尺寸（px；徽标 44px，四周留白，不触边框） */
 const BADGE_ICON_SIZE = 26
 
-/** 默认飞机（经典）—— 俯视轮廓（近似默认 10 格纸飞机形状，左右对称） */
-const ICON_PLANE_PATH =
-  'M12 3.6 C13.2 3.6 14 5.2 14.2 6.6 L20.2 10.5 C21.1 11.1 20.9 12.4 19.9 12.6 ' +
-  'L15.4 13.5 L16.2 19.8 C16.4 20.7 15.6 21.3 14.8 20.7 L12 18.9 L9.2 20.7 ' +
-  'C8.4 21.3 7.6 20.7 7.8 19.8 L8.6 13.5 L4.1 12.6 C3.1 12.4 2.9 11.1 3.8 10.5 ' +
-  'L9.8 6.6 C10 5.2 10.8 3.6 12 3.6 Z'
+/* ---------- 经典模式图标：真实默认飞机（DEFAULT_PLANE_SHAPE，4 行×5 列共 10 格） ----------
+   按 shared 的 DEFAULT_PLANE_SHAPE.cells（编辑器 5×5 坐标：机头 1 格顶部居中、
+   机翼 5 格整行、机身 1 格、机尾 3 格）逐格绘制等大小方格（格间细缝），
+   忠实反映 4×5 结构；机头格加实心圆点座舱以示朝向。 */
+const PLANE_GRID = {
+  /** 每格边长 */
+  cell: 3.4,
+  /** 格间细缝 */
+  gap: 0.9,
+  /** 网格在 24×24 中的偏移：宽 5 格（20.6）、高 4 格（16.3），居中 */
+  x0: 1.7,
+  y0: 3.85,
+}
 
-/** 闪电（超快棋） */
-const ICON_ZAP_POINTS = '13 2 3 14 12 14 11 22 21 10 12 10 13 2'
+/** 依 DEFAULT_PLANE_SHAPE 生成的格子矩形（含机头标注圆） */
+const PLANE_GRID_CELLS = (() => {
+  const { cell, gap, x0, y0 } = PLANE_GRID
+  const pitch = cell + gap
+  const rects = DEFAULT_PLANE_SHAPE.cells.map((p) => ({
+    key: `${p.r}-${p.c}`,
+    x: +(x0 + p.c * pitch).toFixed(3),
+    y: +(y0 + p.r * pitch).toFixed(3),
+  }))
+  const head = DEFAULT_PLANE_SHAPE.head
+  return { rects, headX: +(x0 + head.c * pitch + cell / 2).toFixed(3), headY: +(y0 + head.r * pitch + cell / 2).toFixed(3) }
+})()
+
+/** 闪电（超快棋，v0.3.9：瘦长版——窄于原版并上下加长） */
+const ICON_ZAP_POINTS = '12.3 1.2 9.0 14.2 12 14.2 11.6 22.8 15.0 9.8 12 9.8 12.3 1.2'
 
 /** 徽标图标：SVG 内联，颜色取徽标 currentColor（与既有配色一致） */
 function ModeIcon({ kind }: { kind: PracticeMode | 'custom' }) {
@@ -84,6 +104,23 @@ function ModeIcon({ kind }: { kind: PracticeMode | 'custom' }) {
     return (
       <svg width={BADGE_ICON_SIZE} height={BADGE_ICON_SIZE} viewBox="0 0 24 24" aria-hidden="true">
         <polygon points={ICON_ZAP_POINTS} fill="currentColor" />
+      </svg>
+    )
+  }
+  if (kind === 'classic') {
+    return (
+      <svg width={BADGE_ICON_SIZE} height={BADGE_ICON_SIZE} viewBox="0 0 24 24" aria-hidden="true">
+        {/* 机身/机翼/机尾：真实 4×5 十格（格间细缝） */}
+        {PLANE_GRID_CELLS.rects.map((r) => (
+          <rect key={r.key} x={r.x} y={r.y} width={PLANE_GRID.cell} height={PLANE_GRID.cell} rx={0.8} fill="currentColor" />
+        ))}
+        {/* 机头座舱：中心深色圆点（以纸色镂空显示，强化朝上机头） */}
+        <circle
+          cx={PLANE_GRID_CELLS.headX}
+          cy={PLANE_GRID_CELLS.headY}
+          r={1.05}
+          fill="var(--paper-sheet-2)"
+        />
       </svg>
     )
   }
@@ -125,11 +162,9 @@ function ModeIcon({ kind }: { kind: PracticeMode | 'custom' }) {
       </svg>
     )
   }
-  // classic：默认飞机俯视轮廓
+  // classic：默认飞机俯视轮廓（见上方 classic 分支；此兜底不应到达）
   return (
-    <svg width={BADGE_ICON_SIZE} height={BADGE_ICON_SIZE} viewBox="0 0 24 24" aria-hidden="true">
-      <path d={ICON_PLANE_PATH} fill="currentColor" />
-    </svg>
+    <svg width={BADGE_ICON_SIZE} height={BADGE_ICON_SIZE} viewBox="0 0 24 24" aria-hidden="true" />
   )
 }
 

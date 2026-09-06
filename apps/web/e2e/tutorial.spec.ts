@@ -38,6 +38,12 @@ async function spotlightHoles(page: import('@playwright/test').Page): Promise<nu
   if (!d) return 0
   return (d.match(/ M/g) ?? []).length
 }
+/** 气泡突显（v0.3.9）= 整屏暗层 .tutorial-spotlight--dim（无 svg 洞；气泡 z 豁免） */
+async function expectSpotlightDim(page: import('@playwright/test').Page): Promise<void> {
+  await expect(page.locator('.tutorial-spotlight--dim')).toHaveCount(1)
+  await expect(page.locator('.tutorial-spotlight:not(.tutorial-spotlight--dim)')).toHaveCount(0)
+  await expect(bubble(page)).toBeVisible()
+}
 async function drag(page: import('@playwright/test').Page, from: { x: number; y: number }, to: { x: number; y: number }) {
   await page.mouse.move(from.x, from.y)
   await page.mouse.down()
@@ -102,9 +108,9 @@ test.describe('新手教程', () => {
     /* ---- 单元1 v0.3.3：welcome → tray → drag → more → rotateHint → rotateWait → thanks → detect ---- */
     await expect(page.getByRole('heading', { name: '新手教程 · 摆阵' })).toBeVisible()
 
-    // welcome（click 节点，突显气泡）
+    // welcome（click 节点，气泡突显 = 整屏暗层）
     await expect(bubble(page)).toContainText('欢迎来到《飞机杀》！我们先来学习如何摆阵吧！', { timeout: 8000 })
-    await expect(spotlight(page)).toHaveCount(1)
+    await expectSpotlightDim(page)
     await expect(page.locator('.tutorial-bubble__skip', { hasText: '跳过单元' })).toBeVisible()
     await clickBubble(page) // tray
 
@@ -131,7 +137,7 @@ test.describe('新手教程', () => {
     await dragDeckCardTo(page, 6, 5)
     await expect(page.locator('.placement__plane')).toHaveCount(3)
     await expect(bubble(page)).toContainText('单击飞机可以使飞机旋转90度，试试看！', { timeout: 8000 })
-    await expect(spotlight(page)).toHaveCount(1)
+    await expectSpotlightDim(page) // rotateHint：气泡突显 = 整屏暗层
 
     // 点击 → rotateWait（wait，突显棋盘、文本常驻、无 hint）
     await clickBubble(page)
@@ -186,7 +192,7 @@ test.describe('新手教程', () => {
     await expect(bubble(page)).toContainText('是时候学习如何对战了！', { timeout: 10000 })
     await expect(hudSkip(page, '对战基础')).toBeVisible()
     await expect(page.locator('.result')).toHaveCount(0)
-    await expect(spotlight(page)).toHaveCount(1) // welcome 突显气泡
+    await expectSpotlightDim(page) // T2-1 welcome：气泡突显 = 整屏暗层
 
     await clickBubble(page) // T2-2（*飞机机头* 强调，突显空网格）
     await expect(bubble(page)).toContainText('找出对手的')
@@ -231,7 +237,7 @@ test.describe('新手教程', () => {
     await expect(bubble(page)).toContainText('《飞机杀》有很多实用的对局工具呢！', { timeout: 12000 })
     await expect(hudSkip(page, '工具进阶')).toBeVisible()
     await expect(page.locator('.result')).toHaveCount(0)
-    await expect(spotlight(page)).toHaveCount(1)
+    await expectSpotlightDim(page) // a1：气泡突显 = 整屏暗层
 
     await expect(page.locator('.game-banner')).toBeHidden({ timeout: 8000 })
     await expect(page.locator('.game__status-text')).toContainText(/等待对方报点|对方报点/, { timeout: 10000 })
@@ -542,7 +548,8 @@ test.describe('新手教程', () => {
     await expect(bubble(page)).toContainText(a12Text, { timeout: 8000 })
     expect(await prefireMark.count()).toBeGreaterThanOrEqual(1)
     await expect(spotlight(page)).toHaveCount(1)
-    await expect.poll(() => spotlightHoles(page), { timeout: 8000 }).toBe(2) // a12：气泡 + 空网格双洞
+    // a12（v0.3.9）：突显空网格（单目标 svg 洞；气泡以整屏暗层豁免不再入洞）
+    await expect.poll(() => spotlightHoles(page), { timeout: 8000 }).toBeGreaterThanOrEqual(1)
 
     // P5：跳过确认 → 完成教程 → 主页
     await hudSkip(page, '工具进阶').click()

@@ -5,7 +5,7 @@
  *   有突显目标（spotlight）时不与其重叠（气泡尽量置于洞口同侧之外）；
  * - 点击气泡推进（由步骤机 click 处理；段未翻完时同一气泡换段）。
  */
-import { useEffect, useRef, useState } from 'react'
+import { useLayoutEffect, useRef, useState } from 'react'
 
 export function TutorialBubble({
   text,
@@ -26,39 +26,64 @@ export function TutorialBubble({
 }) {
   const ref = useRef<HTMLDivElement | null>(null)
   const [pos, setPos] = useState<{ left?: number; top?: number; right?: number; bottom?: number } | null>(null)
+  // v0.3.9：定位稳定前不可见（opacity 0）——杜绝任何“先错位/漂移后到位”的可见位移
+  const [ready, setReady] = useState(false)
 
-  // 首次显示后测量自身大小，动态摆放（尽量避开 inputbar 顶部区域）
-  useEffect(() => {
-    setPos(null)
+  // v0.3.9：用 useLayoutEffect 在绘制前测量并置位——首帧即在正确位置（杜绝"先错位后跳回"）；
+  // 文本/锚点变化亦在布局阶段同帧重定位；resize 时才走异步兜底。
+  const posRef = useRef(pos)
+  posRef.current = pos
+  const place = () => {
     const el = ref.current
     if (!el) return
-    const place = () => {
-      const stage = document.querySelector('.app-stage')?.getBoundingClientRect()
-      const bubble = el.getBoundingClientRect()
-      if (!stage) return
-      // 默认竖版：舞台底部；横版：参考网格下方右侧
-      const portrait = stage.height > stage.width
-      if (anchor === 'top') {
-        setPos({ left: stage.left + (stage.width - bubble.width) / 2, top: 12 })
-      } else if (portrait) {
-        setPos({ left: stage.left + (stage.width - bubble.width) / 2, bottom: 12 })
-      } else {
-        setPos({ right: 16, bottom: 64 })
-      }
-    }
-    const t = window.setTimeout(place, 0)
-    window.addEventListener('resize', place)
+    const stage = document.querySelector('.app-stage')?.getBoundingClientRect()
+    if (!stage) return
+    // 用 offsetWidth/Height（不含 transform/scale 动画）测量布局尺寸，动画期间定位不抖动
+    const w = el.offsetWidth
+    const h = el.offsetHeight
+    const portrait = stage.height > stage.width
+    // v0.3.9：竖版舞台在视口内居中留白（9:16）——气泡锚定舞台底部（fixed top 换算），
+    // 避免落在视口底部而舞台外的留白区；横版 stage=视口，bottom/right 直接可用
+    const next =
+      anchor === 'top'
+        ? { left: stage.left + (stage.width - w) / 2, top: stage.top + 12 }
+        : portrait
+          ? { left: stage.left + (stage.width - w) / 2, top: stage.bottom - h - 12 }
+          : { right: 16, bottom: 64 }
+    const cur = posRef.current
+    if (cur && cur.left === next.left && cur.top === next.top && cur.right === next.right && cur.bottom === next.bottom) return
+    setPos(next)
+  }
+
+  // 挂载/换段：布局阶段立即定位；再用双 rAF 等首帧布局稳定后复测一次再放行显示
+  useLayoutEffect(() => {
+    place()
+    setReady(false)
+    let alive = true
+    const raf1 = requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        if (!alive) return
+        place()
+        setReady(true)
+      }),
+    )
     return () => {
-      window.clearTimeout(t)
-      window.removeEventListener('resize', place)
+      alive = false
+      cancelAnimationFrame(raf1)
     }
   }, [text, anchor])
+
+  useLayoutEffect(() => {
+    const onResize = () => place()
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [anchor, text])
 
   return (
     <div
       ref={ref}
       className={anchor === 'top' ? 'tutorial-bubble tutorial-bubble--top' : 'tutorial-bubble'}
-      style={pos ?? undefined}
+      style={{ ...(pos ?? {}), opacity: ready ? 1 : 0, transition: ready ? 'opacity 120ms ease' : 'none' }}
       role="dialog"
       aria-label="教程提示"
       onClick={onClick}
