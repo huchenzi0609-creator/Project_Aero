@@ -118,21 +118,3 @@
   transform: rotate(-135deg);
 }
 
-/* ============ v0.3.6 教程摆阵：横屏网格画面中央 ============
-   横屏下把待选托盘悬浮于棋盘左侧空区（不占流），网格区占满可用宽并水平居中于舞台；
-   竖版保持既有布局（托盘在上、网格在下并居中）。 */
-.placement.tutorial-placement.placement--landscape .placement__body {
-  position: relative;
-  justify-content: center;
-}
-.placement.tutorial-placement.placement--landscape .placement__tray {
-  position: absolute;
-  left: 6px;
-  top: 50%;
-  transform: translateY(-50%);
-  z-index: 3;
-  max-height: 92%;
-}
-.placement.tutorial-placement.placement--landscape .placement__board-wrap {
-  flex: none;
-}
