@@ -1,15 +1,16 @@
 /**
- * 公网部署冒烟（v0.3.7 流程）：
- *   1) 首页加载 + 版本角标校验（.home__version === v0.3.7）
+ * 公网部署冒烟（v0.3.9 流程）：
+ *   1) 首页加载 + 版本角标校验（.home__version，期望版本可由第 3 参传入，默认 v0.3.9）
  *   2) 练习模式：四子模式卡片 → 经典 → 中型 15×15 → 开始摆阵 → 摆阵页 + 随机摆阵
  *   3) 对战模式：菜单（开始匹配 / 创建房间 / 加入已有对局）
  *   4) 新手教程：入口面板 → 开始教程 → 弹窗（含关闭按钮）
  *   全程统计 console/page 错误，任一关键步失败或出现错误则退出码 1。
- * 用法：pnpm exec node scripts/pub-smoke.mjs <baseUrl>
+ * 用法：pnpm exec node scripts/pub-smoke.mjs <baseUrl> [期望角标版本]
  */
 import { chromium } from '@playwright/test'
 
-const base = process.argv[2] ?? 'http://116.62.121.70:8080'
+const base = process.argv[2] ?? 'http://116.62.121.70:8080/beta'
+const expectVersion = process.argv[3] ?? 'v0.3.9'
 const exe =
   process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE ??
   '/Users/huchenzi/Library/Caches/ms-playwright/chromium-1234/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing'
@@ -53,9 +54,9 @@ await step('首页加载（标题）', async () => {
   return `title=${title}`
 })
 
-await step('版本角标 v0.3.7', async () => {
+await step(`版本角标 ${expectVersion}`, async () => {
   const v = await page.locator('.home__version').textContent().catch(() => null)
-  if ((v || '').trim() !== 'v0.3.7') throw new Error(`角标缺失/不符: ${v}`)
+  if ((v || '').trim() !== expectVersion) throw new Error(`角标缺失/不符: ${v}`)
   return v.trim()
 })
 
