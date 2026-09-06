@@ -797,9 +797,6 @@ export function GameScreen({ mode = 'single', onGameEvent, aiShotSelector, hideS
       statusThem = true
     } else if (myMsg) {
       statusText = myMsg
-    } else if (state.turn === me && myPreFire.length > 0) {
-      // 预报点将在本回合自动上报（引擎 FIFO）
-      statusText = '轮到你了——预报点将自动上报。'
     } else if (state.turn === me) {
       statusText = '轮到我方报点'
     } else {
@@ -990,11 +987,7 @@ export function GameScreen({ mode = 'single', onGameEvent, aiShotSelector, hideS
           确认报点
         </PaperButton>
         <span className="game__hint">
-          {isColoring
-            ? '着色模式：点按染色 · 按住拖动画线 · 再点同色擦除'
-            : state.turn !== me && state.phase === 'playing'
-              ? '对方回合：点空网格可预排报点（?）· 点预报点再点取消'
-              : '点击棋盘选格，再点一次报点 · 或输入坐标回车'}
+          {isColoring ? '着色模式：点按染色 · 按住拖动画线 · 再点同色擦除' : '点击棋盘选格，再点一次报点 · 或输入坐标回车'}
         </span>
       </footer>
 
