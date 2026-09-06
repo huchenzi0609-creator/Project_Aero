@@ -270,10 +270,12 @@ export function GameScreen({ mode = 'single', onGameEvent, aiShotSelector, hideS
 
   /* ================= v0.3.0：预报点 / 超快棋（挂载于对战期） ================= */
 
-  // 我方回合开始：预报点 FIFO 自动上报（每回合最多一个；队列空恢复手动报点）。
-  // autoFiredTurnRef 记录已消费的回合号，避免同一回合内重复触发（applyShot 翻回合后自然复位）。
+  // 我方回合开始：预报点 FIFO【立即】生效（v0.3.6）——回合切换后同步/无延迟 takePreFireShot，
+  // useLayoutEffect 在绘制前执行，杜绝 450ms 抢报窗口（队列非空时手动报点在 doShot/commit 侧同步被禁）。
+  // counterattack 不自动消耗（保留手动最后一次报点）；每回合只上报一个（FIFO），队列清空恢复手动。
+  // autoFiredTurnRef 记录已消费的回合号，避免同一提交内重复触发。
   const autoFiredTurnRef = useRef<number | null>(null)
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!state || screen !== 'battle') return
     if (state.phase !== 'playing' || state.turn !== me) return
     const queue = state.preFire?.[me] ?? []
@@ -281,34 +283,28 @@ export function GameScreen({ mode = 'single', onGameEvent, aiShotSelector, hideS
     if (autoFiredTurnRef.current === state.turnNo) return
     autoFiredTurnRef.current = state.turnNo
     const head = queue[0]!
-    const t = window.setTimeout(
-      () => {
-        const res = takePreFireShot()
-        if (!res || !res.ok || !res.outcome) {
-          if (res && !res.ok) {
-            // 罕见冲突（如经典下该格已被手动报过）：丢弃队首，避免每回合重复尝试阻塞
-            cancelPreFireAt(head)
-            toast(res.error === 'already-shot' ? '该格已经报过点了' : '当前阶段不允许报点', 'error')
-            shakeInput()
-          }
-          return
-        }
-        // 自动上报与手动报点消耗一致：展示结果并翻转回合
-        setHighlight(null)
-        setInput('')
-        setAiMsg(null)
-        setPfSel(null)
-        setMyMsg(`我方报点 ${formatCoord(head)}：${OUTCOME_TEXT[res.outcome] ?? '无效'}！`)
-        audioService.playSfx('shoot')
-        if (res.outcome === 'kill') playSfxAt('kill', 180)
-        else if (res.outcome === 'hit') playSfxAt('stamp', 140)
-        onGameEvent?.({ type: 'shotByPlayer', coord: { r: head.r, c: head.c }, outcome: res.outcome })
-        if (res.outcome === 'kill') onGameEvent?.({ type: 'planeKilled', side: ai })
-      },
-      450, // 回合翻转后稍作停顿，让状态条"轮到你了…"可读
-    )
-    return () => window.clearTimeout(t)
-    // 依赖队列签名而非整个 state：blitz 时钟写入不得重排自动上报定时器（与 R2 同根因）
+    const res = takePreFireShot()
+    if (!res || !res.ok || !res.outcome) {
+      if (res && !res.ok) {
+        // 罕见冲突（如经典下该格已被手动报过）：丢弃队首，避免每回合重复尝试阻塞
+        cancelPreFireAt(head)
+        toast(res.error === 'already-shot' ? '该格已经报过点了' : '当前阶段不允许报点', 'error')
+        shakeInput()
+      }
+      return
+    }
+    // 自动上报与手动报点消耗一致：展示结果并翻转回合
+    setHighlight(null)
+    setInput('')
+    setAiMsg(null)
+    setPfSel(null)
+    setMyMsg(`我方报点 ${formatCoord(head)}：${OUTCOME_TEXT[res.outcome] ?? '无效'}！`)
+    audioService.playSfx('shoot')
+    if (res.outcome === 'kill') playSfxAt('kill', 180)
+    else if (res.outcome === 'hit') playSfxAt('stamp', 140)
+    onGameEvent?.({ type: 'shotByPlayer', coord: { r: head.r, c: head.c }, outcome: res.outcome })
+    if (res.outcome === 'kill') onGameEvent?.({ type: 'planeKilled', side: ai })
+    // 依赖队列签名而非整个 state：blitz 时钟写入不得重排本自动上报（与 R2 同根因）
   }, [queueSig, screen])
 
   // —— 超快棋：rAF 实时推进当前回合方时钟（象棋钟语义）——
@@ -636,15 +632,14 @@ export function GameScreen({ mode = 'single', onGameEvent, aiShotSelector, hideS
 
   const doShot = (cell: Cell) => {
     if (!isPlaying || state.turn !== me) return
+    // v0.3.6：我方回合且预报点队列非空 → 由回合切换后的自动上报立即消费，禁止手动抢报
+    if (state.phase === 'playing' && myPreFire.length > 0) return
     // 盲棋允许重复报点（含残骸格，引擎返回 miss 误导）；经典模式拦截已报格
     if (!isBlind && alreadyShot(cell)) {
       toast('该格已经报过点了', 'error')
       shakeInput()
       return
     }
-    // R1 竞态防护：手动报点命中仍在预报点队列的坐标（自动上报 450ms 窗口内抢先手点）→
-    // 先撤掉该预报点再打，避免“真实章 + 残留 ?”同格双渲染与队列滞留
-    if (myPreFireKeys.has(cellKey(cell))) cancelPreFireAt(cell)
     const res: ShotResult | null = applyShotAt(cell)
     if (!res || !res.ok) {
       if (res?.error === 'already-shot') {
