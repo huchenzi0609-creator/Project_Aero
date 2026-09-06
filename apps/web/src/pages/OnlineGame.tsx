@@ -156,9 +156,8 @@ export function OnlineGame() {
 
   /* ---------- 着色工具（每局独立：新房间 / 终局时清空；v0.3.0 幽灵快捷着色） ---------- */
   // 幽灵飞机（在场放置副本）活动列表：由 refPlanes.placed 经 useLayoutEffect 同步；
-  // 快捷着色回收 = 从本列表移除（渲染层同时用 retiredGhostIds 过滤，避免点击滞后一帧）
+  // 快捷着色 → onGhostBatch → removePlaced 真移除（M3 API，见下），ghostRects 随之自动更新
   const [ghostRects, setGhostRects] = useState<GhostRect[]>([])
-  const [retiredGhostIds, setRetiredGhostIds] = useState<ReadonlySet<string>>(new Set())
   // onGhostBatch 需引用其后定义的处理器（依赖 coloring），用 ref 桥接取最新闭包
   const ghostBatchHandlerRef = useRef<(id: string, cells: Cell[]) => void>(() => {})
   const coloring = useColoring({
@@ -355,31 +354,34 @@ export function OnlineGame() {
     },
   })
 
+  // placed 每次变化 → useLayoutEffect 同步活动幽灵列表（removePlaced 后自动跟随）
   useLayoutEffect(() => {
     if (!config) return
     setGhostRects(
-      (refPlanes.placed ?? [])
-        .filter((p) => !retiredGhostIds.has(String(p.id)))
-        .map((p) => ({ id: String(p.id), cells: occupiedCells(p, config.shape) })),
+      (refPlanes.placed ?? []).map((p) => ({
+        id: String(p.id),
+        cells: occupiedCells(p, config.shape),
+      })),
     )
-  }, [refPlanes.placed, retiredGhostIds, config])
+  }, [refPlanes.placed, config])
 
-  // 新房间 / 终局：清空幽灵活动列表与回收记录
+  // 新房间 / 终局：清空幽灵活动列表
   useEffect(() => {
     setGhostRects([])
-    setRetiredGhostIds(new Set())
   }, [roomCode])
   useEffect(() => {
-    if (gameEnd) {
-      setGhostRects([])
-      setRetiredGhostIds(new Set())
-    }
+    if (gameEnd) setGhostRects([])
   }, [gameEnd])
 
-  // 快捷着色：整机被批量着色 → 回收该幽灵 + 退出着色模式（ColoringTool 只发事件，回收由页面执行）
+  // 幽灵真消灭：M3 正为 useRefPlanes 增加 removePlaced(id)，尚未落盘前按签名接线（可选链空操作，
+  // 落盘后自动生效）；完成整机批量着色 → 真实移除该幽灵 + 退出着色模式（ColoringTool 只发事件）
+  interface RefPlanesWithRemove {
+    removePlaced?: (id: string) => void
+  }
+  const removePlaced =
+    (refPlanes as unknown as RefPlanesWithRemove).removePlaced
   const handleGhostBatch = (id: string) => {
-    setGhostRects((prev) => prev.filter((g) => g.id !== id))
-    setRetiredGhostIds((prev) => new Set(prev).add(id))
+    removePlaced?.(id)
     if (coloring.coloringMode) coloring.toggleMode()
   }
   ghostBatchHandlerRef.current = handleGhostBatch
@@ -480,6 +482,15 @@ export function OnlineGame() {
   // 我方回合开始：预报点 FIFO 自动上报（每回合一个，队列空则恢复手动）
   const autoFiredTurnRef = useRef<{ turnNo: number; count: number }>({ turnNo: 0, count: 0 })
   const phaseInGame = phase === 'playing' || phase === 'counterattack'
+  // 我方回合到来：清除非回合遗留的预报点选中态/高亮（避免残留高亮被当作报点双击第一步）
+  const prevYourTurnRef = useRef(yourTurn)
+  useEffect(() => {
+    if (yourTurn && !prevYourTurnRef.current) {
+      setSelectedPrefire(null)
+      setHighlight(null)
+    }
+    prevYourTurnRef.current = yourTurn
+  }, [yourTurn])
   useEffect(() => {
     if (!phaseInGame || !yourTurn) return
     const fired = autoFiredTurnRef.current
@@ -518,11 +529,6 @@ export function OnlineGame() {
   const oppSeat = room.players[(1 - you) as 0 | 1]
   const oppName = oppSeat?.name ?? '对手'
 
-  // 对手网格实际渲染的幽灵：隐藏已被快捷着色回收的（placed 内部仍保留，拖拽/重叠不受影响）
-  const visibleShownPlanes = refPlanes.shownPlanes.filter(
-    (p) => p.id === -1 || !retiredGhostIds.has(String(p.id)),
-  )
-
   const isPlaying = phase === 'playing' || phase === 'counterattack'
   // v0.3：非我方回合不再拦截报点（改预报点机制），故禁点条件移除 !yourTurn
   const canShoot = isPlaying && yourTurn && socketStatus === 'connected' && !isColoring
@@ -536,51 +542,82 @@ export function OnlineGame() {
     shakeTimer.current = window.setTimeout(() => setShake(false), 420)
   }
 
-  /* ---------- 预报点（v0.3）：非我方回合点击/输入创建；再次点击选中，确认取消 ---------- */
+  /* ---------- 预报点（v0.3）：非我方回合两步创建（与报点一致的选中→确认）；坐标输入一次生效 ---------- */
 
   const markedKey = (cell: Cell) => `${cell.r},${cell.c}`
 
-  const tryAddPrefire = (cell: Cell): void => {
-    const { list, ok, full } = prefireAdd(prefire, cell)
-    if (full) {
-      toast('预报点已达上限（10 个），请先取消部分预报点。', 'error')
-      return
-    }
-    if (!ok) {
-      setSelectedPrefire(cell) // 已是预报点：转移选中
-      setInput(formatCoord(cell))
-      return
-    }
-    setPrefire(list)
+  const clearPrefireSel = () => {
     setSelectedPrefire(null)
+    setHighlight(null)
+    setInput('')
+  }
+
+  // 第一次单击：仅选中该格（空格与已有预报点格一致；点其它格改选）
+  const selectPrefireCell = (cell: Cell) => {
+    setSelectedPrefire(cell)
+    setHighlight(cell)
     setInput(formatCoord(cell))
   }
 
-  const togglePrefire = (cell: Cell): void => {
-    // 已选中的预报点 → 再次确认 = 取消
-    if (selectedPrefire && sameCell(selectedPrefire, cell)) {
+  // 同一格第二次单击：空格 → 创建预报点；已有预报点 → 取消
+  const confirmPrefireCell = (cell: Cell) => {
+    if (prefire.some((c) => sameCell(c, cell))) {
       setPrefire((prev) => prefireRemove(prev, cell))
-      setSelectedPrefire(null)
-      setInput('')
+      clearPrefireSel()
       toast('预报点已取消。', 'info')
       return
     }
-    if (prefire.some((c) => sameCell(c, cell))) {
-      setSelectedPrefire(cell)
-      setInput(formatCoord(cell))
+    const { list, ok, full } = prefireAdd(prefire, cell)
+    if (full) {
+      toast('预报点已达数量上限', 'error')
       return
     }
-    tryAddPrefire(cell)
+    if (!ok) {
+      selectPrefireCell(cell)
+      return
+    }
+    setPrefire(list)
+    clearPrefireSel()
   }
 
   const handlePrefireTap = (cell: Cell): void => {
     // 已有可见标记格不可设预报点（盲棋按可见集，常规按全量）
     if (visibleMarkedKeys.has(markedKey(cell))) {
-      setSelectedPrefire(null)
+      clearPrefireSel()
       return
     }
-    if (selectedPrefire && !sameCell(selectedPrefire, cell)) setSelectedPrefire(null)
-    togglePrefire(cell)
+    if (selectedPrefire && sameCell(selectedPrefire, cell)) {
+      confirmPrefireCell(cell) // 第二次单击同一格：创建 / 取消
+    } else {
+      selectPrefireCell(cell) // 第一次单击：仅选中（点其它格改选）
+    }
+  }
+
+  // 坐标输入（非我方回合）：一次确认生效（选中预报点+再确认取消，或直接创建）——行为保持原状
+  const commitPrefireInput = (cell: Cell): void => {
+    if (selectedPrefire && sameCell(selectedPrefire, cell)) {
+      setPrefire((prev) => prefireRemove(prev, cell))
+      clearPrefireSel()
+      toast('预报点已取消。', 'info')
+      return
+    }
+    if (visibleMarkedKeys.has(markedKey(cell))) {
+      clearPrefireSel()
+      return
+    }
+    if (prefire.some((c) => sameCell(c, cell))) {
+      selectPrefireCell(cell)
+      return
+    }
+    const { list, ok, full } = prefireAdd(prefire, cell)
+    if (full) {
+      toast('预报点已达数量上限', 'error')
+      return
+    }
+    if (ok) {
+      setPrefire(list)
+      clearPrefireSel()
+    }
   }
 
   const doShot = (cell: Cell) => {
@@ -640,19 +677,8 @@ export function OnlineGame() {
       doShot(cell)
       return
     }
-    // 非我方回合：选中预报点 + 再次确认（点击或坐标输入）可取消
-    if (selectedPrefire && sameCell(selectedPrefire, cell)) {
-      setPrefire((prev) => prefireRemove(prev, cell))
-      setSelectedPrefire(null)
-      setInput('')
-      toast('预报点已取消。', 'info')
-      return
-    }
-    if (visibleMarkedKeys.has(markedKey(cell))) {
-      setSelectedPrefire(null)
-      return
-    }
-    togglePrefire(cell)
+    // 非我方回合 → 预报点（坐标输入一次生效：创建 / 选中 / 取消）
+    commitPrefireInput(cell)
   }
 
   /* ---------- 计时 ---------- */
@@ -845,8 +871,8 @@ export function OnlineGame() {
                   ? { active: true, color: coloring.currentColor, onPaint: coloring.paintAt }
                   : undefined
               }
-              // 渲染过滤：隐藏已被快捷着色回收的幽灵（placed 内部仍保留，拖拽/重叠逻辑不受影响）
-              planes={visibleShownPlanes}
+              // 渲染全部在场幽灵（快捷着色经 removePlaced 真移除后 placed 自动更新）
+              planes={refPlanes.shownPlanes}
               shape={config.shape}
               planesLayer={{
                 ghost: true,
