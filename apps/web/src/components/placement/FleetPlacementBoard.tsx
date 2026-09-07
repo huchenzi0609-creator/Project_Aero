@@ -153,13 +153,15 @@ export function FleetPlacementBoard({
       const availH = frozenViewport.height - 170
       return clamp(Math.floor(Math.min(availW / width, availH / height)), 10, 34)
     }
-    // 竖版 9:16 无滚动：网格优先——按实测可用空间（回退：舞台 − 上部组件预留）计算；
+    // 竖版 3:5 无滚动：网格优先——按实测可用空间（回退：舞台 − 上部组件预留）计算；
     // 扣掉列标行 15 / 行标列 20+4 / 棋盘边框 3 / 安全余量 4，网格任何部分不被遮挡
     const box = availBox ?? { w: frozenViewport.width - 24, h: frozenViewport.height - portraitChromeReserve }
     const availW = box.w - 20 - 4 - 3 - 4
     const availH = box.h - 15 - 3 - 4
+    // v0.3.11：上限 26 → 34——390 宽 3:5 舞台下 10×10 可达 ~33px；
+    // min(可用宽/列数, 可用高/行数) 语义保证 15×15 / 20×20 按实际空间自动收缩且无横向/纵向溢出。
     // 下限放宽到 2：极端小屏（320×568）下大棋盘（20×20）也须完整显示首行
-    return clamp(Math.floor(Math.min(availW / width, availH / height)), 2, 26)
+    return clamp(Math.floor(Math.min(availW / width, availH / height)), 2, 34)
   }, [frozenViewport, portraitChromeReserve, orientation, width, height, availBox])
 
   /** 网格整体尺寸（含列标/行标/边框）；超出实测空间时顶端对齐，保证首行完整可见 */

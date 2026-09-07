@@ -571,14 +571,20 @@
   justify-self: stretch;
 }
 
-/* ---- 横版摆阵：托盘在网格左侧紧邻（去大间距/居中留白），网格紧随其后 ---- */
+/* ---- 横版摆阵：托盘在网格左侧紧邻，且整体（托盘+网格）在画面垂直居中 ---- */
 .placement--landscape .placement__body {
   justify-content: center;
+  align-items: center;
   gap: 8px;
+}
+/* 横版同样存在页面内边距起点偏移：高度钳位避免底边被舞台裁切 */
+.placement--landscape {
+  height: calc(100cqh - 5px);
 }
 .placement--landscape .placement__board-wrap {
   flex: 0 1 auto;
   justify-content: flex-start;
+  align-self: center;
   padding: 0;
 }
 
@@ -595,8 +601,11 @@
   padding-top: 0;
 }
 .placement--portrait {
-  padding: 6px 10px 4px;
-  gap: 6px;
+  padding: 6px 8px 4px;
+  gap: 5px;
   /* 3:5 舞台内起点偏移：压缩自身高度，底边不出舞台（无滚动收容） */
   height: calc(100cqh - 6px);
+}
+.placement--portrait .placement__body {
+  gap: 5px;
 }

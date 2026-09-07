@@ -54,7 +54,6 @@ export function TutorialPlacement({
   const versionRef = useRef(0)
   const thanksCauseRef = useRef<number | null>(null)
   const [phase, setPhase] = useState<Phase>('welcome')
-  const [skipOpen, setSkipOpen] = useState(false)
   const [exitOpen, setExitOpen] = useState(false)
   const [, force] = useState(0)
   const phaseRef = useRef<Phase>('welcome')
@@ -235,8 +234,6 @@ export function TutorialPlacement({
           text={segText}
           showHint={isClickNode}
           onClick={clickSeg}
-          skipLabel="跳过单元"
-          onSkip={() => setSkipOpen(true)}
         />
       ) : null}
 
@@ -259,30 +256,6 @@ export function TutorialPlacement({
         <p style={{ margin: 0 }}>退出后摆阵进度将丢失，确认离开教程吗？</p>
       </PaperModal>
 
-      {/* 跳过确认：确认 = 以当前阵型跳入单元2（不足父级随机补齐） */}
-      <PaperModal
-        open={skipOpen}
-        title="新手教程"
-        onClose={() => setSkipOpen(false)}
-        footer={
-          <>
-            <PaperButton variant="ghost" onClick={() => setSkipOpen(false)}>
-              取消
-            </PaperButton>
-            <PaperButton
-              variant="danger"
-              onClick={() => {
-                setSkipOpen(false)
-                onDone(grid)
-              }}
-            >
-              确认
-            </PaperButton>
-          </>
-        }
-      >
-        <p style={{ margin: 0 }}>确认跳过当前单元？</p>
-      </PaperModal>
     </div>
   )
 }

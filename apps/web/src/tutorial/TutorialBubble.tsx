@@ -10,15 +10,11 @@ import { useLayoutEffect, useRef, useState } from 'react'
 export function TutorialBubble({
   text,
   onClick,
-  skipLabel,
-  onSkip,
   showHint = true,
   anchor = 'bottom',
 }: {
   text: string
   onClick: () => void
-  skipLabel: string
-  onSkip: () => void
   /** 仅纯文本步（点击推进）显示「点击继续」；等待游戏事件的条件步不显示（v0.3.1） */
   showHint?: boolean
   /** 锚点：底部（默认）／顶部（突显目标在输入栏/底部工具栏时上置，避免气泡遮挡） */
@@ -42,16 +38,16 @@ export function TutorialBubble({
     const w = el.offsetWidth
     const h = el.offsetHeight
     const portrait = stage.height > stage.width
-    // v0.3.9：竖版舞台在视口内居中留白（9:16）——气泡锚定舞台底部（fixed top 换算），
-    // 避免落在视口底部而舞台外的留白区；横版 stage=视口，bottom/right 直接可用
+    // v0.3.9：竖版舞台在视口内居中留白——气泡锚定舞台底部（fixed top 换算）；
+    // v0.3.11：横屏气泡水平居中、垂直偏下（不再贴右下角）
     const next =
       anchor === 'top'
         ? { left: stage.left + (stage.width - w) / 2, top: stage.top + 12 }
         : portrait
           ? { left: stage.left + (stage.width - w) / 2, top: stage.bottom - h - 12 }
-          : { right: 16, bottom: 64 }
+          : { left: stage.left + (stage.width - w) / 2, top: stage.bottom - h - 10 }
     const cur = posRef.current
-    if (cur && cur.left === next.left && cur.top === next.top && cur.right === next.right && cur.bottom === next.bottom) return
+    if (cur && cur.left === next.left && cur.top === next.top) return
     setPos(next)
   }
 
@@ -93,12 +89,6 @@ export function TutorialBubble({
       </div>
       <div className="tutorial-bubble__foot">
         {showHint ? <span className="tutorial-bubble__hint">点击继续</span> : null}
-        <button type="button" className="tutorial-bubble__skip" onClick={(e) => {
-          e.stopPropagation()
-          onSkip()
-        }}>
-          {skipLabel}
-        </button>
       </div>
     </div>
   )

@@ -255,9 +255,8 @@ export function TutorialBattle({ variant, fleet, onExitHome, onGoAdvanced }: Tut
   const [p3Open, setP3Open] = useState(false)
   const [p5Open, setP5Open] = useState(false)
   const [free, setFree] = useState(false)
-  const [skipOpen, setSkipOpen] = useState(false)
   // v0.3.2：弹窗（跳过确认 / P3 / P5）为遮罩豁免对象——打开时隐藏气泡与突显层、事件/点击不推进节点
-  const anyModalOpen = skipOpen || p3Open || p5Open
+  const anyModalOpen = p3Open || p5Open
   const [, tick] = useState(0)
   const runRef = useRef<RunState | null>(null) // null = 未开始（挂载后 begin 成功再启动）
   const lastEventRef = useRef<TutorialGameEvent | null>(null)
@@ -541,14 +540,7 @@ export function TutorialBattle({ variant, fleet, onExitHome, onGoAdvanced }: Tut
   const hlText = Array.isArray(node?.highlight) ? node.highlight.join(' ') : (node?.highlight ?? '')
   const bubbleAnchor =
     hlText.includes('.game__inputbar') || hlText.includes('.tutorial-confirm') ? 'top' : 'bottom'
-  const unitLabel = variant === 'basic' ? '对战基础' : '工具进阶'
 
-  /** 跳过确认（确认 = 视为完成：basic→P3 / advanced→P5） */
-  const confirmSkip = () => {
-    setSkipOpen(false)
-    if (variant === 'basic') setP3Open(true)
-    else setP5Open(true)
-  }
 
   if (startFailed) {
     return (
@@ -572,13 +564,6 @@ export function TutorialBattle({ variant, fleet, onExitHome, onGoAdvanced }: Tut
         hideSettlement={!free}
       />
 
-      {!free && !anyModalOpen ? (
-        <div className="tutorial-hud">
-          <button type="button" className="tutorial-bubble__skip" onClick={() => setSkipOpen(true)}>
-            跳过 · {unitLabel}
-          </button>
-        </div>
-      ) : null}
 
       {!anyModalOpen && (showBubble || highlight || bubbleDim) ? (
         <TutorialSpotlight target={highlight} dim={bubbleDim} />
@@ -590,29 +575,8 @@ export function TutorialBattle({ variant, fleet, onExitHome, onGoAdvanced }: Tut
           showHint={node!.kind === 'click'}
           anchor={bubbleAnchor}
           onClick={onBubbleClick}
-          skipLabel={`跳过 · ${unitLabel}`}
-          onSkip={() => setSkipOpen(true)}
         />
       ) : null}
-
-      {/* 跳过确认（ui-copy §4） */}
-      <PaperModal
-        open={skipOpen}
-        title="新手教程"
-        onClose={() => setSkipOpen(false)}
-        footer={
-          <>
-            <PaperButton variant="ghost" onClick={() => setSkipOpen(false)}>
-              取消
-            </PaperButton>
-            <PaperButton variant="danger" onClick={confirmSkip}>
-              确认
-            </PaperButton>
-          </>
-        }
-      >
-        <p style={{ margin: 0 }}>确认跳过当前单元？</p>
-      </PaperModal>
 
       {/* P3 基础完成弹窗（§5.5） */}
       <PaperModal

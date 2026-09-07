@@ -73,8 +73,7 @@
 .tutorial-bubble__foot {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
+  justify-content: center;
   margin-top: 8px;
 }
 .tutorial-bubble__hint {
@@ -82,34 +81,9 @@
   color: var(--ink-faint);
   letter-spacing: 0.08em;
 }
-.tutorial-bubble__skip {
-  border: 0;
-  background: none;
-  font: inherit;
-  font-size: 13px;
-  color: var(--ink-soft);
-  cursor: pointer;
-  padding: 3px 8px;
-  border-radius: var(--radius-sm);
-}
-.tutorial-bubble__skip:hover {
-  background: rgba(96, 78, 50, 0.1);
-  color: var(--ink);
-}
 
 /* ---------- 教程页通用（宿主内排版） ---------- */
 
-.tutorial-hud {
-  position: fixed;
-  top: 8px;
-  right: 10px;
-  z-index: 215;
-}
-.tutorial-hud__label {
-  font-size: 12px;
-  color: var(--ink-faint);
-  letter-spacing: 0.14em;
-}
 
 /* v0.3.1：顶部锚气泡（突显目标在底部输入栏/工具栏时上置，避免遮挡） */
 .tutorial-bubble--top::after {
@@ -150,7 +124,4 @@
   .tutorial-bubble__hint {
     font-size: 13.5px;
   }
-  .tutorial-bubble__skip {
-    font-size: 14.5px;
   }
-}
