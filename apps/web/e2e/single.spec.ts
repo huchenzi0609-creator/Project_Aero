@@ -36,6 +36,17 @@ test.describe('单机全流程', () => {
     const coordInput = page.getByLabel('报点坐标，如 A5')
     const result = page.locator('.result')
 
+    // ---- 横版三栏顺序（v0.3.10）：参考 < 空网格 < 我方 ----
+    if ((await page.evaluate(() => window.innerWidth)) > (await page.evaluate(() => window.innerHeight))) {
+      const ref = await page.locator('.game__ref').boundingBox()
+      const opp = await page.locator('.game__opp').boundingBox()
+      const mine = await page.locator('.game__mine').boundingBox()
+      if (ref && opp && mine) {
+        expect(ref.x < opp.x).toBe(true)
+        expect(opp.x < mine.x).toBe(true)
+      }
+    }
+
     // ---- 报点循环：双点报点（2/3）与输入框报点（1/3）交替，直至结算 ----
     // 用轮询等待回合翻转（非硬编码步长），兼容全量并行下的调度抖动
     const shotCoords = allCoords(10, 10)

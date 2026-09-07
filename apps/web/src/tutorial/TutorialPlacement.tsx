@@ -108,10 +108,16 @@ export function TutorialPlacement({
     else if (cur === 'rotateWait' && e.type === 'planeRotated') {
       thanksCauseRef.current = versionRef.current
       setPh('thanks')
+    } else if (cur === 'rotateHint' && e.type === 'planeRotated') {
+      // v0.3.10：T1-5 气泡显示期间即监听旋转——玩家未点气泡直接旋转也即时生效
+      thanksCauseRef.current = versionRef.current
+      setPh('thanks')
     }
   }
 
-  /** 气泡点击：click 节点推进；wait/thanks/detect 仅翻段不消失 */
+  /** 气泡点击：click 节点推进；wait/thanks/detect 仅翻段不消失。
+   *  rotateHint（T1-5 读毕）→ rotateWait（突显棋盘、等待旋转）；
+   *  玩家未点气泡直接旋转时已在 rotateHint 识别并推进到 thanks，点击入口自然跳过。 */
   const clickBubble = () => {
     const cur = phaseRef.current
     if (cur === 'welcome') setPh('tray')

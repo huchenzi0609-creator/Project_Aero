@@ -556,3 +556,47 @@
     opacity: 0;
   }
 }
+
+/* ============================================================
+   v0.3.10：横版相邻重排 + 竖版 3:5 舞台纵向收紧（M4 单机域）
+   ============================================================ */
+
+/* ---- 横版对局：参考 | 空网格(对手) | 我方 三栏内容宽紧邻，小间距，无居中留白隔断 ---- */
+.game--landscape .game__main {
+  grid-template-columns: auto auto auto;
+  justify-content: center;
+  gap: 10px;
+}
+.game--landscape .game__opp {
+  justify-self: stretch;
+}
+
+/* ---- 横版摆阵：托盘在网格左侧紧邻（去大间距/居中留白），网格紧随其后 ---- */
+.placement--landscape .placement__body {
+  justify-content: center;
+  gap: 8px;
+}
+.placement--landscape .placement__board-wrap {
+  flex: 0 1 auto;
+  justify-content: flex-start;
+  padding: 0;
+}
+
+/* ---- 竖版 3:5 新画幅（M3 并行改舞台比例）：纵向预算按更矮舞台收紧，
+   对局/摆阵元素完整显示无溢出（对 9:16 旧画幅同样成立，留有余量） ---- */
+.game--portrait {
+  padding: 6px 8px 2px;
+  gap: 2px;
+  /* 3:5 舞台内内容起点带页面内边距：压缩自身高度，保证底边不出舞台（无滚动收容） */
+  height: calc(100cqh - 9px);
+}
+/* 输入栏纵向再收紧 2px（3:5 更矮舞台） */
+.game--portrait .game__inputbar {
+  padding-top: 0;
+}
+.placement--portrait {
+  padding: 6px 10px 4px;
+  gap: 6px;
+  /* 3:5 舞台内起点偏移：压缩自身高度，底边不出舞台（无滚动收容） */
+  height: calc(100cqh - 6px);
+}

@@ -49,15 +49,15 @@ export interface Viewport {
   height: number
 }
 
-/** 舞台尺寸：竖版 9:16 画幅（min(vw, vh*9/16) × min(vh, vw*16/9)），横版即窗口尺寸 */
+/** 舞台尺寸：竖版 3:5 画幅（min(vw, vh*3/5) × min(vh, vw*5/3)），横版即窗口尺寸 */
 function computeStageSize(orientation: Orientation): Viewport {
   if (typeof window === 'undefined') return { width: 1280, height: 800 }
   const vw = window.innerWidth
   const vh = window.innerHeight
   if (orientation === 'landscape') return { width: vw, height: vh }
   return {
-    width: Math.min(vw, (vh * 9) / 16),
-    height: Math.min(vh, (vw * 16) / 9),
+    width: Math.min(vw, (vh * 3) / 5),
+    height: Math.min(vh, (vw * 5) / 3),
   }
 }
 

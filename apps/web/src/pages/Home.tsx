@@ -92,7 +92,7 @@ export function Home() {
         <button type="button" className="link-btn" onClick={() => setView('rules')}>
           规则说明
         </button>
-        <span className="home__version">v0.3.9</span>
+        <span className="home__version">v0.3.10</span>
       </footer>
 
     </div>

@@ -151,7 +151,7 @@ export function CustomConfig({ mode = 'single' }: { mode?: 'single' | 'online' }
 
   const previewShape = useDefault ? DEFAULT_PLANE_SHAPE : drawnShape
   const previewB = previewShape ? cellsBBox(previewShape.cells) : null
-  // 竖版 9:16 舞台内缩小预览格位（紧凑双栏），横版保持原尺寸
+  // 竖版 3:5 舞台内缩小预览格位（紧凑双栏），横版保持原尺寸
   const pCell = useEffectiveOrientation() === 'portrait' ? 16 : 30
 
   const checkItems = [

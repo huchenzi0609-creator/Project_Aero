@@ -49,15 +49,14 @@ try {
 
   // 等待双方状态同步（host 看到对手加入）
   await pageA.waitForTimeout(2500)
-  const statusA = await pageA.locator('.online__roomcode').locator('..').textContent().catch(() => '')
   const placementVisibleA = await pageA.locator('.online__roomcode').count()
   console.log('✓ 双方同房：A 房间页可见 =', placementVisibleA > 0, '| B 房间页可见 =', await pageB.locator('.online__roomcode').count() > 0)
   console.log('A 房间页片段:', (await pageA.locator('.onlinePlacement, .page').first().textContent().catch(() => '')).replace(/\s+/g, ' ').slice(0, 120))
   console.log('B 房间页片段:', (await pageB.locator('.onlinePlacement, .page').first().textContent().catch(() => '')).replace(/\s+/g, ' ').slice(0, 120))
 } catch (e) {
   console.error('✗ 联机链路验证失败:', e.message)
-  try { console.log('A 页面快照:', (await pageA.locator('body').textContent()).replace(/\s+/g, ' ').slice(0, 200)) } catch {}
-  try { console.log('B 页面快照:', (await pageB.locator('body').textContent()).replace(/\s+/g, ' ').slice(0, 200)) } catch {}
+  try { console.log('A 页面快照:', (await pageA.locator('body').textContent()).replace(/\s+/g, ' ').slice(0, 200)) } catch { /* 快照失败不阻断退出 */ }
+  try { console.log('B 页面快照:', (await pageB.locator('body').textContent()).replace(/\s+/g, ' ').slice(0, 200)) } catch { /* 快照失败不阻断退出 */ }
   process.exitCode = 1
 }
 

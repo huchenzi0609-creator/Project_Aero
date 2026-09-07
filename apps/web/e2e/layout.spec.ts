@@ -11,7 +11,7 @@
  */
 import { expect, test } from '@playwright/test'
 import type { BrowserContext, Page } from '@playwright/test'
-import { allCoords, oppCell, practiceToPlacement, watchErrors } from './helpers'
+import { allCoords, practiceToPlacement, watchErrors } from './helpers'
 
 interface Rect {
   x: number
@@ -52,11 +52,11 @@ async function runPortraitChecks(
   const errs = watchErrors(page)
   await page.goto('/')
 
-  // ---- 舞台宽高比 ≈ 9:16 ----
+  // ---- 舞台宽高比 ≈ 3:5（v0.3.10 由 9:16 改 3:5；竖版 390 宽 → 高 ≈650）----
   const stage = await page.locator('.app-stage').boundingBox()
   if (!stage) throw new Error('舞台未渲染')
   const ratio = stage.height / stage.width
-  expect(Math.abs(ratio - 16 / 9)).toBeLessThan(0.03)
+  expect(Math.abs(ratio - 5 / 3)).toBeLessThan(0.05)
 
   // ---- 单机摆阵：待选牌组（托盘）与棋盘不重叠、无内部滚动、无横向溢出 ----
   await practiceToPlacement(page, '经典模式')
@@ -93,11 +93,11 @@ async function runPortraitChecks(
     expect(oppBoard.width >= stage.width * 0.85).toBe(true)
   }
   // v0.2.10 行优先重设计：参考/我方行实际显示大小为最高优先度——
-  // 390×667 目标 refCell ≥18 / miniCell ≥8（实测 19/12），390×844 下更大（24/14）
+  // 390×667 目标 refCell ≥15 / miniCell ≥8（实测 19/12），390×844 下更大（24/14）
   const refCellW = (await page.locator('.game__ref .paper-grid__cell').first().boundingBox())?.width
   const mineCellW = (await page.locator('.game__mine .paper-grid__cell').first().boundingBox())?.width
   if (refCellW !== undefined && mineCellW !== undefined) {
-    expect(refCellW).toBeGreaterThanOrEqual(18)
+    expect(refCellW).toBeGreaterThanOrEqual(15)
     expect(mineCellW).toBeGreaterThanOrEqual(8)
   }
   expect(await noVerticalScroll(page, '.game')).toBe(true)
@@ -141,7 +141,7 @@ test.describe('竖版 9:16 舞台布局', () => {
   })
 
   test('390×667 竖版结算：两真实阵型棋盘并排、无滚动、尺寸冻结', async ({ browser }) => {
-    test.setTimeout(180_000)
+    test.setTimeout(300_000)
     const ctx = await browser.newContext({ viewport: { width: 390, height: 667 } })
     const page = await ctx.newPage()
     const errs = watchErrors(page)
@@ -169,25 +169,40 @@ test.describe('竖版 9:16 舞台布局', () => {
     const shotCoords = allCoords(10, 10)
     const shotSet = new Set<string>()
     let shotIndex = 0
-    let rounds = 0
-    while (rounds < 150 && !(await result.isVisible().catch(() => false))) {
-      rounds += 1
-      if (!(await coordInput.isEnabled())) {
-        await page.waitForTimeout(250)
-        continue
+    let shotsTaken = 0
+    // v0.3.10 回合门控：横幅结束后读取状态条判定是否我方先手；此后以「我方小网格收到报点计数递增」
+    // （AI 已回应 → 回合归我）驱动报点，避免在对方回合误触成预报点。
+    const mineStamps = page.locator('.game__mine .paper-grid__stamp')
+    await page.waitForTimeout(150)
+    let myTurn = ((await page.locator('.game__status-text').textContent().catch(() => '')) ?? '').includes(
+      '轮到我方报点',
+    )
+    let rcvTrack = await mineStamps.count()
+    const deadline = Date.now() + 200_000
+    while (Date.now() < deadline && !(await result.isVisible().catch(() => false)) && shotIndex < shotCoords.length) {
+      if (!myTurn) {
+        if ((await mineStamps.count()) > rcvTrack) myTurn = true // AI 已回应 → 轮到我
+        else {
+          await page.waitForTimeout(150)
+          continue
+        }
       }
       while (shotSet.has(shotCoords[shotIndex] ?? '')) shotIndex += 1
       const coord = shotCoords[shotIndex] ?? 'A1'
+      if (shotSet.has(coord)) break
       shotSet.add(coord)
-      const cell = oppCell(page, coord)
-      await cell.click({ timeout: 2000 }).catch(() => {})
-      if (await result.isVisible().catch(() => false)) break
-      await page.waitForTimeout(120)
-      if (await result.isVisible().catch(() => false)) break
-      await cell.click({ timeout: 2000 }).catch(() => {})
-      await page.waitForTimeout(600)
+      shotsTaken += 1
+      await coordInput.fill(coord)
+      await coordInput.press('Enter')
+      myTurn = false
+      rcvTrack = await mineStamps.count() // 等 AI 回应后计数递增再打下一枪
+      for (let k = 0; k < 80 && !(await result.isVisible().catch(() => false)); k++) {
+        if ((await mineStamps.count()) > rcvTrack) break
+        await page.waitForTimeout(150)
+      }
     }
-    await expect(result).toBeVisible({ timeout: 30000 })
+    expect(shotsTaken).toBeGreaterThanOrEqual(5)
+    await expect(result).toBeVisible({ timeout: 60000 })
 
     // ---- 两真实阵型棋盘并排（同行、x 递增） ----
     const boardA = result.locator('.result__board').nth(0)

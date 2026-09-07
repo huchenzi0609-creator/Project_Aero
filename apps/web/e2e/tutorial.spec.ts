@@ -271,7 +271,9 @@ test.describe('新手教程', () => {
     await clickBubble(page) // a3（双目标）
     await expect(bubble(page)).toContainText('并且，这里的飞机也可以拖到空网格里。试试看！')
     await expect(spotlight(page)).toHaveCount(1)
-    await expect.poll(() => spotlightHoles(page), { timeout: 8000 }).toBe(2)
+    // a3 双目标（参考网格 + 空网格）：svg 单层保持；v0.3.10 洞矩形经 mergeHoleRects 合并，
+    // 目标邻近时洞数不恒为 2 → 以 ≥1 断言（单层多洞机制由 svg 存在性验证）
+    await expect.poll(() => spotlightHoles(page), { timeout: 8000 }).toBeGreaterThanOrEqual(1)
 
     const refPlane = page.locator('.game__ref .paper-grid__plane')
     const oppBoard = page.locator('.game__opp .paper-grid__board')

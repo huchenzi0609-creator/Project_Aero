@@ -18,9 +18,9 @@ const DEMO_SHOTS: Shot[] = [
 export function Rules() {
   const setView = useAppStore((s) => s.setView)
   const orientation = useEffectiveOrientation()
-  // 竖版 9:16 舞台内示意图缩小格位（紧凑双栏排版），横版保持原尺寸
-  const cellA = orientation === 'portrait' ? 7 : 26
-  const cellB = orientation === 'portrait' ? 6 : 24
+  // 竖版 3:5 舞台内示意图缩小格位（紧凑双栏；舞台变宽，格位较 9:16 时代略放大），横版保持原尺寸
+  const cellA = orientation === 'portrait' ? 9 : 26
+  const cellB = orientation === 'portrait' ? 8 : 24
 
   return (
     <div className="page rules">

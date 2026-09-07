@@ -134,3 +134,23 @@
 .tutorial-spotlight--dim {
   background: rgba(58, 46, 28, 0.4);
 }
+
+/* ============ v0.3.10：横屏气泡放大（适配横屏阅读；竖版保持现状） ============
+   横版（舞台=全窗口）下增大字号/内边距/最大宽度，仍锚定参考网格下方、不遮挡目标；
+   竖版不设 → 继承基础样式。舞台比例自适应（气泡按 .app-stage 底部定位）。 */
+@media (orientation: landscape) {
+  .tutorial-bubble {
+    max-width: min(68vw, 58ch);
+    padding: 16px 22px 10px;
+  }
+  .tutorial-bubble__text {
+    font-size: 18px;
+    line-height: 1.55;
+  }
+  .tutorial-bubble__hint {
+    font-size: 13.5px;
+  }
+  .tutorial-bubble__skip {
+    font-size: 14.5px;
+  }
+}
