@@ -1,6 +1,6 @@
 /**
- * 公网部署冒烟（v0.3.9 流程）：
- *   1) 首页加载 + 版本角标校验（.home__version，期望版本可由第 3 参传入，默认 v0.3.9）
+ * 公网部署冒烟（v0.3.11 流程）：
+ *   1) 首页加载 + 版本角标校验（.home__version，期望版本可由第 3 参传入，默认 v0.3.11）
  *   2) 练习模式：四子模式卡片 → 经典 → 中型 15×15 → 开始摆阵 → 摆阵页 + 随机摆阵
  *   3) 对战模式：菜单（开始匹配 / 创建房间 / 加入已有对局）
  *   4) 新手教程：入口面板 → 开始教程 → 弹窗（含关闭按钮）
@@ -10,7 +10,7 @@
 import { chromium } from '@playwright/test'
 
 const base = process.argv[2] ?? 'http://116.62.121.70:8080/beta'
-const expectVersion = process.argv[3] ?? 'v0.3.9'
+const expectVersion = process.argv[3] ?? 'v0.3.11'
 const exe =
   process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE ??
   '/Users/huchenzi/Library/Caches/ms-playwright/chromium-1234/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing'

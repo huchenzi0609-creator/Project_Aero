@@ -18,15 +18,15 @@
 | 项 | 位置/说明 |
 |---|---|
 | 根通道 `/` | `/opt/aero-old`（**v0.2.10-alpha**；由 `/opt/aero.bak.v0210` 克隆，node_modules 复用）；PM2 **`aero-server`** :3001，DATA_DIR=`/opt/aero-data`（游客数据连续性）。**本次部署不动** |
-| beta 通道 `/beta/` | `/opt/aero-beta`（**v0.3.9**，2026-09-07 由 v0.3.7-alpha 升级；dist 为 `vite build --base=/beta/` 产物）；PM2 **`aero-server-beta`** :3002，DATA_DIR=`/opt/aero-data-beta`（2026-09-06 从主库种子，隔离增长） |
+| beta 通道 `/beta/` | `/opt/aero-beta`（**v0.3.11**，2026-09-07 由 v0.3.9 升级；dist 为 `vite build --base=/beta/` 产物）；PM2 **`aero-server-beta`** :3002，DATA_DIR=`/opt/aero-data-beta`（2026-09-06 从主库种子，隔离增长） |
 | 双实例 PM2 配置 | `/home/admin/ecosystem.config.cjs`（两个 app；**文件名必须是 ecosystem.config.cjs 才被 PM2 识别为多 app 配置**，见 §6 坑 8）；`pm2 save` 已含两实例 |
 | 数据库 | 主库 `/opt/aero-data/aero.db`（根通道）；beta 独立库 `/opt/aero-data-beta/aero.db` |
-| 历史备份/回滚点 | 代码：`/opt/aero.bak.v0210`（v0.2.10 整树）、`/opt/aero-beta.bak.v037alpha`（v0.3.7-alpha 整树，**beta 回滚点**）；`/home/admin/backup/`：`aero-v037-base-dist-2026-09-06-2326`（base=/ v0.3.7 dist）、`aero-beta-predeploy-v039-2026-09-07-0354.db`（beta DB 快照）；nginx 旧配置 `/etc/nginx/conf.d/feijisha.conf.bak-dual-2026-09-06-2328` |
+| 历史备份/回滚点 | 代码：`/opt/aero.bak.v0210`（v0.2.10 整树）、`/opt/aero-beta.bak.v037alpha`（v0.3.7-alpha）、`/opt/aero-beta.bak.v039`（v0.3.9，**当前 beta 回滚点**）；`/home/admin/backup/`：`aero-v037-base-dist-2026-09-06-2326`（base=/ v0.3.7 dist）、`aero-beta-predeploy-v0311-2026-09-07-2251.db`（beta DB 快照）等；nginx 旧配置 `/etc/nginx/conf.d/feijisha.conf.bak-dual-2026-09-06-2328` |
 | Nginx | `/etc/nginx/conf.d/feijisha.conf`（listen 80+8080）：根通道 root=`/opt/aero-old/apps/web/dist` + `/api/`、`/socket.io/`、`/health` 反代 3001；`/beta/` 静态 alias `/opt/aero-beta/apps/web/dist/`（SPA try_files）+ `/beta/api/`、`/beta/socket.io/`（去前缀）、`/beta/health` 反代 3002；`= /beta` → 301 `/beta/`。**分流结构部署后未变** |
 | 开机自启 | systemd `aero.service`（admin 用户执行 `pm2 resurrect`，已 enable；**仍未经真实整机重启实测**——dump 现含两实例，见 §4 重启条目） |
 | 环境 | Node v24.20.0（`/opt/node`，软链 `/usr/local/bin/{node,npm,npx}`）、pnpm 11.24、PM2 7（npm 全局，registry=registry.npmmirror.com）、nginx 1.24（dnf `--disableexcludes=all`）、git 2.43；SELinux **disabled**；iptables/nftables 全 ACCEPT |
 
-**冒烟脚本分工（本机）**：`scripts/pub-smoke.mjs <base> [版本]`（主流程/默认 beta v0.3.9）、`scripts/pub-smoke-v0210.mjs <base>`（根通道 v0.2.10）、`scripts/e2e-beta-room.mjs <base>`（beta 联机建房+加入 E2E）。
+**冒烟脚本分工（本机）**：`scripts/pub-smoke.mjs <base> [版本]`（主流程/默认 beta v0.3.11）、`scripts/pub-smoke-v0210.mjs <base>`（根通道 v0.2.10）、`scripts/e2e-beta-room.mjs <base>`（beta 联机建房+加入 E2E）、`scripts/spot-v0311.mjs <base>`（v0.3.11 新改动抽查：无跳过按钮/横屏气泡/竖屏 cell 尺寸）。
 
 ## 3. 域名与 ICP 备案（关键）
 
