@@ -26,7 +26,9 @@
 | 开机自启 | systemd `aero.service`（admin 用户执行 `pm2 resurrect`，已 enable；**仍未经真实整机重启实测**——dump 现含两实例，见 §4 重启条目） |
 | 环境 | Node v24.20.0（`/opt/node`，软链 `/usr/local/bin/{node,npm,npx}`）、pnpm 11.24、PM2 7（npm 全局，registry=registry.npmmirror.com）、nginx 1.24（dnf `--disableexcludes=all`）、git 2.43；SELinux **disabled**；iptables/nftables 全 ACCEPT |
 
-**冒烟脚本分工（本机）**：`scripts/pub-smoke.mjs <base> [版本]`（主流程/默认 beta v0.3.11）、`scripts/pub-smoke-v0210.mjs <base>`（根通道 v0.2.10）、`scripts/e2e-beta-room.mjs <base>`（beta 联机建房+加入 E2E）、`scripts/spot-v0311.mjs <base>`（v0.3.11 新改动抽查：无跳过按钮/横屏气泡/竖屏 cell 尺寸）。
+**冒烟脚本分工（本机）**：`scripts/pub-smoke.mjs <base> [版本]`（主流程/默认 beta v0.3.12）、`scripts/pub-smoke-v0210.mjs <base>`（根通道 v0.2.10）、`scripts/e2e-beta-room.mjs <base>`（beta 联机建房+加入 E2E）、`scripts/spot-v0311.mjs <base>`（v0.3.11 新改动抽查）、`scripts/spot-icp.mjs`（ICP 备案合规断言：角标/备案号链接，覆盖 https 根+beta 与 8080 双路径）。
+
+**双通道 dist 直换流程（2026-09-08 ICP 合规验证，服务端代码未变时用）**：组长本地构建产物（如根 v0.2.10+备案 / beta v0.3.12，base 前缀须匹配）→ tar 传 /tmp → `sudo mv` 现 dist → `dist.bak-icp-$(date +%F)`（两通道各自备份）→ `sudo tar -xzf` 覆盖（保留 admin 属主）→ `pm2 restart aero-server aero-server-beta`（稳妥起见，无副作用）→ 验证角标/备案号（spot-icp.mjs）+ pub-smoke 双通道 + wss + e2e。备案号：**浙ICP备2026073891号**（首页底部居中链接 http://beian.miit.gov.cn/，target=_blank）。
 
 ## 3. 域名 / ICP / HTTPS（2026-09-08 已完成）
 
