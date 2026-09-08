@@ -102,15 +102,30 @@ test.describe('v0.3.0 经典回归', () => {
     // 着色工具存在
     await expect(page.locator('.coloring-stage__btn button')).toBeVisible()
 
-    // 首次报点 A1（双点式），回到我方回合后再次点 A1 → 被拒 toast
-    const input = page.getByLabel('报点坐标，如 A5')
-    await expect(input).toBeEnabled({ timeout: 10000 })
+    // 回合门控：状态条为「轮到我方报点」（我先行）或「对方报点…」（AI 已走完 → 轮到我）
+    // 才可报点；输入框全程可用（对方回合仍作预报点输入），不能作为回合信号。
+    const statusText = page.locator('.game__status-text')
+    const result = page.locator('.result')
+    const waitMyTurn = async (timeoutMs = 20_000) => {
+      const deadline = Date.now() + timeoutMs
+      while (Date.now() < deadline) {
+        if (await result.isVisible().catch(() => false)) return
+        const st = (await statusText.textContent().catch(() => '')) ?? ''
+        if (st.includes('轮到我方报点') || st.includes('对方报点')) return
+        await page.waitForTimeout(120)
+      }
+      throw new Error('等待我方回合超时')
+    }
+
+    // 首次报点 A1（双点式，须在真回合内 → 实枪而非预报点）
+    await waitMyTurn()
     await shootOnMyTurn(page, 'A1', new Set())
-    // 等 AI 走完回到我方回合；第二次选 A1：先点高亮、再点报点 → 客户端已报格拦截
-    await expect(input).toBeEnabled({ timeout: 10000 })
+    // 等 AI 走完（状态条回到「对方报点…」= AI 已回应、轮到己方）后，第二次点 A1：
+    // 先点高亮、再点报点 → 客户端已报格拦截
+    await waitMyTurn()
     const a1 = oppCell(page, 'A1')
     await a1.click({ timeout: 2000 }).catch(() => {})
-    if (!(await page.locator('.result').isVisible().catch(() => false))) {
+    if (!(await result.isVisible().catch(() => false))) {
       await page.waitForTimeout(120)
       await a1.click({ timeout: 2000 }).catch(() => {})
     }

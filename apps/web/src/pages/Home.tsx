@@ -92,7 +92,16 @@ export function Home() {
         <button type="button" className="link-btn" onClick={() => setView('rules')}>
           规则说明
         </button>
-        <span className="home__version">v0.3.11</span>
+        {/* 备案合规（全站常驻通道之一）：工信部备案号，底部居中 */}
+        <a
+          className="home__icp"
+          href="http://beian.miit.gov.cn/"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          浙ICP备2026073891号
+        </a>
+        <span className="home__version">v0.3.12</span>
       </footer>
 
     </div>

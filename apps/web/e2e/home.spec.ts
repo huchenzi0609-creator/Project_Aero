@@ -19,8 +19,24 @@ test.describe('主页', () => {
     await expect(page.getByRole('button', { name: '对战模式' })).toBeVisible()
     await expect(page.getByRole('button', { name: '设置' })).toBeVisible()
     await expect(page.getByRole('button', { name: '规则说明' })).toBeVisible()
-    // 版本角标 v0.3.11
-    await expect(page.locator('.home__version')).toHaveText('v0.3.11')
+    // 版本角标 v0.3.12
+    await expect(page.locator('.home__version')).toHaveText('v0.3.12')
+    // 备案合规：工信部备案号链接（横版默认视口）
+    const icp = page.locator('a.home__icp', { hasText: '浙ICP备2026073891号' })
+    await expect(icp).toBeVisible()
+    await expect(icp).toHaveAttribute('href', 'http://beian.miit.gov.cn/')
+    await expect(icp).toHaveAttribute('target', '_blank')
+    await expect(icp).toHaveAttribute('rel', /noopener/)
+    const icpBox = await icp.boundingBox()
+    const rulesBox = await page.getByRole('button', { name: '规则说明' }).boundingBox()
+    const verBox = await page.locator('.home__version').boundingBox()
+    if (icpBox && rulesBox && verBox) {
+      const disjoint = (a: { x: number; width: number }, b: { x: number; width: number }) =>
+        a.x + a.width <= b.x || b.x + b.width <= a.x
+      // 页脚元素同行不重叠（备案号与 规则说明/版本角标）
+      expect(disjoint(icpBox, verBox)).toBe(true)
+      expect(disjoint(icpBox, rulesBox)).toBe(true)
+    }
     // 新手教程位于练习模式之上（y 序）
     const tutorialY = await page.getByRole('button', { name: '新手教程' }).boundingBox()
     const practiceY = await page.getByRole('button', { name: '练习模式' }).boundingBox()
@@ -56,6 +72,8 @@ test.describe('主页', () => {
     await expect(page.locator('.home')).toHaveClass(/home--landscape/)
     await page.getByRole('button', { name: /切换为竖版/ }).click()
     await expect(page.locator('.home')).toHaveClass(/home--portrait/)
+    // 竖版视口下备案号仍可见
+    await expect(page.locator('a.home__icp', { hasText: '浙ICP备2026073891号' })).toBeVisible()
     await expect(page.getByRole('button', { name: /切换为横版/ })).toBeVisible()
     await page.getByRole('button', { name: '恢复自动' }).click()
     await expect(page.locator('.home')).toHaveClass(/home--landscape/)

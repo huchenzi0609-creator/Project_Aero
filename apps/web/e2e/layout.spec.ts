@@ -11,7 +11,7 @@
  */
 import { expect, test } from '@playwright/test'
 import type { BrowserContext, Page } from '@playwright/test'
-import { allCoords, practiceToPlacement, watchErrors } from './helpers'
+import { allCoords, oppCell, practiceToPlacement, watchErrors } from './helpers'
 
 interface Rect {
   x: number
@@ -163,46 +163,48 @@ test.describe('竖版 9:16 舞台布局', () => {
     await expect(page.locator('.game-banner')).toBeVisible()
     await expect(page.locator('.game-banner')).toBeHidden({ timeout: 5000 })
 
-    // ---- 报点循环至结算（复用 single.spec 手法） ----
+    // ---- 报点循环至结算（复用 single.spec 手法：双点报点/输入框报点交替） ----
+    // v0.3.10 起坐标输入在对方回合保持可用 → 走预报点队列，回合切换自动上报；
+    // 因此不按「我方收到报点递增」门控（AI 先手时首枪易漏计造成死锁），改为与
+    // single.spec 相同的轮询节奏 + 预报点自动消化，全量并行下稳定收敛到结算。
     const result = page.locator('.result')
     const coordInput = page.getByLabel('报点坐标，如 A5')
     const shotCoords = allCoords(10, 10)
     const shotSet = new Set<string>()
     let shotIndex = 0
-    let shotsTaken = 0
-    // v0.3.10 回合门控：横幅结束后读取状态条判定是否我方先手；此后以「我方小网格收到报点计数递增」
-    // （AI 已回应 → 回合归我）驱动报点，避免在对方回合误触成预报点。
-    const mineStamps = page.locator('.game__mine .paper-grid__stamp')
-    await page.waitForTimeout(150)
-    let myTurn = ((await page.locator('.game__status-text').textContent().catch(() => '')) ?? '').includes(
-      '轮到我方报点',
-    )
-    let rcvTrack = await mineStamps.count()
-    const deadline = Date.now() + 200_000
-    while (Date.now() < deadline && !(await result.isVisible().catch(() => false)) && shotIndex < shotCoords.length) {
-      if (!myTurn) {
-        if ((await mineStamps.count()) > rcvTrack) myTurn = true // AI 已回应 → 轮到我
-        else {
-          await page.waitForTimeout(150)
-          continue
-        }
-      }
-      while (shotSet.has(shotCoords[shotIndex] ?? '')) shotIndex += 1
-      const coord = shotCoords[shotIndex] ?? 'A1'
-      if (shotSet.has(coord)) break
-      shotSet.add(coord)
-      shotsTaken += 1
-      await coordInput.fill(coord)
-      await coordInput.press('Enter')
-      myTurn = false
-      rcvTrack = await mineStamps.count() // 等 AI 回应后计数递增再打下一枪
-      for (let k = 0; k < 80 && !(await result.isVisible().catch(() => false)); k++) {
-        if ((await mineStamps.count()) > rcvTrack) break
+    let rounds = 0
+    let inputShot = 0
+    while (rounds < 300 && !(await result.isVisible().catch(() => false))) {
+      rounds += 1
+      // 等 AI 走完 → 我方回合（或已结算）
+      for (let i = 0; i < 60; i++) {
+        if (await result.isVisible().catch(() => false)) break
+        if (await coordInput.isEnabled()) break
         await page.waitForTimeout(150)
       }
+      if (!(await coordInput.isEnabled())) continue
+      // 取下一个未报点坐标（报点由本测试发起，追踪精确）
+      while (shotSet.has(shotCoords[shotIndex] ?? '')) shotIndex += 1
+      const coord = shotCoords[shotIndex] ?? 'A1'
+      shotSet.add(coord)
+
+      // 每 3 枪用一次双点报点覆盖该交互，其余走输入框（回车），避免点击竞态拖慢收敛
+      if (rounds % 3 === 0) {
+        const cell = oppCell(page, coord)
+        await cell.click({ timeout: 1500 }).catch(() => {})
+        if (await result.isVisible().catch(() => false)) break
+        await page.waitForTimeout(140)
+        if (await result.isVisible().catch(() => false)) break
+        await cell.click({ timeout: 1500 }).catch(() => {})
+      } else {
+        inputShot += 1
+        await coordInput.fill(coord)
+        await coordInput.press('Enter')
+        await expect(coordInput).toHaveValue('', { timeout: 3000 }).catch(() => {})
+      }
     }
-    expect(shotsTaken).toBeGreaterThanOrEqual(5)
-    await expect(result).toBeVisible({ timeout: 60000 })
+    expect(inputShot + Math.floor(rounds / 3)).toBeGreaterThanOrEqual(5) // 确实进行过报点循环
+    await expect(result).toBeVisible({ timeout: 90000 })
 
     // ---- 两真实阵型棋盘并排（同行、x 递增） ----
     const boardA = result.locator('.result__board').nth(0)

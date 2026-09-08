@@ -136,15 +136,36 @@
 .home--portrait .home__menu {
   width: min(300px, 84cqw);
 }
+/* 底部页脚：三列网格（左：规则说明 / 中：备案号居中 / 右：版本角标），
+   备案号为常驻合规元素，横竖版均水平居中、不与两侧元素重叠 */
 .home__foot {
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
   align-items: center;
+  gap: 8px;
   margin-top: 14px;
   font-size: 13px;
   color: var(--ink-faint);
 }
+.home__foot .link-btn {
+  justify-self: start;
+}
+.home__icp {
+  justify-self: center;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--ink-soft);
+  text-decoration: none;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+.home__icp:hover {
+  color: var(--ink);
+  text-decoration: underline dashed 1px;
+  text-underline-offset: 3px;
+}
 .home__version {
+  justify-self: end;
   letter-spacing: 0.1em;
 }
 

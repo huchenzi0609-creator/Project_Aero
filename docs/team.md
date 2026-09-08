@@ -28,8 +28,9 @@
 
 1. 全仓 package.json 版本号一致（根 + apps/web + apps/server + packages/game-core + packages/shared）。
 2. **Home 页面右下角版本角标与版本号一致**（v0.3.4 起；Home.tsx 角标归 M3 维护，发版时组长派 M3 同步或自查确认）。
-3. CHANGELOG 定版（[x.y.z] - 日期）+ README/design 同步。
-4. check:ci 全绿 + e2e 全绿后打 annotated tag；不 push。
+3. **首页底部居中备案号「浙ICP备2026073891号」与工信部链接常驻**（v0.3.12 起，合规必查；所有版本与双通道部署都必须包含）。
+4. CHANGELOG 定版（[x.y.z] - 日期）+ README/design 同步。
+5. check:ci 全绿 + e2e 全绿后打 annotated tag；不 push。
 
 **M4 与 M8 的边界（明确版）**：M4 = 对局本身的运行逻辑（GameScreen 对局流程、单机 wiring、对局 bug）；M8 = 教程驱动层（教程步骤机/气泡/遮罩/入口，以及为教程目的在 GameScreen 上增加的**最小、可选的 props/事件**）。教程文件里引用 GameScreen 的功能一律只读使用；GameScreen 内部行为变更归 M4（或组长指派的修复人），M8 只在确需时提出并在派单中经组长授权。
 
