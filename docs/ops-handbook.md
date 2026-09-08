@@ -21,26 +21,24 @@
 | beta 通道 `/beta/` | `/opt/aero-beta`（**v0.3.11**，2026-09-07 由 v0.3.9 升级；dist 为 `vite build --base=/beta/` 产物）；PM2 **`aero-server-beta`** :3002，DATA_DIR=`/opt/aero-data-beta`（2026-09-06 从主库种子，隔离增长） |
 | 双实例 PM2 配置 | `/home/admin/ecosystem.config.cjs`（两个 app；**文件名必须是 ecosystem.config.cjs 才被 PM2 识别为多 app 配置**，见 §6 坑 8）；`pm2 save` 已含两实例 |
 | 数据库 | 主库 `/opt/aero-data/aero.db`（根通道）；beta 独立库 `/opt/aero-data-beta/aero.db` |
-| 历史备份/回滚点 | 代码：`/opt/aero.bak.v0210`（v0.2.10 整树）、`/opt/aero-beta.bak.v037alpha`（v0.3.7-alpha）、`/opt/aero-beta.bak.v039`（v0.3.9，**当前 beta 回滚点**）；`/home/admin/backup/`：`aero-v037-base-dist-2026-09-06-2326`（base=/ v0.3.7 dist）、`aero-beta-predeploy-v0311-2026-09-07-2251.db`（beta DB 快照）等；nginx 旧配置 `/etc/nginx/conf.d/feijisha.conf.bak-dual-2026-09-06-2328` |
-| Nginx | `/etc/nginx/conf.d/feijisha.conf`（listen 80+8080）：根通道 root=`/opt/aero-old/apps/web/dist` + `/api/`、`/socket.io/`、`/health` 反代 3001；`/beta/` 静态 alias `/opt/aero-beta/apps/web/dist/`（SPA try_files）+ `/beta/api/`、`/beta/socket.io/`（去前缀）、`/beta/health` 反代 3002；`= /beta` → 301 `/beta/`。**分流结构部署后未变** |
+| 历史备份/回滚点 | 代码：`/opt/aero.bak.v0210`（v0.2.10 整树）、`/opt/aero-beta.bak.v037alpha`（v0.3.7-alpha）、`/opt/aero-beta.bak.v039`（v0.3.9，**当前 beta 回滚点**）；`/home/admin/backup/`：`aero-v037-base-dist-2026-09-06-2326`（base=/ v0.3.7 dist）、`aero-beta-predeploy-v0311-2026-09-07-2251.db`（beta DB 快照）等；nginx 旧配置 `/etc/nginx/conf.d/feijisha.conf.bak-dual-2026-09-06-2328`、`feijisha.conf.bak-https-2026-09-08-1808`（HTTPS 改造前） |
+| Nginx | `/etc/nginx/conf.d/feijisha.conf`（**三块监听：443 ssl http2 / 80→301 / 8080 备用**，双通道分流一致）：根通道 root=`/opt/aero-old/apps/web/dist` + `/api/`、`/socket.io/`、`/health` 反代 3001；`/beta/` 静态 alias `/opt/aero-beta/apps/web/dist/`（SPA try_files）+ `/beta/api/`、`/beta/socket.io/`（去前缀）、`/beta/health` 反代 3002；`= /beta` → 301 `/beta/`；80 保留 `/.well-known/acme-challenge/` 豁免 |
 | 开机自启 | systemd `aero.service`（admin 用户执行 `pm2 resurrect`，已 enable；**仍未经真实整机重启实测**——dump 现含两实例，见 §4 重启条目） |
 | 环境 | Node v24.20.0（`/opt/node`，软链 `/usr/local/bin/{node,npm,npx}`）、pnpm 11.24、PM2 7（npm 全局，registry=registry.npmmirror.com）、nginx 1.24（dnf `--disableexcludes=all`）、git 2.43；SELinux **disabled**；iptables/nftables 全 ACCEPT |
 
 **冒烟脚本分工（本机）**：`scripts/pub-smoke.mjs <base> [版本]`（主流程/默认 beta v0.3.11）、`scripts/pub-smoke-v0210.mjs <base>`（根通道 v0.2.10）、`scripts/e2e-beta-room.mjs <base>`（beta 联机建房+加入 E2E）、`scripts/spot-v0311.mjs <base>`（v0.3.11 新改动抽查：无跳过按钮/横屏气泡/竖屏 cell 尺寸）。
 
-## 3. 域名与 ICP 备案（关键）
+## 3. 域名 / ICP / HTTPS（2026-09-08 已完成）
 
-- 域名 `feijisha.online`，A 记录 → 116.62.121.70（已生效）。
-- **ICP 备案已申请、未通过**。未通过期间，阿里云对**该域名的所有端口**HTTP 访问返回 403 备案拦截页（按 Host 拦截，与端口无关）。
-- **备案通过前可玩地址**：`http://116.62.121.70:8080`（IP 直连不受拦截）。80/443 在阿里云安全组已放行（含 8080），"443 不通"是备案拦截而非未放行。
-- **备案通过后待办（顺序执行）**：
-  1. 确认 `curl http://feijisha.online/` 不再是 403 备案页；
-  2. 申请证书（acme.sh 已装，`~/.acme.sh/acme.sh`，默认 CA=letsencrypt）：
-     `~/.acme.sh/acme.sh --issue -d feijisha.online -d www.feijisha.online -w /opt/aero/apps/web/dist`
-     （若 www 无 A 记录，先只 `-d feijisha.online`）
-  3. 安装证书：`--install-cert` 到 `/etc/nginx/certs`（key/fullchain，权限 600/644）；
-  4. nginx 加 `listen 443 ssl; ssl_certificate …; ssl_certificate_key …;` + `server` 80 块 `return 301 https://$host$request_uri;`（8080 保留），`nginx -t && systemctl reload nginx`；
-  5. 验收：`curl https://feijisha.online/health`、`pnpm exec node scripts/pub-smoke.mjs https://feijisha.online`。
+- 域名 `feijisha.online` 与 `www.feijisha.online`，A 记录 → 116.62.121.70（www 与主域均有记录）。
+- **ICP 备案 2026-09-08 已通过**，域名 HTTP 不再被阿里云 403 拦截。
+- **HTTPS 已启用（2026-09-08）**：证书 Let's Encrypt（acme.sh v3.1.3，Gitee 安装，默认 CA letsencrypt，账号 admin@feijisha.online），SAN = feijisha.online + www.feijisha.online；有效期 2026-09-08 → 2026-12-07，**续期由 admin crontab 每日 06:02 acme.sh --cron 自动执行**（webroot http-01 → /opt/aero-old/apps/web/dist，nginx 80 已保留 `/.well-known/acme-challenge/` 豁免不跳转）。
+- **nginx 三块监听**（/etc/nginx/conf.d/feijisha.conf）：
+  - `80`：全量 `return 301 https://$host$request_uri`（含 /beta 路径保留）；
+  - `443 ssl http2`：双通道分流与 8080 完全一致（根 → 3001，/beta 静态+反代 → 3002，/socket.io 与 /beta/socket.io 均走 TLS/wss）；
+  - `8080`：IP 直连 HTTP 备用通道，保持原样不跳转（默认行为，如需 8080 也 301 需组长确认）。
+- 证书文件：`/etc/nginx/certs/feijisha.online.pem`（644）/ `feijisha.online.key`（600），目录 admin 所有（便于 acme 续期写入）。签发：`~/.acme.sh/acme.sh --issue -d feijisha.online -d www.feijisha.online -w /opt/aero-old/apps/web/dist`；安装：`--install-cert -d feijisha.online --ecc --key-file … --fullchain-file …`。
+- 验收基线：`https://feijisha.online/`（角标 v0.2.10）、`https://feijisha.online/beta`（角标 v0.3.11）、`pub-smoke` 双通道、wss 握手、e2e-beta-room——2026-09-08 已全部通过；`http://IP:8080` 回归不受影响。
 
 ## 4. 日常运维
 
