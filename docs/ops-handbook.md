@@ -40,6 +40,7 @@
   - `443 ssl http2`：双通道分流与 8080 完全一致（根 → 3001，/beta 静态+反代 → 3002，/socket.io 与 /beta/socket.io 均走 TLS/wss）；
   - `8080`：IP 直连 HTTP 备用通道，保持原样不跳转（默认行为，如需 8080 也 301 需组长确认）。
 - 证书文件：`/etc/nginx/certs/feijisha.online.pem`（644）/ `feijisha.online.key`（600），目录 admin 所有（便于 acme 续期写入）。签发：`~/.acme.sh/acme.sh --issue -d feijisha.online -d www.feijisha.online -w /opt/aero-old/apps/web/dist`；安装：`--install-cert -d feijisha.online --ecc --key-file … --fullchain-file …`。
+- **域名验证文件（永久服务，2026-09-09）**：`1c356c2439c72f64ec2771bac34e4931.txt`（40B 无尾换行，内容 `b83a7419dcd0d41e635db27a1b8c16081de33fdc`）存于 **`/opt/aero-static-verify/`**（admin 属主，独立于 dist，不随版本/ICP 直换丢失）。nginx 三个 server 块（80/443/8080）各配精确 location：`location = /1c356c2439c72f64ec2771bac34e4931.txt { root /opt/aero-static-verify; }`（80 块置于 301 之前，http 直接返回 200 不跳转）。**灾难恢复**：本地仓库 `Aero/compliance/1c356c2439c72f64ec2771bac34e4931.txt` 有留档（md5 f4c7c03e…），恢复 = 拷回 /opt/aero-static-verify/ + 确认 nginx location 在。nginx 配置备份：`feijisha.conf.bak-verify-2026-09-09-1644`。
 - 验收基线：`https://feijisha.online/`（角标 v0.2.10）、`https://feijisha.online/beta`（角标 v0.3.11）、`pub-smoke` 双通道、wss 握手、e2e-beta-room——2026-09-08 已全部通过；`http://IP:8080` 回归不受影响。
 
 ## 4. 日常运维
