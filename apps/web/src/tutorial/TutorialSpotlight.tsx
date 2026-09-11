@@ -12,6 +12,7 @@
  */
 import { useEffect, useRef, useState } from 'react'
 import { mergeHoleRects } from './spotlightMerge'
+import { useAnyModalOpen } from './useAnyModalOpen'
 
 export interface TargetRect {
   left: number
@@ -44,6 +45,8 @@ export function TutorialSpotlight({
   const [rects, setRects] = useState<TargetRect[]>([])
   const targetsRef = useRef(targets)
   targetsRef.current = targets
+  /** 纵深防护（v0.3.13 加固）：任何弹窗打开期间都不渲染阻断带/暗层，弹窗永不被教程层拦截 */
+  const modalOpen = useAnyModalOpen()
 
   useEffect(() => {
     const measure = () => {
@@ -75,9 +78,17 @@ export function TutorialSpotlight({
     }
   }, [target])
 
-  // dim：整屏暗层（无洞）
+  // 弹窗打开期间一律不渲染（阻断带/暗层都不出现），弹窗按钮可 100% 真实点击
+  if (modalOpen) return null
+
+  // dim：整屏暗层（无洞）——模态语义：整屏阻断交互（气泡/退出按钮 z 更高，仍可点）
   if (dim) {
-    return <div className="tutorial-spotlight tutorial-spotlight--dim" aria-hidden="true" />
+    return (
+      <>
+        <div className="tutorial-spotlight tutorial-spotlight--dim" aria-hidden="true" />
+        <div className="tutorial-block" aria-hidden="true" />
+      </>
+    )
   }
   if (targets.length === 0 || rects.length === 0) return null
 
@@ -99,9 +110,44 @@ export function TutorialSpotlight({
     .map((r) => `M${r.left} ${r.top} H${r.left + r.width} V${r.top + r.height} H${r.left} Z`)
     .join(' ')
 
+  // 模态交互阻断（v0.3.13）：除突显区外不可点/不可拖。
+  // 实现：按所有洞的 x 边界做纵向切片，每片只阻断该片内洞上下方的区域
+  // （洞之间的小空隙可能被一并阻断，但绝不阻断任何突显目标本身）。
+  // 逐洞各围四带不可行：一个洞的整幅横带会盖住另一个洞。
+  // 气泡（z 210）与退出按钮（.tutorial-escape z 160）高于阻断带（z 150）仍可交互。
+  const xs = Array.from(
+    new Set([0, W, ...merged.flatMap((r) => [r.left, r.left + r.width])]),
+  ).sort((a, b) => a - b)
+  const blocks: Array<{ left: number; top: number; width: number; height: number }> = []
+  for (let i = 0; i < xs.length - 1; i++) {
+    const x0 = xs[i]!
+    const x1 = xs[i + 1]!
+    const w = x1 - x0
+    if (w <= 0) continue
+    const inSlice = merged.filter((r) => r.left < x1 && r.left + r.width > x0)
+    if (inSlice.length === 0) {
+      blocks.push({ left: x0, top: 0, width: w, height: H })
+      continue
+    }
+    const top = Math.min(...inSlice.map((r) => r.top))
+    const bottom = Math.max(...inSlice.map((r) => r.top + r.height))
+    blocks.push({ left: x0, top: 0, width: w, height: Math.max(0, top) })
+    blocks.push({ left: x0, top: bottom, width: w, height: Math.max(0, H - bottom) })
+  }
+
   return (
-    <svg className="tutorial-spotlight" width={W} height={H} aria-hidden="true">
-      <path d={`${frame} ${holes}`} fillRule="evenodd" fill={DARK} />
-    </svg>
+    <>
+      <svg className="tutorial-spotlight" width={W} height={H} aria-hidden="true">
+        <path d={`${frame} ${holes}`} fillRule="evenodd" fill={DARK} />
+      </svg>
+      {blocks.map((b, i) => (
+        <div
+          key={i}
+          className="tutorial-block"
+          aria-hidden="true"
+          style={{ left: b.left, top: b.top, width: b.width, height: b.height }}
+        />
+      ))}
+    </>
   )
 }

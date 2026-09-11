@@ -125,3 +125,67 @@
     font-size: 13.5px;
   }
   }
+
+/* ============ v0.3.13：模态突显阻断 / 成功失败边带 / 退出按钮豁免 ============ */
+/* 交互阻断带：除突显洞外区域不可点/不可拖（气泡与 .tutorial-escape 层级更高，仍可交互） */
+.tutorial-block {
+  position: fixed;
+  /* 默认铺满视口（dim 整屏阻断）；分区阻断带用内联 left/top/width/height 覆盖
+     （left+right+width 过约束时 right 被忽略、top+bottom+height 时 bottom 被忽略） */
+  inset: 0;
+  z-index: 150;
+  background: transparent;
+  pointer-events: auto;
+}
+/* 退出按钮豁免（模态期间仍可点）：置于阻断带之上 */
+.tutorial-escape {
+  position: relative;
+  z-index: 160;
+}
+
+/* 成功（深绿）/失败（深红）四周 5px 边带：淡入淡出 */
+.tutorial-fx {
+  position: fixed;
+  inset: 0;
+  z-index: 230;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 160ms ease;
+}
+.tutorial-fx--on {
+  opacity: 1;
+}
+.tutorial-fx__edge {
+  position: absolute;
+  background: currentColor;
+}
+.tutorial-fx--success {
+  color: var(--hit-green);
+}
+.tutorial-fx--failure {
+  color: var(--kill-red);
+}
+.tutorial-fx__edge--top,
+.tutorial-fx__edge--bottom {
+  left: 0;
+  right: 0;
+  height: 5px;
+}
+.tutorial-fx__edge--top {
+  top: 0;
+}
+.tutorial-fx__edge--bottom {
+  bottom: 0;
+}
+.tutorial-fx__edge--left,
+.tutorial-fx__edge--right {
+  top: 0;
+  bottom: 0;
+  width: 5px;
+}
+.tutorial-fx__edge--left {
+  left: 0;
+}
+.tutorial-fx__edge--right {
+  right: 0;
+}

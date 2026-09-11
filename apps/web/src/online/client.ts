@@ -48,9 +48,17 @@ function notifyStatus(status: ClientStatus): void {
     )
 }
 
-/** 订阅连接状态；返回退订函数 */
+/**
+ * 订阅连接状态；返回退订函数。
+ *
+ * v0.3.13 修复：订阅时**立即以当前状态回调一次**（快照）。
+ * 原实现只在状态「变化」时通知：socket 单例保持连接时反复进入对战模式，
+ * 组件重挂载后的本地状态初值（idle）与单例真实状态（connected）脱节，
+ * 无变化事件可触发 → UI 显示「未连接（将自动重连）」且按钮禁用（"再次打开连不上"）。
+ */
 export function subscribeStatus(fn: StatusListener): () => void {
   statusListeners.add(fn)
+  fn(getClientStatus())
   return () => statusListeners.delete(fn)
 }
 
@@ -132,6 +140,9 @@ function ensureSocket(): RawSocket {
 
 function wireEvents(s: RawSocket): void {
   s.on('connect', () => {
+    // v0.3.13：新连接建立时清理上一次会话的陈旧失败态（重连失败残留的 sessionError
+    // 会在下次进入摆阵/对局页时把用户弹回菜单，表现为"再次进入连不上"）
+    if (useOnlineStore.getState().sessionError) useOnlineStore.getState().resetSession()
     notifyStatus('connected')
     const token = readToken()
     // 身份（auth 不带 gameId；房间恢复走下方独立 reconnect，与 v0.2 路径一致）
@@ -186,7 +197,13 @@ export function connectClient(): void {
     s.connect()
     return
   }
-  if (!s.connected) s.connect()
+  if (!s.connected) {
+    s.connect()
+    return
+  }
+  // v0.3.13：已连接（单例复用）时同步一次状态，保证重新挂载的页面不因
+  // 缺少变化事件而停留在 idle/disconnected（幂等，不产生额外连接）
+  notifyStatus('connected')
 }
 
 export function getClientStatus(): ClientStatus {

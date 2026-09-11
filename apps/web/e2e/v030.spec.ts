@@ -103,7 +103,7 @@ test.describe('v0.3.0 经典回归', () => {
     await expect(page.locator('.coloring-stage__btn button')).toBeVisible()
 
     // 回合门控：状态条为「轮到我方报点」（我先行）或「对方报点…」（AI 已走完 → 轮到我）
-    // 才可报点；输入框全程可用（对方回合仍作预报点输入），不能作为回合信号。
+    // 才可报点；须排除「等待对方报点…」；输入框全程可用（对方回合仍作预报点输入），不能作为回合信号。
     const statusText = page.locator('.game__status-text')
     const result = page.locator('.result')
     const waitMyTurn = async (timeoutMs = 20_000) => {
@@ -111,7 +111,8 @@ test.describe('v0.3.0 经典回归', () => {
       while (Date.now() < deadline) {
         if (await result.isVisible().catch(() => false)) return
         const st = (await statusText.textContent().catch(() => '')) ?? ''
-        if (st.includes('轮到我方报点') || st.includes('对方报点')) return
+        const t = st.trim()
+        if (t.includes('轮到我方报点') || /^对方报点/.test(t)) return
         await page.waitForTimeout(120)
       }
       throw new Error('等待我方回合超时')

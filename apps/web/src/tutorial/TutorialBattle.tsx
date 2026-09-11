@@ -1,20 +1,24 @@
 /**
- * TutorialBattle —— 教程单元2/3：对局（v0.3.1，M4 接管 M8 重写）。
+ * TutorialBattle —— 教程·单元3「初次实战·对局」（v0.3.13 重写）。
  *
- * 事件驱动教程机（替代旧线性 useSteps）：
- * - 节点分三类：click（气泡点击翻段，读毕按 next 前进）、wait（等待事件命中后按 next 前进，
- *   next===自身 id = 循环反馈刷新文本）、quiet（等待事件后进入静默窗口，窗口内重复事件重置计时，
- *   静默满后前进 —— 单元3 T3-9 涂色轮询）。
- * - 胜负判定以 gameStore 权威状态为准（phase==='ended'），不再依赖事件顺序，杜绝提前胜利文案。
- * - 单元2：T2-1~T2-3 引导 → 每次我方报点循环反馈（击空/击中分支文本）→ 击毁三连文本 →
- *   继续循环直至真正胜利 → T2-6 胜利气泡 → P3。中途绝不显示胜利文案。
- * - 单元3：按手稿 T3-1~T3-12 依次引导（突显气泡/参考网格/我方网格/输入框/着色按钮），
- *   涂色后 3s 静默轮询，幽灵批染需「着色+点击幽灵」deliberate 事件，预报点创建后 AI 暂停教学。
- * - AI 节奏走 GameScreen.aiShotSelector；pauseAi 节点/气泡展示期间 AI 不出手。
+ * 经典 10×10 / 3 架对局：我方先手（beginTutorialBattle 固定 firstMover=0、关闭绝杀），
+ * 对手 AI 避开我方全部机头、行动间隔 1s（GameScreen.aiShotSelector 门控）。
+ *
+ * 事件驱动教程机（click / wait 节点）：
+ *   n1 实战开场 → n2 我方网格 → n3 参考网格 → n4 空网格引导报点 → n5 等首次报点 →
+ *   n6 正向反馈（取消全部突显）→ n7 等首次击毁（成功提示）→ n8 击毁教学 → n9 参考网格拖幽灵 →
+ *   n10 幽灵标记判定（真位 + 朝向正确 → 成功；否则失败重试）→ n11 [飞机就在这里！] →
+ *   n12 突显着色按钮（等进入着色）→ n13 突显空网格（等着色模式下点击幽灵）→
+ *   n14 标记教学完成 → n15 等预报点创建 → n16 预报点教学（5 段）→ 完成弹窗（完成教程 / 继续对局）。
+ *
+ * 幽灵标记判定：GameScreen 不向教程暴露幽灵坐标，故读取其渲染的幽灵 DOM
+ * （`.game__opp .paper-grid__plane[data-plane-id]` 的 style.left/top = 旋转后包围盒左上角格位，
+ *   与 PaperGrid.tsx 飞机层定位公式一致），对照本单元生成的对手阵型真位（oppFleetRef）：
+ *   旋转由「宽高类别 + 包围盒左上角相对 origin 的偏移」唯一确定（默认形状 4 朝向互不重叠）。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Cell, GridConfig, PlacedPlane } from '@aero/shared'
-import { PRESETS } from '@aero/shared'
+import { DEFAULT_PLANE_SHAPE, PRESETS } from '@aero/shared'
 import { rotateShape } from '@aero/game-core'
 import { chooseTutorialShot, generateFleet, mulberry32 } from '@aero/game-core/ai'
 import type { Rng, ShotKnowledge } from '@aero/game-core/ai'
@@ -27,461 +31,350 @@ import { PaperModal } from '../components/ui/PaperModal'
 import { GameScreen } from '../pages/GameScreen'
 import { TutorialBubble } from './TutorialBubble'
 import { TutorialSpotlight } from './TutorialSpotlight'
+import { TutorialFxBand, useTutorialFx } from './TutorialFx'
+import { useAnyModalOpen } from './useAnyModalOpen'
 import type { TutorialGameEvent } from './events'
 
-/* ============ 教程机节点模型 ============ */
+/* ============ 节点模型 ============ */
 
 type NodeText = string[] | ((e: TutorialGameEvent | null) => string[])
 
 interface FlowNode {
   id: string
-  kind: 'click' | 'wait' | 'quiet'
-  /** 展示文本（wait/quiet 节点返回空数组 = 隐藏气泡、静默等待事件） */
+  kind: 'click' | 'wait'
+  /** 展示文本（wait 节点返回空数组 = 隐藏气泡、静默等待事件） */
   text?: NodeText
-  /** wait/quiet 事件谓词 */
+  /** wait 事件谓词 */
   wait?: (e: TutorialGameEvent) => boolean
-  /** wait/quiet 事件命中后的目标 id（返回自身 = 刷新文本停留；null = 流程完成） */
-  next?: string | ((e: TutorialGameEvent | null) => string | null) | null
-  /** click 节点读毕的目标 id（函数可按最后事件/胜负决定；null = 流程完成） */
-  after?: string | ((e: TutorialGameEvent | null) => string | null) | null
-  /** quiet 静默窗口毫秒（kind=quiet） */
-  quietMs?: number
-  /** 突显目标：'bubble' = 气泡自身；支持数组（多目标同时突显）；null = 不突显 */
+  /** click 节点读毕的目标 id（null = 流程完成 → 完成弹窗） */
+  after?: string | null
+  /** wait 事件命中后的目标 id（判定的节点在 dispatch 内特殊处理，可不用） */
+  next?: string | null
+  /** 突显目标：'bubble' = 整屏压暗突出气泡；null = 不突显（无遮罩、全可交互） */
   highlight?: string | string[] | null
-  /** 展示期间暂停 AI（aiShotSelector 返回 null） */
+  /** 事件命中时的屏幕边缘提示 */
+  flashOnMatch?: 'success' | 'failure'
+  /** 展示/等待期间暂停 AI（如预报点教学 n15：需要对手回合持续存在才能创建预报点） */
   pauseAi?: boolean
+  /** 进入节点时的副作用 */
+  onEnter?: () => void
 }
 
-/** 手稿气泡文本（单元2，§5.4 原文） */
-const T2_WELCOME = '是时候学习如何对战了！'
-const T2_GRID = '我们要在这张网格上找出对手的*飞机机头*的位置，但是目前还一无所知呢。'
-const T2_FIRST = '试试双击一个格子，我们就能知道对手的这个位置有没有飞机了。'
-const T2_MISS = '哎呀，不走运，这里没有飞机呢，点击其他方格试试吧！'
-const T2_HIT = '机头就在这附近！但是信息还不够多，再在附近试试吧！'
-const T2_KILL = [
-  '厉害！你摧毁了对手的一架飞机！',
-  '注意，对已击毁的飞机报点将显示*击空*哦！',
-  '现在，请你继续找出所有飞机的机头！',
-]
-const T2_WIN = '恭喜！你获得了一场胜利！'
-
-/** 手稿气泡文本（单元3，§5.6 原文） */
-const T3_WELCOME = '《飞机杀》有很多实用的对局工具呢！'
-const T3_REF = ['这是“参考网格”。如果忘了飞机长什么样子，可以看这里！', '这里的飞机也可点击旋转90度！']
-const T3_DRAG = '并且，这里的飞机也可以拖到空网格里。试试看！'
-const T3_GHOST = [
-  '你创建了一个幽灵飞机！它可以用来直观地判断飞机位置。',
-  '你可以创建多个幽灵飞机，回收它们只需要将其拖回去即可。',
-]
-const T3_MINE = '这是“我方网格”。可以看到我方阵型以及被击毁情况，以及对方报点的详细情况。'
-const T3_SURE = [
-  '值得一提的是，如果对方先手，在对方击毁了我方所有飞机后，……',
-  '如果对方也只剩一架飞机未被击毁，那么我方将会获得一次额外报点机会。',
-  '如果这次报点我方击毁了对方的最后一架飞机，则我方胜利。',
-  '这就是“绝杀”规则。',
-]
-const T3_INPUT = '这是坐标输入框，网格太小不便点击时，可输入坐标进行报点。'
-const T3_COLORBTN = '点击这个按钮进入着色模式，长按可以选择颜色。'
-const T3_PAINT = '试试看给空网格涂色，点击和拖动都可以！'
-const T3_TOOL = [
-  '着色工具是对局中的好帮手，可助您事半功倍。',
-  '这一强大的工具搭配“幽灵飞机”变得更为强大。',
-  '试试看！在着色模式下点击“幽灵飞机”。',
-]
-const T3_BATCH = [
-  '你刚刚对幽灵飞机下的方格进行了一次批量着色！',
-  '使用批量着色功能会自动消灭选中的幽灵飞机，并且退出着色模式。',
-  '若不想消灭和退出，可以在设置中关闭“快捷着色”。',
-  '现在，灵活使用这些工具继续对局吧！',
-]
-const T3_PRE = [
-  '你刚刚创建了一个预报点标记！',
-  '在真实对局中，常常出现对手陷入长考的局面。',
-  '为了节省我方时间，你可以在对方轮次时创建预报点标记。',
-  '我方轮次时，将会自动按顺序上报这些预报点。',
-  '请注意，预报点标记最多同时存在10个。',
-]
-
-/** 取事件中的报点结果（null = 非 shot 事件） */
-function shotOutcome(e: TutorialGameEvent | null): 'miss' | 'hit' | 'kill' | null {
-  return e && e.type === 'shotByPlayer' ? e.outcome : null
+/** 气泡文本（§5 手稿，单元3） */
+const T = {
+  n1: ['现在，我们正式进入实战！'],
+  n2: ['这是你刚才摆的阵型，从这里可以看到对方是怎么攻击我方的。'],
+  n3: ['这是参考网格，如果忘了飞机的形状，可以用于参考。'],
+  n4: ['这是空网格，你需要通过双击报点来获得对方飞机的信息。试试看！'],
+  n6: ['好极了！运用你刚才学到的所有技巧，高效地摧毁对手的飞机吧！'],
+  n8: ['你成功摧毁了对方的飞机！'],
+  n9: [
+    '被击毁的飞机*不会自动显示*，因此要自行标记被击毁飞机位置。',
+    '尝试从*参考网格*处拖动飞机，并将其放置到需要标记的位置。',
+  ],
+  n10fail: ['好像不太对，试试换个朝向吧。'],
+  n11: ['飞机就在这里！'],
+  n12: ['接下来，试试点击着色工具按钮！'],
+  n13: ['现在，试试点击你刚才摆放的飞机！'],
+  n14: ['现在，你学会了如何标记被击毁的飞机。'],
+  n16: [
+    '你刚才看见的红色“？”是预报点标记。',
+    '如果当前不是你的回合，报点将会产生预报点标记。',
+    '这些标记将会在你的回合时被依次转化为报点。',
+    '双击一个预报点标记可以消除它。',
+    '预报点标记最多可以同时存在10个。',
+  ],
 }
 
-/* ============ 单元流程定义 ============ */
+/**
+ * 拖拽幽灵必须同时突显【参考网格】与【空网格】：
+ * <突显> 为模态（非突显区域不可交互），只突显参考网格将无法把飞机拖入空网格。
+ */
+const GHOST_DRAG_HL: string[] = ['.game__ref', '.game__opp']
 
-/** 单元2 节点表（F=反馈循环 / K=击毁三连 / W=胜利收尾） */
-function buildBasicNodes(): FlowNode[] {
-  const shot = (e: TutorialGameEvent) => e.type === 'shotByPlayer'
-  const nodes: FlowNode[] = [
-    { id: 'welcome', kind: 'click', text: [T2_WELCOME], after: 'grid', highlight: 'bubble' },
-    { id: 'grid', kind: 'click', text: [T2_GRID], after: 'first', highlight: '.game__opp' },
-    { id: 'first', kind: 'wait', text: [T2_FIRST], wait: shot, highlight: null, next: (e) => (shotOutcome(e) === 'kill' ? 'kill' : 'fb') },
+/** 节点表 */
+function buildNodes(): FlowNode[] {
+  return [
+    { id: 'n1', kind: 'click', text: T.n1, after: 'n2', highlight: 'bubble' },
+    { id: 'n2', kind: 'click', text: T.n2, after: 'n3', highlight: '.game__mine' },
+    { id: 'n3', kind: 'click', text: T.n3, after: 'n4', highlight: '.game__ref' },
+    { id: 'n4', kind: 'click', text: T.n4, after: 'n5', highlight: '.game__opp' },
+    { id: 'n5', kind: 'wait', wait: (e) => e.type === 'shotByPlayer', next: 'n6', highlight: '.game__opp' },
+    { id: 'n6', kind: 'click', text: T.n6, after: 'n7', highlight: null },
     {
-      id: 'fb',
+      id: 'n7',
       kind: 'wait',
-      // 循环反馈：击空/击中文本；kill 时无文本（进 kill 节点）；随每次非击毁报点刷新
-      text: (e) => {
-        const o = shotOutcome(e)
-        if (o === 'kill') return []
-        return [o === 'hit' ? T2_HIT : T2_MISS]
-      },
-      wait: shot,
-      next: (e) => (shotOutcome(e) === 'kill' ? 'kill' : 'fb'),
-    },
-    {
-      id: 'kill',
-      kind: 'wait',
-      text: T2_KILL,
-      // v0.3.2：击毁三连为事件驱动（wait）——文本停留至下一次我方报点才继续（规则5）；
-      // 若该击毁已致终局（wonNow），dispatch 顶层直接转 win，绝不再显示三连
-      wait: shot,
-      next: (e) => (wonNow() ? 'win' : shotOutcome(e) === 'kill' ? 'kill' : 'fb'),
+      wait: (e) => e.type === 'planeKilled' && e.side === 1,
+      next: 'n8',
       highlight: null,
+      flashOnMatch: 'success',
     },
-    { id: 'win', kind: 'click', text: [T2_WIN], after: null, highlight: 'bubble' },
-  ]
-  return nodes
-}
-
-/** 单元3 节点表 */
-function buildAdvancedNodes(): FlowNode[] {
-  const nodes: FlowNode[] = [
-    { id: 'a1', kind: 'click', text: [T3_WELCOME], after: 'a2', highlight: 'bubble' },
-    { id: 'a2', kind: 'click', text: T3_REF, after: 'a3', highlight: '.game__ref' },
-    { id: 'a3', kind: 'wait', text: [T3_DRAG], wait: (e) => e.type === 'ghostCreated', highlight: ['.game__ref', '.game__opp'], next: 'a4', pauseAi: true },
-    { id: 'a4', kind: 'click', text: T3_GHOST, after: 'a5', highlight: 'bubble', pauseAi: true },
-    { id: 'a5', kind: 'click', text: [T3_MINE], after: 'a6', highlight: '.game__mine' },
-    { id: 'a6', kind: 'click', text: T3_SURE, after: 'a7', highlight: null },
-    { id: 'a7', kind: 'click', text: [T3_INPUT], after: 'a8', highlight: '.game__inputbar' },
+    { id: 'n8', kind: 'click', text: T.n8, after: 'n9', highlight: ['.game__opp'] },
+    { id: 'n9', kind: 'click', text: T.n9, after: 'n10', highlight: GHOST_DRAG_HL },
     {
-      id: 'a8',
+      id: 'n10',
       kind: 'wait',
-      text: [T3_COLORBTN],
+      // 失败提示：判定不通过后（failedHintRef）展示失败文本并停留在本节点重试
+      text: (e) => (failedHint && e?.type === 'ghostCreated' ? T.n10fail : []),
+      wait: (e) => e.type === 'ghostCreated',
+      highlight: GHOST_DRAG_HL,
+    },
+    { id: 'n11', kind: 'click', text: T.n11, after: 'n12', highlight: ['.game__opp'] },
+    {
+      id: 'n12',
+      kind: 'wait',
+      text: T.n12,
       wait: (e) => e.type === 'enteredColoring',
-      highlight: '.game__inputbar .coloring-btn',
-      next: 'a9',
-      pauseAi: true,
-    },
-    {
-      id: 'a9',
-      kind: 'quiet',
-      text: [T3_PAINT],
-      // v0.3.4：活动事件 = 单格染色 或 快捷着色；静默窗口 3s → 1s（1 秒内无活动才继续）
-      wait: (e) => e.type === 'cellColored' || e.type === 'ghostBatchColored',
-      quietMs: 1000,
-      highlight: null,
-      next: 'a10',
-      pauseAi: true,
-    },
-    {
-      id: 'a10',
-      kind: 'wait',
-      text: T3_TOOL,
-      // v0.3.2：仅【着色模式开启 + 直接点击幽灵飞机】的批量着色事件才推进（deliberate）
-      wait: (e) => e.type === 'ghostBatchColored' && e.viaGhostPointerDown === true,
-      next: 'a11',
-      // v0.3.4：多目标突显 —— 空网格 + 着色工具按钮（按钮按横/竖版解析可见目标）
+      next: 'n13',
       highlight: ['.game__opp', '.coloring-btn'],
-      pauseAi: true,
     },
     {
-      id: 'a11',
+      id: 'n13',
       kind: 'wait',
-      text: T3_BATCH,
+      text: T.n13,
+      // 着色模式下直接点击幽灵（deliberate）才推进，避免误触其它染色事件
+      wait: (e) => e.type === 'ghostBatchColored' && e.viaGhostPointerDown === true,
+      next: 'n14',
+      highlight: '.game__opp',
+      flashOnMatch: 'success',
+    },
+    { id: 'n14', kind: 'click', text: T.n14, after: 'n15', highlight: null },
+    {
+      id: 'n15',
+      kind: 'wait',
       wait: (e) => e.type === 'preFireCreated',
-      next: 'a12',
-      // v0.3.4：T3-11 取消全部突显
+      next: 'n16',
       highlight: null,
+      // 预报点只能在【对手回合】创建（且需两次点击）：暂停 AI，使对手回合保持存在
       pauseAi: true,
     },
-    { id: 'a12', kind: 'click', text: T3_PRE, after: null, highlight: ['.game__opp'], pauseAi: true },
+    { id: 'n16', kind: 'click', text: T.n16, after: null, highlight: 'bubble' },
   ]
-  return nodes
 }
 
-/** 是否已分出胜负（我方视角；教程以引擎状态为准） */
-function wonNow(): boolean {
-  const s = useGameStore.getState().session
-  return !!s && s.state.phase === 'ended' && s.state.winner === s.me
+// n10 文本谓词引用（节点表构造时闭包读取模块级可变标志，避免重建节点表）
+let failedHint = false
+
+/** 旋转后包围盒信息（默认形状下 4 朝向的 (minR,minC,w,h) 互不相同 → 可唯一反推 rotation） */
+function bboxOf(rotation: number): { minR: number; minC: number; w: number; h: number } {
+  const cells = rotateShape(DEFAULT_PLANE_SHAPE, rotation as 0 | 1 | 2 | 3).cells
+  let minR = Infinity
+  let maxR = -Infinity
+  let minC = Infinity
+  let maxC = -Infinity
+  for (const c of cells) {
+    minR = Math.min(minR, c.r)
+    maxR = Math.max(maxR, c.r)
+    minC = Math.min(minC, c.c)
+    maxC = Math.max(maxC, c.c)
+  }
+  return { minR, minC, w: maxC - minC + 1, h: maxR - minR + 1 }
 }
-function endedNow(): boolean {
-  const s = useGameStore.getState().session
-  return !!s && s.state.phase === 'ended'
+
+function segmentsOfNode(node: FlowNode, e: TutorialGameEvent | null): string[] {
+  if (typeof node.text === 'function') return node.text(e)
+  return node.text ?? []
 }
 
 /* ============ 组件 ============ */
 
 export interface TutorialBattleProps {
-  variant: 'basic' | 'advanced'
+  /** 单元2 摆好的我方阵型（缺失 = 启动失败） */
   fleet: PlacedPlane[] | null
   onExitHome: () => void
-  onGoAdvanced: () => void
 }
 
-function headCells(planes: PlacedPlane[], shape: GridConfig['shape']): Cell[] {
-  const out: Cell[] = []
-  for (const p of planes) {
-    const head = rotateShape(shape, p.rotation).head
-    out.push({ r: head.r + p.origin.r, c: head.c + p.origin.c })
-  }
-  return out
-}
-
-/** 每步当前展示段（分页用） */
-interface RunState {
-  nodeId: string
-  seg: number
-}
-
-export function TutorialBattle({ variant, fleet, onExitHome, onGoAdvanced }: TutorialBattleProps) {
+export function TutorialBattle({ fleet, onExitHome }: TutorialBattleProps) {
   const orientation = useEffectiveOrientation()
   const toast = useToastStore((s) => s.push)
   const begin = useGameStore((s) => s.beginTutorialBattle)
-  const beginEndgame = useGameStore((s) => s.beginTutorialEndgame)
   const resetGame = useGameStore((s) => s.reset)
   const difficulty = useSettingsStore((s) => s.difficulty)
+  const { fx, flash } = useTutorialFx()
 
   const config: GridConfig = useMemo(() => ({ ...PRESETS.small }), [])
-  const nodes = useMemo(() => (variant === 'basic' ? buildBasicNodes() : buildAdvancedNodes()), [variant])
-  const nodeMap = useMemo(() => {
-    const m = new Map<string, FlowNode>()
-    for (const n of nodes) m.set(n.id, n)
-    return m
-  }, [nodes])
+  const nodes = useMemo(() => buildNodes(), [])
+  const nodeMapRef = useRef(new Map(nodes.map((n) => [n.id, n])))
+  nodeMapRef.current = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes])
+
+  /** 对手阵型（本单元生成并持有；幽灵标记真位判定用） */
+  const oppFleetRef = useRef<PlacedPlane[] | null>(null)
 
   const [startFailed, setStartFailed] = useState(false)
-  // v0.3.4：对局已成功开启（begin 后）——此后 session 一旦被清空（对局内退出/结算离开）→ 收口回主页
-  const startedRef = useRef(false)
-  const [p3Open, setP3Open] = useState(false)
-  const [p5Open, setP5Open] = useState(false)
+  const [doneOpen, setDoneOpen] = useState(false)
   const [free, setFree] = useState(false)
-  // v0.3.2：弹窗（跳过确认 / P3 / P5）为遮罩豁免对象——打开时隐藏气泡与突显层、事件/点击不推进节点
-  const anyModalOpen = p3Open || p5Open
   const [, tick] = useState(0)
-  const runRef = useRef<RunState | null>(null) // null = 未开始（挂载后 begin 成功再启动）
+  const runRef = useRef<{ nodeId: string; seg: number } | null>(null)
   const lastEventRef = useRef<TutorialGameEvent | null>(null)
-  const quietTimerRef = useRef(0)
-  const bubblePauseRef = useRef(false)
+  const startedRef = useRef(false)
+  const finishedRef = useRef(false)
   const sessionNonce = useGameStore((s) => s.session?.nonce ?? 0)
-
-  /** 强制重渲染（节点/分段变化后） */
+  const sessionLive = useGameStore((s) => s.session)
+  /** 弹窗门控：自身完成弹窗 + 任何已打开弹窗（含对局内退出确认等外部弹窗）——
+   *  弹窗打开期间不渲染阻断带/暗层/气泡，保证弹窗永不被教程层拦截（v0.3.13 加固） */
+  const domModalOpen = useAnyModalOpen()
+  const anyModalOpen = doneOpen || domModalOpen
   const rerender = useCallback(() => tick((x) => x + 1), [])
 
-  const currentNode = (): FlowNode | null => {
+  const currentNode = useCallback((): FlowNode | null => {
     const r = runRef.current
-    if (!r) return null
-    return nodeMap.get(r.nodeId) ?? null
-  }
+    return r ? (nodeMapRef.current.get(r.nodeId) ?? null) : null
+  }, [])
 
-  const segmentsOf = useCallback(
-    (node: FlowNode, e: TutorialGameEvent | null): string[] => {
-      if (typeof node.text === 'function') return node.text(e)
-      return node.text ?? []
-    },
-    [],
-  )
-
-  const segs = useCallback(
-    (nodeId: string, e: TutorialGameEvent | null): string[] => {
-      const node = nodeMap.get(nodeId)
-      if (!node) return []
-      return segmentsOf(node, e)
-    },
-    [nodeMap, segmentsOf],
-  )
-
-  /** 解析目标 id（支持函数 + null=完成）；返回 undefined 表示节点未变更 */
-  const resolveNext = useCallback(
-    (node: FlowNode, e: TutorialGameEvent | null, field: 'after' | 'next'): string | null => {
-      const v = field === 'after' ? node.after : node.next
-      if (v == null) return null
-      return typeof v === 'function' ? v(e) : v
-    },
-    [],
-  )
-
-  /** 按当前节点是否【有可见气泡】且声明 pauseAi 同步 AI 暂停（隐藏的静默等待节点不阻塞 AI） */
-  const syncPause = useCallback(() => {
-    const node = currentNode()
-    const r = runRef.current
-    if (!node || !r) {
-      bubblePauseRef.current = false
-      return
-    }
-    bubblePauseRef.current = segmentsOf(node, lastEventRef.current).length > 0 && !!node.pauseAi
-  }, [segmentsOf])
-
-  /** 进入节点 id（重置分页）；null = 单元完成（P3/P5） */
   const goNode = useCallback(
     (id: string | null) => {
-      window.clearTimeout(quietTimerRef.current)
       if (id == null) {
         runRef.current = null
-        bubblePauseRef.current = false
-        if (variant === 'basic') setP3Open(true)
-        else setP5Open(true)
+        finishedRef.current = true
+        setDoneOpen(true)
         rerender()
         return
       }
       runRef.current = { nodeId: id, seg: 0 }
-      syncPause()
+      nodeMapRef.current.get(id)?.onEnter?.()
       rerender()
     },
-    [variant, syncPause, rerender],
+    [rerender],
   )
 
-  /** 事件分发：返回是否已处理 */
+  /**
+   * 幽灵标记判定：真位 + 朝向全部正确才算通过。
+   * 位置取幽灵 DOM 包围盒左上角格位（与 PaperGrid 飞机层定位公式一致）；
+   * 朝向由「宽高类别 + 包围盒左上角相对 origin 的偏移」与 4 个候选旋转逐一比对得出。
+   */
+  const judgeGhost = useCallback(
+    (id: string): boolean => {
+      const s = useGameStore.getState().session
+      const oppFleet = oppFleetRef.current
+      if (!s || !oppFleet || !id) return false
+      const destroyed = s.state.players[1].destroyedPlaneIds
+      if (destroyed.length === 0) return false
+      const target = oppFleet.find((p) => p.id === destroyed[0])
+      if (!target) return false
+      const board = document
+        .querySelector('.game__opp .paper-grid__board')
+        ?.getBoundingClientRect()
+      const el = document.querySelector(
+        `.game__opp .paper-grid__plane[data-plane-id="${id}"]`,
+      ) as HTMLElement | null
+      if (!board || !el || board.width <= 0) return false
+      const cell = board.width / config.width
+      const visR = Math.round(parseFloat(el.style.top || '0') / cell)
+      const visC = Math.round(parseFloat(el.style.left || '0') / cell)
+      const wide = el.offsetWidth >= el.offsetHeight
+      let visualRotation: number | null = null
+      for (const rot of [0, 1, 2, 3]) {
+        const b = bboxOf(rot)
+        if (b.w >= b.h !== wide) continue
+        if (target.origin.r + b.minR === visR && target.origin.c + b.minC === visC) {
+          visualRotation = rot
+          break
+        }
+      }
+      return visualRotation === target.rotation
+    },
+    [config.width],
+  )
+
+  /** 事件分发 */
   const dispatchEvent = useCallback(
     (e: TutorialGameEvent) => {
-      if (anyModalOpen) return false
-      if (free || !runRef.current) return false
-      // v0.3.2 胜利即时：basic 引擎一旦 ended+我方胜，任何后续事件一律不再喂给前置节点
-      if (variant === 'basic' && wonNow() && currentNode()?.id !== 'win') {
-        goNode('win')
-        return true
-      }
+      if (anyModalOpen || free || !runRef.current) return
       lastEventRef.current = e
       const node = currentNode()
-      if (!node) return false
-      if (node.kind === 'click') return false
-      if (node.kind === 'wait' || node.kind === 'quiet') {
-        if (!node.wait || !node.wait(e)) return false
-        const to = resolveNext(node, e, 'next')
-        if (node.kind === 'quiet') {
-          // 涂色轮询：静默 3s 无新染色才前进
-          window.clearTimeout(quietTimerRef.current)
-          quietTimerRef.current = window.setTimeout(() => {
-            const cur = currentNode()
-            if (cur && cur.kind === 'quiet') goNode(resolveNext(cur, lastEventRef.current, 'next'))
-          }, node.quietMs ?? 3000)
+      if (!node || node.kind !== 'wait' || !node.wait || !node.wait(e)) return
+      if (node.flashOnMatch) flash(node.flashOnMatch)
+      if (node.id === 'n10') {
+        const id = e.type === 'ghostCreated' ? e.id : ''
+        if (judgeGhost(id)) {
+          failedHint = false
+          flash('success')
+          goNode('n11')
+        } else {
+          failedHint = true
+          flash('failure')
+          const r = runRef.current
+          if (r) r.seg = 0
           rerender()
-          return true
         }
-        if (to === node.id) {
-          // 自循环刷新文本（单元2 反馈循环）
-          const s = runRef.current
-          if (s) s.seg = 0
-          rerender()
-          return true
-        }
-        goNode(to)
-        return true
+        return
       }
-      return false
+      goNode(node.next ?? null)
     },
-    [free, resolveNext, goNode, rerender, anyModalOpen],
+    [anyModalOpen, currentNode, flash, free, goNode, judgeGhost, rerender],
   )
 
-  /** 气泡点击：翻段；click 节点读毕 → after */
+  /** 气泡点击：翻段；click 节点读毕 → after（null = 完成） */
   const onBubbleClick = useCallback(() => {
     if (anyModalOpen) return
     const r = runRef.current
     const node = currentNode()
     if (!r || !node) return
-    const segsNow = segs(node.id, lastEventRef.current)
-    if (r.seg + 1 < segsNow.length) {
+    const segs = segmentsOfNode(node, lastEventRef.current)
+    if (r.seg + 1 < segs.length) {
       r.seg += 1
       rerender()
       return
     }
-    if (node.kind === 'click') {
-      const to = resolveNext(node, lastEventRef.current, 'after')
-      // 无后续目标（win 节点等）→ 单元完成
-      if (to == null) {
-        goNode(null)
-        return
-      }
-      goNode(to)
+    if (node.kind === 'click') goNode(node.after ?? null)
+    else rerender()
+  }, [anyModalOpen, currentNode, goNode, rerender])
+
+  /* ---------- 开局（挂载一次） ---------- */
+  useEffect(() => {
+    resetGame()
+    runRef.current = null
+    finishedRef.current = false
+    failedHint = false
+    if (!fleet || fleet.length === 0) {
+      setStartFailed(true)
       return
     }
-    // wait/quiet：事件未到，点击仅翻段后停留
-    rerender()
-  }, [segs, resolveNext, goNode, rerender, anyModalOpen])
-
-  // 开局（挂载一次）
-  useEffect(() => {
-    const doStart = () => {
-      resetGame()
-      runRef.current = null
-      if (variant === 'basic') {
-        if (!fleet || fleet.length === 0) {
-          setStartFailed(true)
-          return
-        }
-        const res = begin(config, fleet)
-        if (!res.ok) {
-          toast(res.errors.join('；'), 'error')
-          setStartFailed(true)
-          return
-        }
-        startedRef.current = true
-      } else {
-        const rng = mulberry32(((Date.now() ^ Math.floor(Math.random() * 0xffffffff)) >>> 0) || 1)
-        try {
-          const myFleet = generateFleet(config.width, config.height, config.planeCount, config.shape, difficulty, rng)
-          const oppFleet = generateFleet(config.width, config.height, config.planeCount, config.shape, difficulty, rng)
-          const res = beginEndgame(config, myFleet, oppFleet, {
-            preKill: { side: 'me', planeIndex: 0 },
-            firstTurn: 'them',
-          })
-          if (!res.ok) {
-            toast(res.errors.join('；'), 'error')
-            setStartFailed(true)
-            return
-          }
-          startedRef.current = true
-        } catch (err) {
-          toast(err instanceof Error ? err.message : '教程对局生成失败', 'error')
-          setStartFailed(true)
-          return
-        }
+    const rng = mulberry32(((Date.now() ^ Math.floor(Math.random() * 0xffffffff)) >>> 0) || 1)
+    try {
+      const opp = generateFleet(
+        config.width,
+        config.height,
+        config.planeCount,
+        config.shape,
+        difficulty,
+        rng,
+      )
+      oppFleetRef.current = opp
+      const res = begin(config, fleet, opp)
+      if (!res.ok) {
+        toast(res.errors.join('；'), 'error')
+        setStartFailed(true)
+        return
       }
+      startedRef.current = true
+    } catch (err) {
+      toast(err instanceof Error ? err.message : '教程对局生成失败', 'error')
+      setStartFailed(true)
     }
-    doStart()
-    return () => window.clearTimeout(quietTimerRef.current)
-  }, [variant])
+  }, [begin, config, difficulty, fleet, resetGame, toast])
 
-  // 新对局就绪 → 教程从头开始
+  /** 新对局就绪 → 从 n1 开始 */
   useEffect(() => {
-    if (sessionNonce > 0 && !runRef.current) {
-      goNode(variant === 'basic' ? 'welcome' : 'a1')
-    }
-  }, [sessionNonce, variant, goNode])
+    if (sessionNonce > 0 && !runRef.current && !finishedRef.current) goNode('n1')
+  }, [sessionNonce, goNode])
 
-  // v0.3.2 胜利即时兜底：basic 内引擎每次状态推进后检查胜负（AI 绝地反击等非玩家事件致胜也覆盖）
-  const sessionLive = useGameStore((s) => s.session)
-  useEffect(() => {
-    if (variant !== 'basic' || free) return
-    if (wonNow() && runRef.current && runRef.current.nodeId !== 'win') goNode('win')
-  }, [sessionLive, free, variant])
-
-  // v0.3.4 退出收口（任意阶段）：对局开始后 session 一旦被清空
-  // （对局内「退出」确认 / 结算页「返回主页」均清 session 且 view 不变）→ 宿主收口回主页，
-  // 此间不再渲染 GameScreen，杜绝"对局会话不存在"错误页闪现。
-  // 注意：begin 在 effect 内同步完成，本 effect 触发时须以最新 store 为准（闭包 sessionLive
-  // 可能仍是 begin 前的 null），避免开局瞬间误收口。
+  /** 退出收口（任意阶段）：session 被清空 → 回主页 */
   useEffect(() => {
     if (startedRef.current && !useGameStore.getState().session) onExitHome()
   }, [sessionLive, onExitHome])
 
-  // 终局兜底：单元3 任何时刻对局结束（含玩家在工具步骤前获胜/超时）→ 直接 P5
+  /** 终局兜底：教程未走完但对局已结束（玩家提前获胜/落败）→ 直接完成弹窗 */
   useEffect(() => {
-    if (variant !== 'advanced' || free) return
-    if (endedNow()) {
-      setP5Open(true)
-    }
-  }, [sessionNonce, free, variant])
+    if (free || anyModalOpen) return
+    const st = useGameStore.getState().session?.state
+    if (st?.phase === 'ended' && runRef.current) goNode(null)
+  }, [sessionNonce, sessionLive, free, anyModalOpen, goNode])
 
-  /** 教程 AI 门控：气泡 pauseAi / advanced 每回合思考窗口 / 预报点后 5s */
-  const gateRef = useRef({
-    delayMs: 0,
-    pausedUntil: 0,
-    lastShots: 0,
-  })
-
-  useEffect(() => {
-    gateRef.current = { delayMs: variant === 'advanced' ? 6000 : 0, pausedUntil: 0, lastShots: 0 }
-  }, [variant])
+  /* ---------- AI 门控：避开我方全部机头 + 行动间隔 1s ---------- */
+  const gateRef = useRef({ pausedUntil: 0, lastShots: -1 })
+  /** AI 暂停：教程气泡展示期间 + 声明 pauseAi 的教学节点（n15 预报点） */
+  const pauseAiRef = useRef(false)
 
   const aiShotSelector = useCallback(
     (knowledge: ShotKnowledge, rng: Rng): Cell | null => {
@@ -489,45 +382,41 @@ export function TutorialBattle({ variant, fleet, onExitHome, onGoAdvanced }: Tut
       const now = Date.now()
       if (g.lastShots !== knowledge.shots.length) {
         g.lastShots = knowledge.shots.length
-        if (g.delayMs > 0) g.pausedUntil = now + g.delayMs
+        g.pausedUntil = now + 1000
       }
-      if (bubblePauseRef.current) return null
       if (now < g.pausedUntil) return null
+      // 教程气泡展示 / 教学节点期间 AI 不动手（保持教学节奏；n15 需对手回合持续存在）
+      if (pauseAiRef.current) return null
       const s = useGameStore.getState()
       const myPlanes = s.session?.state.players[0].planes ?? []
       const shape = s.session?.state.players[0].shape ?? config.shape
-      return chooseTutorialShot(knowledge, { avoidHeads: headCells(myPlanes, shape) }, rng)
+      const avoidHeads: Cell[] = myPlanes.map((p) => {
+        const h = rotateShape(shape, p.rotation).head
+        return { r: h.r + p.origin.r, c: h.c + p.origin.c }
+      })
+      return chooseTutorialShot(knowledge, { avoidHeads }, rng)
     },
     [config.shape],
   )
 
-  /** 事件桥（GameScreen → 教程机 + AI 额外暂停） */
-  const onGameEvent = useCallback(
-    (e: TutorialGameEvent) => {
-      dispatchEvent(e)
-      if (e.type === 'preFireCreated' && variant === 'advanced' && !free) {
-        const g = gateRef.current
-        g.pausedUntil = Math.max(g.pausedUntil, Date.now() + 5000)
-      }
-    },
-    [dispatchEvent, variant, free],
-  )
-
-  // 展示派生
+  /* ---------- 展示派生 ---------- */
   const r = runRef.current
   const node = currentNode()
-  const segsNow = node && r ? segs(node.id, lastEventRef.current) : []
+  const segsNow = node && r ? segmentsOfNode(node, lastEventRef.current) : []
   const showBubble = !!node && !free && r != null && segsNow.length > 0
+  pauseAiRef.current = !free && !!node && (node.pauseAi === true || (showBubble && !anyModalOpen))
   const segText = showBubble ? (segsNow[Math.min(r!.seg, segsNow.length - 1)] ?? '') : ''
-  // 突显解析：'bubble'=气泡自身；着色按钮横/竖版分别位于 stage 浮层 / 输入栏（另一侧 display:none）
+
   const resolveTarget = (t: string): string => {
     if (t.includes('.coloring-btn')) {
-      return orientation === 'portrait' ? '.game__inputbar .coloring-btn' : '.coloring-stage__btn .coloring-btn'
+      return orientation === 'portrait'
+        ? '.game__inputbar .coloring-btn'
+        : '.coloring-stage__btn .coloring-btn'
     }
     return t
   }
   const rawHighlight: string | string[] | null = !free && node?.highlight ? node.highlight : null
-  // v0.3.9：'bubble' 突显 = 整屏压暗无洞（气泡 z 高于遮罩、豁免开洞，暗背景使其轮廓突出）
+  // 'bubble' 突显 = 整屏压暗无洞（气泡 z 高于遮罩、豁免开洞，暗背景使其轮廓突出）
   const bubbleDim = rawHighlight === 'bubble'
   const highlight = bubbleDim
     ? null
@@ -536,11 +425,10 @@ export function TutorialBattle({ variant, fleet, onExitHome, onGoAdvanced }: Tut
       : rawHighlight
         ? resolveTarget(rawHighlight)
         : null
-  // 突显目标位于底部输入栏时气泡上置（避免遮挡底部按钮）；其余保持默认（多目标含输入栏也上置）
+  // 突显目标位于底部输入栏/着色按钮时气泡上置（避免遮挡底部按钮）
   const hlText = Array.isArray(node?.highlight) ? node.highlight.join(' ') : (node?.highlight ?? '')
   const bubbleAnchor =
-    hlText.includes('.game__inputbar') || hlText.includes('.tutorial-confirm') ? 'top' : 'bottom'
-
+    hlText.includes('.game__inputbar') || hlText.includes('.coloring-btn') ? 'top' : 'bottom'
 
   if (startFailed) {
     return (
@@ -553,21 +441,20 @@ export function TutorialBattle({ variant, fleet, onExitHome, onGoAdvanced }: Tut
     )
   }
 
-  // v0.3.4：对局已开始且会话被清空（任意阶段退出/结算离开）→ 交给 effect 收口，不渲染 GameScreen
   if (startedRef.current && !sessionLive) return null
 
   return (
     <>
       <GameScreen
-        onGameEvent={onGameEvent}
+        onGameEvent={dispatchEvent}
         aiShotSelector={free ? undefined : aiShotSelector}
         hideSettlement={!free}
       />
 
-
       {!anyModalOpen && (showBubble || highlight || bubbleDim) ? (
         <TutorialSpotlight target={highlight} dim={bubbleDim} />
       ) : null}
+      {/* 弹窗打开期间 TutorialSpotlight 内部亦返回 null（useAnyModalOpen 二道防线） */}
       {showBubble && !anyModalOpen ? (
         <TutorialBubble
           key={node!.id}
@@ -577,30 +464,11 @@ export function TutorialBattle({ variant, fleet, onExitHome, onGoAdvanced }: Tut
           onClick={onBubbleClick}
         />
       ) : null}
+      <TutorialFxBand fx={fx} />
 
-      {/* P3 基础完成弹窗（§5.5） */}
       <PaperModal
-        open={p3Open}
-        title="基础教程"
-        onClose={() => {}}
-        footer={
-          <>
-            <PaperButton variant="ghost" onClick={onExitHome}>
-              返回主页
-            </PaperButton>
-            <PaperButton variant="primary" onClick={onGoAdvanced}>
-              继续教程
-            </PaperButton>
-          </>
-        }
-      >
-        <p style={{ margin: 0 }}>基础教程已完成，是否继续进阶教程？</p>
-      </PaperModal>
-
-      {/* P5 进阶完成弹窗（§5.7） */}
-      <PaperModal
-        open={p5Open}
-        title="进阶教程"
+        open={doneOpen}
+        title="新手教程"
         onClose={() => {}}
         footer={
           <>
@@ -610,14 +478,14 @@ export function TutorialBattle({ variant, fleet, onExitHome, onGoAdvanced }: Tut
             <PaperButton
               variant="primary"
               onClick={() => {
-                if (endedNow()) {
-                  // 对局已结束：留在结果画面（不提供继续对局）
+                // 对局已结束：无法继续，直接收口
+                if (useGameStore.getState().session?.state.phase === 'ended') {
                   onExitHome()
                   return
                 }
-                gateRef.current = { ...gateRef.current, delayMs: 0, pausedUntil: 0 }
+                gateRef.current = { pausedUntil: 0, lastShots: -1 }
                 setFree(true)
-                setP5Open(false)
+                setDoneOpen(false)
               }}
             >
               继续对局
@@ -625,7 +493,7 @@ export function TutorialBattle({ variant, fleet, onExitHome, onGoAdvanced }: Tut
           </>
         }
       >
-        <p style={{ margin: 0 }}>进阶教程已完成，是否完成对局？</p>
+        <p style={{ margin: 0 }}>教程已完成，是否完成对局？</p>
       </PaperModal>
     </>
   )

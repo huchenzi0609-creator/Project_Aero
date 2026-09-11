@@ -824,7 +824,14 @@ export function GameScreen({ mode = 'single', onGameEvent, aiShotSelector, hideS
   return (
     <div className={`game game--${orientation}`}>
       <header className="game__statusbar">
-        <PaperButton size="sm" variant="ghost" onClick={() => setExitOpen(true)}>
+        {/* 教程豁免（v0.3.13）：与 TutorialSpotlight 阻断带约定的 .tutorial-escape 同标识，
+            模态突显期间左上角退出按钮仍可点；非教程/非突显时该类仅 z-index 声明，无副作用 */}
+        <PaperButton
+          size="sm"
+          variant="ghost"
+          className="tutorial-escape"
+          onClick={() => setExitOpen(true)}
+        >
           ← 退出
         </PaperButton>
         <div className={`game__statusbtn ${shake ? 'shake' : ''}`} role="status" aria-live="polite">
@@ -893,8 +900,21 @@ export function GameScreen({ mode = 'single', onGameEvent, aiShotSelector, hideS
           </PaperCard>
         </section>
 
-        {/* 对手网格（居中）：只渲染我方可见报点标记（盲棋窗口）/ 预报点「?」，绝不显示对方阵型；可放置参考飞机副本 */}
-        <section className="game__opp">
+        {/* 对手网格（居中）：只渲染我方可见报点标记（盲棋窗口）/ 预报点「?」，绝不显示对方阵型；可放置参考飞机副本；
+            v0.3.13：外缘随回合变色（轮到我方=深绿 / 轮到对方=深红），着色模式 / 结算 / 退出弹窗期间隐藏——
+            与联机 OnlineGame 同一 class 语义（game__opp--mine / --theirs，样式随 m6.css 全局加载） */}
+        <section
+          className={[
+            'game__opp',
+            screen === 'battle' && isPlaying && !isColoring && !exitOpen
+              ? isMyTurn
+                ? 'game__opp--mine'
+                : 'game__opp--theirs'
+              : '',
+          ]
+            .filter(Boolean)
+            .join(' ')}
+        >
           <div className="coloring-stage">
             <PaperGrid
               width={config.width}

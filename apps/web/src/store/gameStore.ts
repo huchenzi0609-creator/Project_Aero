@@ -53,10 +53,12 @@ interface GameStoreState {
     config: GridConfig,
     myPlanes: PlacedPlane[],
   ) => { ok: true } | { ok: false; errors: string[] }
-  /** 教程单元2：沿用玩家阵型开局，强制【我方先手】（经典模式，无 blitz/blind） */
+  /** 教程单元2/3：沿用玩家阵型开局，强制【我方先手】（经典模式，无 blitz/blind）；
+   *  v0.3.13：可传入对手阵型（教程侧持有以便判定幽灵标记是否落在被击毁飞机真位），缺省随机生成 */
   beginTutorialBattle: (
     config: GridConfig,
     myPlanes: PlacedPlane[],
+    oppPlanes?: PlacedPlane[],
   ) => { ok: true } | { ok: false; errors: string[] }
   /** 教程单元3：残局开局（我方随机阵型已被击毁一架 + 对方先手），封装 game-core createEndgameState */
   beginTutorialEndgame: (
@@ -129,7 +131,7 @@ export const useGameStore = create<GameStoreState>()((set, get) => ({
 
   // 教程单元2：与 begin 同流程，仅强制先手 = 我方（createGame firstMover 0），经典模式；
   // v0.3.6：禁用绝地反击（counterattack:false）——先手全歼直接判胜，教学不进入反击分支
-  beginTutorialBattle: (config, myPlanes) => {
+  beginTutorialBattle: (config, myPlanes, oppPlanes) => {
     let state = createGame(config.width, config.height, config.shape, config.planeCount, 0, {
       counterattack: false,
     })
@@ -140,7 +142,9 @@ export const useGameStore = create<GameStoreState>()((set, get) => ({
     const aiRng = mulberry32(((Date.now() ^ Math.floor(Math.random() * 0xffffffff)) >>> 0) || 1)
     let aiFleet: PlacedPlane[]
     try {
-      aiFleet = generateFleet(config.width, config.height, config.planeCount, config.shape, difficulty, aiRng)
+      aiFleet = oppPlanes && oppPlanes.length > 0
+        ? oppPlanes
+        : generateFleet(config.width, config.height, config.planeCount, config.shape, difficulty, aiRng)
     } catch (err) {
       return { ok: false, errors: [err instanceof Error ? err.message : 'AI 摆阵失败'] }
     }

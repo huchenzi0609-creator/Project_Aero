@@ -1,11 +1,11 @@
 /**
- * TutorialEntry —— 新手教程宿主（v0.3.0）。
+ * TutorialEntry —— 新手教程宿主（v0.3.13，三单元流程）。
  *
  * 由 Home「新手教程」按钮以面板形式挂载（App view 恒为 home，教程内不触发页面级导航）：
- * - entry：入口弹窗 P1/P2 ——「还没有」进单元1 摆阵；「是的」直达进阶单元3；
- * - placement（单元1）：摆阵教程，确认/跳过后把玩家阵型传入单元2；
- * - basic（单元2）：对战教程（沿用单元1 阵型）→ 胜利弹 P3；
- * - advanced（单元3）：工具教程（残局对局）→ 完成弹 P5。
+ * - entry：入口弹窗 P1/P2 ——「还不了解」进单元1（辨认飞机）；「我已了解」跳到单元2（摆阵）；
+ * - unit1（单元1 · 辨认飞机和基本操作）：纯练习（3 个演示场景）；
+ * - placement（单元2 · 初次实战·摆阵）：摆阵并确认 → 阵型传入单元3；
+ * - battle（单元3 · 初次实战·对局）：经典对局（我方先手、AI 避机头、1s 间隔）→ 完成弹窗。
  * 结束（返回主页 / 完成教程）→ 清对局并回 Home 面板。
  */
 import { useState } from 'react'
@@ -19,9 +19,10 @@ import { PaperButton } from '../components/ui/PaperButton'
 import { PaperModal } from '../components/ui/PaperModal'
 import { TutorialPlacement } from '../tutorial/TutorialPlacement'
 import { TutorialBattle } from '../tutorial/TutorialBattle'
+import { Unit1Practice } from '../tutorial/Unit1Practice'
 import '../styles/tutorial.css'
 
-export type TutorialStage = 'entry' | 'placement' | 'basic' | 'advanced'
+export type TutorialStage = 'entry' | 'unit1' | 'placement' | 'battle'
 
 export function TutorialEntry({ onExit }: { onExit: () => void }) {
   const orientation = useEffectiveOrientation()
@@ -37,7 +38,7 @@ export function TutorialEntry({ onExit }: { onExit: () => void }) {
     onExit()
   }
 
-  // 单元1 → 单元2：阵型不足（跳过摆阵）时按小档规格随机补齐，保证 3 架开局
+  // 单元2 → 单元3：阵型不足时按小档规格随机补齐，保证 3 架开局
   const onPlacementDone = (planes: PlacedPlane[]) => {
     const cfg = PRESETS.small
     let full = planes
@@ -51,30 +52,20 @@ export function TutorialEntry({ onExit }: { onExit: () => void }) {
       }
     }
     setFleet(full)
-    setStage('basic')
-  }
-
-  // 单元2 P4「继续教程」→ 单元3
-  const goAdvanced = () => {
-    resetGame()
-    setStage('advanced')
+    setStage('battle')
   }
 
   /* ---------- 阶段渲染 ---------- */
 
+  if (stage === 'unit1') {
+    return <Unit1Practice onExitHome={exitAll} onDone={() => setStage('placement')} />
+  }
   if (stage === 'placement') {
     return <TutorialPlacement onDone={onPlacementDone} onExitHome={exitAll} />
   }
-  if (stage === 'basic' || stage === 'advanced') {
-    return (
-      <TutorialBattle
-        key={stage}
-        variant={stage}
-        fleet={stage === 'basic' ? fleet : null}
-        onExitHome={exitAll}
-        onGoAdvanced={goAdvanced}
-      />
-    )
+  if (stage === 'battle') {
+    // 开局前清账由 TutorialBattle 自身完成（不在渲染期调用 store）
+    return <TutorialBattle fleet={fleet} onExitHome={exitAll} />
   }
 
   /* ---------- 入口（欢迎页 + P1/P2 弹窗，进入即询问） ---------- */
@@ -89,8 +80,9 @@ export function TutorialEntry({ onExit }: { onExit: () => void }) {
       </header>
       <div className="page__body tutorial-home__body">
         <ul className="tutorial-home__list">
-          <li>基础 · 摆阵与对战：约 2 分钟</li>
-          <li>进阶 · 对局工具：约 3 分钟</li>
+          <li>单元1 · 辨认飞机和基本操作</li>
+          <li>单元2 · 初次实战·摆阵</li>
+          <li>单元3 · 初次实战·对局</li>
         </ul>
         {entryOpen ? null : (
           <PaperButton variant="primary" onClick={() => setEntryOpen(true)}>
@@ -99,6 +91,10 @@ export function TutorialEntry({ onExit }: { onExit: () => void }) {
         )}
       </div>
 
+      {/* 入口弹窗（P1/P2）。教程加固不变量：弹窗打开期间教程层不得渲染 `.tutorial-block`
+          阻断带/暗层。本组件不持有 spotlight 等覆盖层（单元1/2/3 的覆盖层在各自子组件内，
+          且子组件仅在 entryOpen=false 且已切 stage 后挂载），且 TutorialSpotlight 内部
+          以 useAnyModalOpen 兜底，故入口弹窗期间阻断带恒为 0。 */}
       <PaperModal
         open={entryOpen}
         title="新手教程"
@@ -106,14 +102,20 @@ export function TutorialEntry({ onExit }: { onExit: () => void }) {
         footer={
           <>
             {/* P2：我已了解 → 直达进阶·单元3；还不了解 → 基础·单元1 */}
-            <PaperButton variant="ghost" onClick={goAdvanced}>
+            <PaperButton
+              variant="ghost"
+              onClick={() => {
+                setEntryOpen(false)
+                setStage('placement')
+              }}
+            >
               我已了解
             </PaperButton>
             <PaperButton
               variant="primary"
               onClick={() => {
                 setEntryOpen(false)
-                setStage('placement')
+                setStage('unit1')
               }}
             >
               还不了解

@@ -1,14 +1,20 @@
 /**
- * TutorialPlacement —— 教程单元1：摆阵（v0.3.3，按最新手稿 T1-1~T1-7 重做）。
+ * TutorialPlacement —— 教程·单元2「初次实战·摆阵」（v0.3.13 重写）。
  *
- * 复用 FleetPlacementBoard 摆阵交互与校验；组件级小驱动（click / wait 两类节点）：
- * - T1-1 突显对话气泡（点击推进）→ T1-2 突显待选栏（点击推进）→
- * - T1-3 拖入第 1 架（wait planePlaced，无 hint、点击不消失）→
- * - T1-4 拖完剩余（wait allPlanesPlaced，文本常驻）→
- * - T1-5 旋转引导（先突显气泡，点击翻段后切突显空网格、文本保持、wait planeRotated）→
- * - T1-6/7 final 阶段随阵形合法性派生：合法 → 高亮确认布阵 + 确认文案；非法 → "飞机不能重叠、不能越界哦！"
- *   持续非法持续显示；转合法立即切换；点击「确认布阵」→ 沿玩家阵型进单元2。
- * 气泡持久性（§7.4）：wait 节点文本常驻、点击不消失、无「点击继续」。
+ * 10×10 / 3 架，复用 FleetPlacementBoard 的拖拽、旋转与合法性校验。组件级小驱动：
+ *   1) 4 段开场气泡（整屏压暗突出气泡，点击逐段读毕）→ 取消突显 + 突显待选栏
+ *      「这是飞机待选栏，可以从这里把飞机拖到网格中。」→ 突显我方网格
+ *      「现在就试试看吧！把飞机拖到网格里！」
+ *   2) 拖入第 1 架 → <成功提示> +「好极了！现在尝试把剩余的飞机全部拖到网格里！」（续拖）
+ *   3) 全部入格 → <成功提示> + 突显气泡「单击飞机可以使飞机旋转90度，试试看！」（点击读毕
+ *      → 取消突显 + 突显空网格，等待旋转）
+ *   4) 旋转 →「太棒了！确保你的飞机不重叠不越界之后，就可以开始游戏了！」（常驻）
+ *   5) 阵形变动 → 合法性判定：合法 = 突显「确认布阵」+「点击“确认布阵”开始游戏」；
+ *      非法 =「飞机不能重叠、不能越界哦！」（持续非法持续显示）
+ *   6) 点击「确认布阵」→ 携带阵型进入单元3。
+ *
+ * 突显为模态（非突显区域不可交互），故需要拖拽/旋转的步骤一律同时突显
+ * 【待选栏 + 网格】；左上角「退出教程」用 `.tutorial-escape` 保持可点。
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { PlacedPlane } from '@aero/shared'
@@ -20,11 +26,20 @@ import { PaperModal } from '../components/ui/PaperModal'
 import { FleetPlacementBoard, fleetCheckState } from '../components/placement/FleetPlacementBoard'
 import { TutorialBubble } from './TutorialBubble'
 import { TutorialSpotlight } from './TutorialSpotlight'
+import { TutorialFxBand, useTutorialFx } from './TutorialFx'
+import { useAnyModalOpen } from './useAnyModalOpen'
 import type { TutorialGameEvent } from './events'
 import '../styles/tutorial.css'
 
-const T1 = {
-  welcome: '欢迎来到《飞机杀》！我们先来学习如何摆阵吧！',
+/** 开场 4 段（手稿逐字文案，`*…*` 为强调记号） */
+const WELCOME = [
+  '很好！接下来我们即将进入实战！',
+  '首先要做的一件事是*摆阵*！',
+  '对手将尝试破解我方阵型，我们需要在那之前抢先破解对方的阵型！',
+  '在真实对局中，一个好的阵型可以充分地迷惑对手，为我方取得优势！',
+]
+
+const T2 = {
   tray: '这是飞机待选栏，可以从这里把飞机拖到网格中。',
   drag: '现在就试试看吧！把飞机拖到网格里！',
   more: '好极了！现在尝试把剩余的飞机全部拖到网格里！',
@@ -34,6 +49,9 @@ const T1 = {
   invalid: '飞机不能重叠、不能越界哦！',
 }
 
+/** 需要同时可交互的拖拽区（模态突显下非突显区域不可点） */
+const DRAG_HL = ['.placement__tray', '.placement__board-wrap']
+
 type Phase = 'welcome' | 'tray' | 'drag' | 'more' | 'rotateHint' | 'rotateWait' | 'thanks' | 'detect'
 
 export function TutorialPlacement({
@@ -41,13 +59,14 @@ export function TutorialPlacement({
   onExitHome,
 }: {
   onDone: (fleet: PlacedPlane[]) => void
-  /** 退出/跳过 → 回主页（统一由宿主 TutorialEntry 收口） */
+  /** 退出 → 回主页（统一由宿主 TutorialEntry 收口） */
   onExitHome: () => void
 }) {
   const orientation = useEffectiveOrientation()
-  // v0.3.6：教程摆阵固定 10×10（PRESETS.small），与全局/自定义配置解耦
+  // 教程摆阵固定 10×10（PRESETS.small），与全局/自定义配置解耦
   const config = useMemo(() => ({ ...PRESETS.small }), [])
   const toast = useToastStore((s) => s.push)
+  const { fx, flash } = useTutorialFx()
   const { width, height, planeCount } = config
 
   const [grid, setGrid] = useState<PlacedPlane[]>([])
@@ -55,11 +74,16 @@ export function TutorialPlacement({
   const thanksCauseRef = useRef<number | null>(null)
   const [phase, setPhase] = useState<Phase>('welcome')
   const [exitOpen, setExitOpen] = useState(false)
+  const [segIdx, setSegIdx] = useState(0)
   const [, force] = useState(0)
+  /** 弹窗门控：自身退出确认 + 任何已打开弹窗（纵深防护，阻断带/暗层/气泡一律不渲染）。
+   *  注意：useAnyModalOpen 必须先无条件调用（hooks 顺序稳定），再与自身状态合并。 */
+  const domModalOpen = useAnyModalOpen()
+  const modalOpen = exitOpen || domModalOpen
   const phaseRef = useRef<Phase>('welcome')
   const setPh = (p: Phase) => {
     phaseRef.current = p
-    segIdxRef.current = 0
+    setSegIdx(0)
     setPhase(p)
   }
 
@@ -92,7 +116,7 @@ export function TutorialPlacement({
     prevFullRef.current = full
   }, [grid.length, planeCount])
 
-  // T1-6/7：旋转完成后的 thanks 常驻展示期，玩家再次挪动/旋转（下一次网格变化）→ 进入合法性检测
+  // 旋转后的 thanks 常驻展示期，玩家再次挪动/旋转（下一次网格变化）→ 进入合法性检测
   useEffect(() => {
     if (phaseRef.current === 'thanks' && versionRef.current > (thanksCauseRef.current ?? Infinity)) {
       setPh('detect')
@@ -102,28 +126,26 @@ export function TutorialPlacement({
   /** 事件 → 阶段推进（wait 节点：事件到达才离开；期间气泡常驻） */
   const dispatchEvent = (e: TutorialGameEvent) => {
     const cur = phaseRef.current
-    if (cur === 'drag' && e.type === 'planePlaced') setPh('more')
-    else if (cur === 'more' && e.type === 'allPlanesPlaced') setPh('rotateHint')
-    else if (cur === 'rotateWait' && e.type === 'planeRotated') {
-      thanksCauseRef.current = versionRef.current
-      setPh('thanks')
-    } else if (cur === 'rotateHint' && e.type === 'planeRotated') {
-      // v0.3.10：T1-5 气泡显示期间即监听旋转——玩家未点气泡直接旋转也即时生效
+    if (cur === 'drag' && e.type === 'planePlaced') {
+      flash('success')
+      setPh('more')
+    } else if (cur === 'more' && e.type === 'allPlanesPlaced') {
+      flash('success')
+      setPh('rotateHint')
+    } else if ((cur === 'rotateWait' || cur === 'rotateHint') && e.type === 'planeRotated') {
       thanksCauseRef.current = versionRef.current
       setPh('thanks')
     }
   }
 
-  /** 气泡点击：click 节点推进；wait/thanks/detect 仅翻段不消失。
-   *  rotateHint（T1-5 读毕）→ rotateWait（突显棋盘、等待旋转）；
-   *  玩家未点气泡直接旋转时已在 rotateHint 识别并推进到 thanks，点击入口自然跳过。 */
+  /** 气泡点击：click 节点读毕推进；wait/thanks/detect 仅翻段不消失 */
   const clickBubble = () => {
     const cur = phaseRef.current
     if (cur === 'welcome') setPh('tray')
     else if (cur === 'tray') setPh('drag')
     else if (cur === 'rotateHint') setPh('rotateWait')
     // 其余（drag/more/rotateWait/thanks/detect）：点击仅翻段，不消失
-    force((x) => x + 1)
+    else force((x) => x + 1)
   }
 
   const confirm = () => {
@@ -135,52 +157,44 @@ export function TutorialPlacement({
   }
 
   /* ---------- 展示派生 ---------- */
-
-  // 阶段文本 / 是否可点击推进（click 节点显示「点击继续」）
-  const segsOf = (p: Phase): string[] => {
-    if (p === 'welcome') return [T1.welcome]
-    if (p === 'tray') return [T1.tray]
-    if (p === 'drag') return [T1.drag]
-    if (p === 'more') return [T1.more]
-    if (p === 'rotateHint') return [T1.rotate]
-    if (p === 'rotateWait') return [T1.rotate]
-    if (p === 'thanks') return [T1.thanks]
-    if (p === 'detect') return check.ok ? [T1.confirm] : [T1.invalid]
+  const segmentsOf = (p: Phase): string[] => {
+    if (p === 'welcome') return WELCOME
+    if (p === 'tray') return [T2.tray]
+    if (p === 'drag') return [T2.drag]
+    if (p === 'more') return [T2.more]
+    if (p === 'rotateHint' || p === 'rotateWait') return [T2.rotate]
+    if (p === 'thanks') return [T2.thanks]
+    if (p === 'detect') return check.ok ? [T2.confirm] : [T2.invalid]
     return []
   }
   const isClickNode = phase === 'welcome' || phase === 'tray' || phase === 'rotateHint'
-  const segments = segsOf(phase)
-  const segIdxRef = useRef(0)
+  const segments = segmentsOf(phase)
+  const seg = Math.min(segIdx, Math.max(segments.length - 1, 0))
+  const segText = segments.length > 0 ? (segments[seg] ?? '') : ''
 
-  if (segments.length === 0) segIdxRef.current = 0
-  const segIdx = Math.min(segIdxRef.current, segments.length - 1)
-  const segText = segments.length > 0 ? (segments[segIdx] ?? '') : ''
+  /** 分段读毕才推进节点 */
   const clickSeg = () => {
-    if (segIdxRef.current + 1 < segments.length) {
-      segIdxRef.current += 1
-      force((x) => x + 1)
+    if (segIdx + 1 < segments.length) {
+      setSegIdx(segIdx + 1)
       return
     }
     clickBubble()
   }
 
-  // 突显目标：'bubble'=气泡自身（welcome/rotateHint）；tray；棋盘（rotateWait 引导旋转）；
-  // detect 合法 → 确认按钮（随合法性即时切换）；非法 → 无突显（页面全亮）；thanks 无突显
-  const highlightFor = (p: Phase): string | null => {
+  // 突显目标：'bubble'=整屏压暗突出气泡（开场 / 旋转引导）；
+  // 待选栏；拖拽/旋转步骤 = 待选栏 + 网格；detect 合法 → 确认按钮，非法 → 无突显
+  const highlightFor = (p: Phase): string | string[] | null => {
     if (p === 'welcome' || p === 'rotateHint') return 'bubble'
     if (p === 'tray') return '.placement__tray'
-    if (p === 'rotateWait') return '.placement__board-wrap'
+    if (p === 'drag' || p === 'more' || p === 'rotateWait') return DRAG_HL
     if (p === 'detect') return check.ok ? '.tutorial-confirm' : null
     return null
   }
-  // v0.3.9：'bubble' 突显 = 整屏压暗无洞（气泡 z 高于遮罩豁免，暗背景突出其轮廓）
   const rawHl = highlightFor(phase)
   const bubbleDim = rawHl === 'bubble'
   const highlight = bubbleDim ? null : rawHl
-
-  const exit = () => {
-    setExitOpen(true)
-  }
+  // 气泡默认底部；突显确认按钮（页头）时同样保持底部
+  const exit = () => setExitOpen(true)
   const confirmExit = () => {
     setExitOpen(false)
     onExitHome()
@@ -189,7 +203,7 @@ export function TutorialPlacement({
   return (
     <div className={`placement placement--${orientation} tutorial-placement`}>
       <header className="placement__head">
-        <PaperButton size="sm" variant="ghost" onClick={exit}>
+        <PaperButton size="sm" variant="ghost" className="tutorial-escape" onClick={exit}>
           ← 退出教程
         </PaperButton>
         <div>
@@ -226,18 +240,15 @@ export function TutorialPlacement({
         </span>
       </footer>
 
-      {/* 教程层（detect 非法 → highlight null → 无遮罩全亮）；「点击继续」仅 click 节点显示 */}
-      <TutorialSpotlight target={highlight} dim={bubbleDim} />
-      {segments.length > 0 ? (
-        <TutorialBubble
-          key={`${phase}`}
-          text={segText}
-          showHint={isClickNode}
-          onClick={clickSeg}
-        />
+      {/* 教程层（detect 非法 → highlight null → 无遮罩全亮）；「点击继续」仅 click 节点显示。
+          弹窗打开期间（自身退出确认 exitOpen，或任何外部弹窗）不渲染阻断带/暗层/气泡 */}
+      {!modalOpen ? <TutorialSpotlight target={highlight} dim={bubbleDim} /> : null}
+      {!modalOpen && segments.length > 0 ? (
+        <TutorialBubble key={phase} text={segText} showHint={isClickNode} onClick={clickSeg} />
       ) : null}
+      <TutorialFxBand fx={fx} />
 
-      {/* 退出确认（确认 → 回主页；不进任何旧页面） */}
+      {/* 退出确认（确认 → 回主页） */}
       <PaperModal
         open={exitOpen}
         title="退出教程？"
@@ -255,7 +266,6 @@ export function TutorialPlacement({
       >
         <p style={{ margin: 0 }}>退出后摆阵进度将丢失，确认离开教程吗？</p>
       </PaperModal>
-
     </div>
   )
 }

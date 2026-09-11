@@ -705,7 +705,7 @@ export function OnlineGame() {
     } else if (myMsg) {
       statusText = myMsg
     } else if (yourTurn) {
-      statusText = `轮到我方报点 · 第 ${turnNo} 回合`
+      statusText = '轮到我方报点'
     } else {
       statusText = prefire.length > 0 ? `等待对方报点… 已预排 ${prefire.length} 个预报点` : '等待对方报点…'
       statusThem = true
@@ -771,15 +771,39 @@ export function OnlineGame() {
 
   return (
     <div className={`game game--${orientation}`}>
-      <header className="game__statusbar">
-        <PaperButton size="sm" variant="ghost" onClick={() => setResignOpen(true)}>
-          投降
-        </PaperButton>
-        <div className={`game__statusbtn ${shake ? 'shake' : ''}`} role="status" aria-live="polite">
-          <span className={`game__dot${statusThem ? ' game__dot--them' : ''}`} aria-hidden="true" />
-          <span className="game__status-text">{statusText}</span>
+      {/* v0.3.13 状态条：上行「投降 + 状态」，下行「名字」——
+          状态文案长度变化只在自身行内省略，名字行位置恒定（不随状态左右/上下位移） */}
+      <header
+        className="game__statusbar"
+        style={{ flexDirection: 'column', alignItems: 'stretch', gap: 2 }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+          <PaperButton size="sm" variant="ghost" onClick={() => setResignOpen(true)}>
+            投降
+          </PaperButton>
+          <div
+            className={`game__statusbtn ${shake ? 'shake' : ''}`}
+            role="status"
+            aria-live="polite"
+            style={{
+              flex: '1 1 auto',
+              minWidth: 0,
+              marginLeft: 0,
+              height: 26,
+              padding: '0 6px',
+              overflow: 'hidden',
+            }}
+          >
+            <span className={`game__dot${statusThem ? ' game__dot--them' : ''}`} aria-hidden="true" />
+            <span
+              className="game__status-text"
+              style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
+            >
+              {statusText}
+            </span>
+          </div>
         </div>
-        <span className="game__names">
+        <span className="game__names" style={{ textAlign: 'center', width: '100%' }}>
           您 · {guestName} <span className="game__vs">VS</span> {oppName}
         </span>
       </header>

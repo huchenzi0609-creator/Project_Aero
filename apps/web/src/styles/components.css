@@ -349,7 +349,10 @@
 .paper-modal__backdrop {
   position: fixed;
   inset: 0;
-  z-index: 60;
+  /* v0.3.13：抬到所有教程层之上（遮罩 56 / 阻断带 150 / 突显 160 / 气泡 210 / 教程顶栏 230），
+     落实 v0.3.5「弹窗是突显遮罩豁免对象」原则——教程突显期间打开弹窗时按钮必须可点，
+     不被 .tutorial-block 阻断带（z=150）覆盖。弹窗内 dialog 为 backdrop 子节点，随其层级生效。 */
+  z-index: 240;
   display: flex;
   align-items: center;
   justify-content: center;

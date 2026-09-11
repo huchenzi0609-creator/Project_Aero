@@ -12,7 +12,7 @@
  */
 import { useSettingsStore } from '../store/settingsStore'
 
-export type SfxName = 'shoot' | 'stamp' | 'kill' | 'page-flip' | 'preview' | 'win' | 'lose'
+export type SfxName = 'shoot' | 'stamp' | 'kill' | 'page-flip' | 'preview' | 'win' | 'lose' | 'success' | 'failure'
 
 /* ---------------------------------------------------------------- 上下文与开关 */
 
@@ -186,6 +186,23 @@ function playLose(c: Ctx, dest: AudioNode): void {
   )
 }
 
+/** v0.3.13 教程正反馈：两声清脆升调短铃（明亮、多邻国式） */
+function playSuccess(c: Ctx, dest: AudioNode): void {
+  tone(c, dest, { freq: 783.99, type: 'triangle', peak: 0.34, attack: 0.003, decay: 0.10 })
+  tone(c, dest, { freq: 1174.66, type: 'triangle', peak: 0.3, attack: 0.003, decay: 0.16, at: 0.09 })
+  // 轻微高频泛音点缀，增加“清脆”质感
+  tone(c, dest, { freq: 2349.32, type: 'sine', peak: 0.09, attack: 0.002, decay: 0.08, at: 0.09 })
+}
+
+/** v0.3.13 教程负反馈：两声沉闷低频下行短音 */
+function playFailure(c: Ctx, dest: AudioNode): void {
+  tone(c, dest, { freq: 196.0, type: 'sine', peak: 0.42, attack: 0.004, decay: 0.15 })
+  tone(c, dest, { freq: 146.83, type: 'sine', peak: 0.4, attack: 0.004, decay: 0.2, at: 0.13 })
+  // 低通闷响：让两声更“沉”
+  noiseBlip(c, dest, { type: 'lowpass', freq: 300, q: 0.6, peak: 0.2, attack: 0.003, decay: 0.14 })
+  noiseBlip(c, dest, { type: 'lowpass', freq: 240, q: 0.6, peak: 0.16, attack: 0.003, decay: 0.18, at: 0.13 })
+}
+
 function playPreview(c: Ctx, dest: AudioNode): void {
   // 试听：翻页 + 盖章 + 一个暖音
   playPageFlip(c, dest)
@@ -201,6 +218,8 @@ const SFX_PLAYERS: Record<SfxName, (c: Ctx, dest: AudioNode) => void> = {
   preview: playPreview,
   win: playWin,
   lose: playLose,
+  success: playSuccess,
+  failure: playFailure,
 }
 
 export function playSfx(name: SfxName): void {
