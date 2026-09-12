@@ -18,17 +18,17 @@
 | 项 | 位置/说明 |
 |---|---|
 | 根通道 `/` | `/opt/aero-old`（**v0.2.10-alpha**；由 `/opt/aero.bak.v0210` 克隆，node_modules 复用）；PM2 **`aero-server`** :3001，DATA_DIR=`/opt/aero-data`（游客数据连续性）。**本次部署不动** |
-| beta 通道 `/beta/` | `/opt/aero-beta`（**v0.3.11**，2026-09-07 由 v0.3.9 升级；dist 为 `vite build --base=/beta/` 产物）；PM2 **`aero-server-beta`** :3002，DATA_DIR=`/opt/aero-data-beta`（2026-09-06 从主库种子，隔离增长） |
+| beta 通道 `/beta/` | `/opt/aero-beta`（**v0.3.15**，2026-09-13 由 v0.3.12 升级（纯 dist 直换，服务端代码未变）；dist 为 `vite build --base=/beta/` 产物）；PM2 **`aero-server-beta`** :3002，DATA_DIR=`/opt/aero-data-beta`（2026-09-06 从主库种子，隔离增长） |
 | 双实例 PM2 配置 | `/home/admin/ecosystem.config.cjs`（两个 app；**文件名必须是 ecosystem.config.cjs 才被 PM2 识别为多 app 配置**，见 §6 坑 8）；`pm2 save` 已含两实例 |
 | 数据库 | 主库 `/opt/aero-data/aero.db`（根通道）；beta 独立库 `/opt/aero-data-beta/aero.db` |
-| 历史备份/回滚点 | 代码：`/opt/aero.bak.v0210`（v0.2.10 整树）、`/opt/aero-beta.bak.v037alpha`（v0.3.7-alpha）、`/opt/aero-beta.bak.v039`（v0.3.9，**当前 beta 回滚点**）；`/home/admin/backup/`：`aero-v037-base-dist-2026-09-06-2326`（base=/ v0.3.7 dist）、`aero-beta-predeploy-v0311-2026-09-07-2251.db`（beta DB 快照）等；nginx 旧配置 `/etc/nginx/conf.d/feijisha.conf.bak-dual-2026-09-06-2328`、`feijisha.conf.bak-https-2026-09-08-1808`（HTTPS 改造前） |
+| 历史备份/回滚点 | 代码：`/opt/aero.bak.v0210`（v0.2.10 整树）、`/opt/aero-beta.bak.v037alpha`（v0.3.7-alpha）、`/opt/aero-beta.bak.v039`（v0.3.9）、`/opt/aero-beta/apps/web/dist.bak-v0311-2026-09-13`（**当前 beta 回滚点**：v0.3.12 dist）；`/home/admin/backup/`：`aero-v037-base-dist-2026-09-06-2326`（base=/ v0.3.7 dist）、`aero-beta-predeploy-v0311-2026-09-07-2251.db`（beta DB 快照）等；nginx 旧配置 `/etc/nginx/conf.d/feijisha.conf.bak-dual-2026-09-06-2328`、`feijisha.conf.bak-https-2026-09-08-1808`（HTTPS 改造前） |
 | Nginx | `/etc/nginx/conf.d/feijisha.conf`（**三块监听：443 ssl http2 / 80→301 / 8080 备用**，双通道分流一致）：根通道 root=`/opt/aero-old/apps/web/dist` + `/api/`、`/socket.io/`、`/health` 反代 3001；`/beta/` 静态 alias `/opt/aero-beta/apps/web/dist/`（SPA try_files）+ `/beta/api/`、`/beta/socket.io/`（去前缀）、`/beta/health` 反代 3002；`= /beta` → 301 `/beta/`；80 保留 `/.well-known/acme-challenge/` 豁免 |
 | 开机自启 | systemd `aero.service`（admin 用户执行 `pm2 resurrect`，已 enable；**仍未经真实整机重启实测**——dump 现含两实例，见 §4 重启条目） |
 | 环境 | Node v24.20.0（`/opt/node`，软链 `/usr/local/bin/{node,npm,npx}`）、pnpm 11.24、PM2 7（npm 全局，registry=registry.npmmirror.com）、nginx 1.24（dnf `--disableexcludes=all`）、git 2.43；SELinux **disabled**；iptables/nftables 全 ACCEPT |
 
 **冒烟脚本分工（本机）**：`scripts/pub-smoke.mjs <base> [版本]`（主流程/默认 beta v0.3.12）、`scripts/pub-smoke-v0210.mjs <base>`（根通道 v0.2.10）、`scripts/e2e-beta-room.mjs <base>`（beta 联机建房+加入 E2E）、`scripts/spot-v0311.mjs <base>`（v0.3.11 新改动抽查）、`scripts/spot-icp.mjs`（ICP 备案合规断言：角标/备案号链接，覆盖 https 根+beta 与 8080 双路径）。
 
-**双通道 dist 直换流程（2026-09-08 ICP 合规验证，服务端代码未变时用）**：组长本地构建产物（如根 v0.2.10+备案 / beta v0.3.12，base 前缀须匹配）→ tar 传 /tmp → `sudo mv` 现 dist → `dist.bak-icp-$(date +%F)`（两通道各自备份）→ `sudo tar -xzf` 覆盖（保留 admin 属主）→ `pm2 restart aero-server aero-server-beta`（稳妥起见，无副作用）→ 验证角标/备案号（spot-icp.mjs）+ pub-smoke 双通道 + wss + e2e。备案号：**浙ICP备2026073891号**（首页底部居中链接 http://beian.miit.gov.cn/，target=_blank）。
+**双通道 dist 直换流程（2026-09-08 ICP 合规验证，服务端代码未变时用）**：组长本地构建产物（如根 v0.2.10+备案 / beta v0.3.15，base 前缀须匹配）→ tar 传 /tmp → `sudo mv` 现 dist → `dist.bak-icp-$(date +%F)`（两通道各自备份）→ `sudo tar -xzf` 覆盖（保留 admin 属主）→ `pm2 restart aero-server aero-server-beta`（稳妥起见，无副作用）→ 验证角标/备案号（spot-icp.mjs）+ pub-smoke 双通道 + wss + e2e。备案号：**浙ICP备2026073891号**（首页底部居中链接 http://beian.miit.gov.cn/，target=_blank）。
 
 ## 3. 域名 / ICP / HTTPS（2026-09-08 已完成）
 

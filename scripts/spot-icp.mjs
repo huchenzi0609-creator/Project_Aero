@@ -15,9 +15,9 @@ const exe =
 
 const CASES = [
   { url: 'https://feijisha.online/', badge: 'v0.2.10' },
-  { url: 'https://feijisha.online/beta', badge: 'v0.3.12' },
+  { url: 'https://feijisha.online/beta', badge: 'v0.3.15' },
   { url: 'http://116.62.121.70:8080/', badge: 'v0.2.10' },
-  { url: 'http://116.62.121.70:8080/beta/', badge: 'v0.3.12' },
+  { url: 'http://116.62.121.70:8080/beta/', badge: 'v0.3.15' },
 ]
 const ICP = '浙ICP备2026073891号'
 
