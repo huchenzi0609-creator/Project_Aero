@@ -196,6 +196,8 @@ export function TutorialPlacement({
   const rawHl = highlightFor(phase)
   const bubbleDim = rawHl === 'bubble' || rawHl === 'bubble-soft'
   const highlight = bubbleDim ? null : rawHl
+  /** 遮罩激活态（v0.3.16：淡出滞留由 TutorialSpotlight 内部处理） */
+  const overlayActive = bubbleDim || highlight !== null
   // 气泡默认底部；突显确认按钮（页头）时同样保持底部
   const exit = () => setExitOpen(true)
   const confirmExit = () => {
@@ -246,7 +248,12 @@ export function TutorialPlacement({
       {/* 教程层（detect 非法 → highlight null → 无遮罩全亮）；「点击继续」仅 click 节点显示。
           弹窗打开期间（自身退出确认 exitOpen，或任何外部弹窗）不渲染阻断带/暗层/气泡 */}
       {!modalOpen ? (
-        <TutorialSpotlight target={highlight} dim={bubbleDim} block={rawHl !== 'bubble-soft'} />
+        <TutorialSpotlight
+          active={overlayActive}
+          target={highlight}
+          dim={bubbleDim}
+          block={rawHl !== 'bubble-soft'}
+        />
       ) : null}
       {!modalOpen && segments.length > 0 ? (
         <TutorialBubble key={phase} text={segText} showHint={isClickNode} onClick={clickSeg} />

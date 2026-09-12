@@ -109,7 +109,7 @@ test.describe('自定义模式', () => {
     expect(errs()).toEqual([])
   })
 
-  test('单机自定义页含「允许移动参考飞机」（默认开）与超快棋/盲棋开关（默认关、可独立开启）', async ({ page }) => {
+  test('单机自定义页：v0.3.16 新文案、规则开关（默认关、可独立开启）', async ({ page }) => {
     const errs = watchErrors(page)
 
     await openPractice(page)
@@ -139,6 +139,52 @@ test.describe('自定义模式', () => {
 
     // 盲棋 + 允许移动参考飞机 → 提示将自动失效
     await expect(page.getByText('盲棋模式下「允许移动参考飞机」将自动失效。')).toBeVisible()
+
+    // ---- v0.3.16 文案：棋盘大小 / 10格～26格 / 飞机数 / 当前上限为 N 架 ----
+    await expect(page.locator('.custom__label').filter({ hasText: '棋盘大小' })).toBeVisible()
+    await expect(page.locator('.custom__hint').filter({ hasText: '10格～26格' })).toBeVisible()
+    await expect(page.locator('.custom__label').filter({ hasText: '飞机数' })).toBeVisible()
+    // 默认 10×10 → 上限 ⌊100/25⌋ = 4
+    await expect(page.locator('.custom__num')).toHaveText('当前上限为4架')
+    // 旧文案与旧说明已删除（超快棋/盲棋开关不再带长说明）
+    await expect(page.getByText('横向列数，字母标号')).toHaveCount(0)
+    await expect(page.getByText('开局倒计时 10×n 秒')).toHaveCount(0)
+    await expect(page.getByText('双方不记旧报点，禁用参考飞机与着色')).toHaveCount(0)
+
+    expect(errs()).toEqual([])
+  })
+
+  test('v0.3.16：默认形状遮罩点击即解锁；「确认 · 进入摆阵」独立于编辑器托盘', async ({ page }) => {
+    const errs = watchErrors(page)
+    await openPractice(page)
+    await page.getByRole('button', { name: '自定义模式' }).click()
+    await expect(page.getByRole('heading', { name: '自定义配置' })).toBeVisible()
+
+    const useDefault = page
+      .locator('.paper-toggle')
+      .filter({ hasText: '使用默认飞机形状' })
+      .locator('input')
+    const mask = page.locator('.shape-editor__mask')
+
+    // 默认开 → 编辑器压暗遮罩存在，单击遮罩即关闭开关并解锁
+    await expect(useDefault).toBeChecked()
+    await expect(page.locator('.shape-editor--disabled')).toHaveCount(1)
+    await expect(mask).toBeVisible()
+    await expect(mask).toContainText('默认飞机形状已锁定')
+    await mask.click()
+    await expect(useDefault).not.toBeChecked()
+    await expect(mask).toHaveCount(0)
+    await expect(page.locator('.shape-editor--disabled')).toHaveCount(0)
+    // 解锁后编辑器可绘制
+    await page.locator('.shape-editor__cell').nth(0).click()
+    await expect(page.locator('.editor-count')).toContainText('1 / 15')
+
+    // 「确认 · 进入摆阵」独立于编辑器托盘：编辑器卡片内不含该按钮，独立动作区存在
+    const editorCard = page.locator('.paper-card').filter({ hasText: '飞机形状编辑器' })
+    await expect(editorCard.getByRole('button', { name: '确认 · 进入摆阵' })).toHaveCount(0)
+    const actions = page.locator('.custom__actions--standalone')
+    await expect(actions).toBeVisible()
+    await expect(actions.getByRole('button', { name: '确认 · 进入摆阵' })).toBeVisible()
 
     expect(errs()).toEqual([])
   })

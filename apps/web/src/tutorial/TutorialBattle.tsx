@@ -33,6 +33,7 @@ import { TutorialBubble } from './TutorialBubble'
 import { TutorialSpotlight } from './TutorialSpotlight'
 import { TutorialFxBand, useTutorialFx } from './TutorialFx'
 import { useAnyModalOpen } from './useAnyModalOpen'
+import { useSingleTapBridge } from './useSingleTapBridge'
 import { makeRng } from '../lib/rng'
 import type { TutorialGameEvent } from './events'
 
@@ -488,6 +489,12 @@ export function TutorialBattle({ fleet, onExitHome }: TutorialBattleProps) {
     }
     return t
   }
+  // v0.3.16：教程对局兼容「单击报点」设置（GameScreen 在注入 onGameEvent 时保持两步语义）
+  const singleTapShot = useSettingsStore((s) => s.singleTapShot)
+  useSingleTapBridge(singleTapShot)
+
+  /** 遮罩激活态（v0.3.16：淡出滞留由 TutorialSpotlight 内部处理，此处只需给出 active） */
+  const overlayActive = showBubble || !!(node?.highlight ?? null)
   const rawHighlight: string | string[] | null = node?.highlight ?? null
   // 'bubble' 标记 = 该节点同时为 <突显对话气泡>；其余选择器 = <突显目标>。
   // 两者同时存在 = 混合模式（整屏压暗 + 目标处开洞，气泡 z 更高豁免可见/可点）
@@ -517,8 +524,8 @@ export function TutorialBattle({ fleet, onExitHome }: TutorialBattleProps) {
     <>
       <GameScreen onGameEvent={dispatchEvent} aiShotSelector={aiShotSelector} hideSettlement />
 
-      {!anyModalOpen && (showBubble || highlight || bubbleDim) ? (
-        <TutorialSpotlight target={highlight} dim={bubbleDim} />
+      {!anyModalOpen ? (
+        <TutorialSpotlight active={overlayActive} target={highlight} dim={bubbleDim} />
       ) : null}
       {showBubble && !anyModalOpen ? (
         <TutorialBubble

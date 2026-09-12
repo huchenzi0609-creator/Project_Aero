@@ -163,7 +163,18 @@ function wireEvents(s: RawSocket): void {
 
   // v0.2 既有事件 → onlineStore（幂等处理，重连回放安全；旧连接不 join 房间故无重复）
   s.on('identity', (p) => useOnlineStore.getState().handleEvent('identity', p))
-  s.on('roomUpdate', (p) => useOnlineStore.getState().handleEvent('roomUpdate', p))
+  s.on('roomUpdate', (p) => {
+    // v0.3.16：过滤「与当前房间不符 / 当前不在房」的空 players 关闭事件。
+    // 服务端约定 players=[] 表示房间关闭（releaseStaleRoomOf / leaveRoom 广播），但陈旧或
+    // 他人房间的关闭广播不应让本客户端误判解散（曾表现为进房后立即提示「房间已解散」）。
+    // 真正的关闭（当前房间码匹配且此前有玩家）照常透传。
+    const cur = useOnlineStore.getState().room
+    const closing = (p as { players?: unknown[] } | undefined)?.players?.length === 0
+    if (closing && (!cur || cur.code !== (p as { code?: string }).code || cur.players.length === 0)) {
+      return
+    }
+    useOnlineStore.getState().handleEvent('roomUpdate', p)
+  })
   s.on('phaseChange', (p) => useOnlineStore.getState().handleEvent('phaseChange', p))
   s.on('turnStart', (p) => useOnlineStore.getState().handleEvent('turnStart', p))
   s.on('shotResult', (p) => useOnlineStore.getState().handleEvent('shotResult', p))
@@ -178,7 +189,23 @@ function wireEvents(s: RawSocket): void {
   // v0.3 新增事件 → 本地订阅器（gameOver 完整结构时同时喂 onlineStore，
   // 结算页/统计沿用 gameEnd 渲染路径；M5 契约落地后若改事件名在此对齐）
   s.on('match:waiting', (p) => dispatchV030('match:waiting', p))
-  s.on('room:joined', (p) => dispatchV030('room:joined', p))
+  s.on('room:joined', (p) => {
+    // v0.3.16 加固（配合 M5 服务端修复）：
+    // 1) 配对入房同样记录 gameId，保证瞬时断线/刷新后能 emit reconnect 恢复房间；
+    // 2) 用 payload 自带的 room 摘要**直接复位本地会话**（清上一局残留），
+    //    不等后续 roomUpdate —— 避免摆阵页挂载瞬间读到残留会话而误判「房间已解散」；
+    // 3) 服务端已保证发送顺序：先 broadcastRoomUpdate 再 room:joined。
+    const joined = p as RoomJoinedPayload | undefined
+    if (joined?.roomCode) {
+      useOnlineStore.getState().resetSession() // 清上一局残留（room / shots / gameEnd / sessionError…）
+      persistV030GameId(joined.roomCode)
+      if (joined.room) {
+        // you 缺省时先用 0 占位，随后续 roomUpdate 覆盖为真实座位
+        useOnlineStore.getState().handleEvent('roomUpdate', { ...joined.room, you: joined.you ?? 0 })
+      }
+    }
+    dispatchV030('room:joined', p)
+  })
   s.on('clock:update', (p) => dispatchV030('clock:update', p))
   s.on('gameOver', (p) => {
     const full = p as { winner?: number; reason?: string; layouts?: unknown } | undefined

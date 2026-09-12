@@ -205,8 +205,8 @@ export function CustomConfig({ mode = 'single' }: { mode?: 'single' | 'online' }
           <h2 className="settings__section-title">棋盘与飞机数量</h2>
           <div className="custom__field">
             <label className="custom__label" htmlFor="cfg-width">
-              宽（{GRID_MIN}–{GRID_MAX}）
-              <span className="custom__hint">横向列数，字母标号</span>
+              棋盘大小
+              <span className="custom__hint">10格～26格</span>
             </label>
             <div className="custom__inputrow">
               <input
@@ -238,8 +238,8 @@ export function CustomConfig({ mode = 'single' }: { mode?: 'single' | 'online' }
 
           <div className="custom__field">
             <label className="custom__label" htmlFor="cfg-planes">
-              飞机数 n
-              <span className="custom__num">上限 ⌊宽×高÷25⌋ = {maxN}</span>
+              飞机数
+              <span className="custom__num">当前上限为{maxN}架</span>
             </label>
             <input
               id="cfg-planes"
@@ -278,7 +278,6 @@ export function CustomConfig({ mode = 'single' }: { mode?: 'single' | 'online' }
               <div className="custom__toggle-row">
                 <PaperToggle
                   label="超快棋模式"
-                  description="开局倒计时 10×n 秒，超时判负。"
                   checked={blitzMode}
                   onChange={setBlitzMode}
                 />
@@ -286,7 +285,6 @@ export function CustomConfig({ mode = 'single' }: { mode?: 'single' | 'online' }
               <div className="custom__toggle-row">
                 <PaperToggle
                   label="盲棋模式"
-                  description="双方不记旧报点，禁用参考飞机与着色。"
                   checked={blindMode}
                   onChange={setBlindMode}
                 />
@@ -342,7 +340,9 @@ export function CustomConfig({ mode = 'single' }: { mode?: 'single' | 'online' }
             </PaperButton>
           </div>
 
-          <div className={useDefault ? 'shape-editor shape-editor--disabled' : 'shape-editor'}>
+          {/* v0.3.16：默认形状开启时整块压暗遮罩；单击遮罩即关闭该开关、编辑器恢复可用 */}
+          <div className="shape-editor-wrap">
+            <div className={useDefault ? 'shape-editor shape-editor--disabled' : 'shape-editor'}>
             <div className="shape-editor__board" role="group" aria-label="5×5 飞机形状编辑器">
               {Array.from({ length: EDITOR_SIZE }, (_, r) =>
                 Array.from({ length: EDITOR_SIZE }, (_, c) => {
@@ -366,6 +366,18 @@ export function CustomConfig({ mode = 'single' }: { mode?: 'single' | 'online' }
                 }),
               )}
             </div>
+            </div>
+            {useDefault ? (
+              <button
+                type="button"
+                className="shape-editor__mask"
+                onClick={() => setUseDefault(false)}
+                aria-label="解除默认飞机形状锁定，改为自由绘制"
+              >
+                <span className="shape-editor__mask-hint">默认飞机形状已锁定</span>
+                <span className="shape-editor__mask-sub">单击此处解锁并自由绘制</span>
+              </button>
+            ) : null}
           </div>
 
           <div className="editor-legend" aria-hidden="true">
@@ -380,7 +392,9 @@ export function CustomConfig({ mode = 'single' }: { mode?: 'single' | 'online' }
             </span>
           </div>
 
-          {useDefault ? <p className="custom__hint">已锁定默认飞机形状，取消勾选后可自由绘制。</p> : null}
+          {useDefault ? (
+            <p className="custom__hint">已锁定默认飞机形状；单击编辑区遮罩即可解锁并自由绘制。</p>
+          ) : null}
 
           {/* 常驻校验清单 */}
           <ul className="checklist" style={{ listStyle: 'none', paddingLeft: 0 }}>
@@ -413,16 +427,17 @@ export function CustomConfig({ mode = 'single' }: { mode?: 'single' | 'online' }
               <span className="plane-preview__empty">在左侧画出一个格子即可预览</span>
             )}
           </div>
-
-          <div className="custom__actions">
-            <PaperButton variant="ghost" onClick={() => setView(isOnline ? 'online' : 'home')}>
-              取消
-            </PaperButton>
-            <PaperButton variant="primary" disabled={!canConfirm || busy} onClick={confirm}>
-              {isOnline ? '确认 · 创建房间' : '确认 · 进入摆阵'}
-            </PaperButton>
-          </div>
         </PaperCard>
+      </div>
+
+      {/* v0.3.16：确认/取消按钮独立化——不再位于形状编辑器托盘内，作为无托盘元素保留在页面底部右侧 */}
+      <div className="custom__actions custom__actions--standalone">
+        <PaperButton variant="ghost" onClick={() => setView(isOnline ? 'online' : 'home')}>
+          取消
+        </PaperButton>
+        <PaperButton variant="primary" disabled={!canConfirm || busy} onClick={confirm}>
+          {isOnline ? '确认 · 创建房间' : '确认 · 进入摆阵'}
+        </PaperButton>
       </div>
     </div>
   )

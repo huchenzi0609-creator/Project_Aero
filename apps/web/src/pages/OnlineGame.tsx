@@ -186,13 +186,27 @@ export function OnlineGame() {
     }
   }, [sessionError, toast])
 
-  // 房间关闭 → 回菜单
+  // 房间关闭 → 回菜单（v0.3.16 收紧：仅当 players:[] 的房码 === 当前会话房码、且本局确实
+  // 见过玩家时才判定解散；避免残留/他人房间的关闭广播造成误报）
+  const activeRoomCodeRef = useRef<string | null>(null)
+  const roomHadPlayersRef = useRef(false)
   useEffect(() => {
-    if (room && room.players.length === 0) {
-      toast('房间已解散', 'info')
-      useOnlineStore.getState().resetSession()
-      setView('online')
+    if (!room) return
+    if (room.players.length > 0) {
+      activeRoomCodeRef.current = room.code
+      roomHadPlayersRef.current = true
     }
+  }, [room])
+  useEffect(() => {
+    if (!room || room.players.length > 0) return
+    const matchesSession =
+      activeRoomCodeRef.current !== null &&
+      room.code === activeRoomCodeRef.current &&
+      roomHadPlayersRef.current
+    if (!matchesSession) return
+    toast('房间已解散', 'info')
+    useOnlineStore.getState().resetSession()
+    setView('online')
   }, [room, setView, toast])
 
   // 服务端报点结果：0.8s 高亮（对方） + 状态条文字（双方）+ 结果音
@@ -463,6 +477,8 @@ export function OnlineGame() {
     [visibleShots, prefire],
   )
   const invertMarks = useSettingsStore((s) => s.invertMarks)
+  // v0.3.16 单击报点（设置「单击报点」开关，默认 false = 保持两步确认）
+  const singleTapShot = useSettingsStore((s) => s.singleTapShot)
   const renderPreFireShot = useCallback(
     (shot: Shot, cellSize: number) => {
       if (prefireKeys.has(`${shot.coord.r},${shot.coord.c}`)) {
@@ -588,6 +604,27 @@ export function OnlineGame() {
       clearPrefireSel()
       return
     }
+    // v0.3.16 单击模式：单击即创建预报点（跳过两步）；已有预报点单击即取消（保留取消能力）
+    if (singleTapShot) {
+      if (prefire.some((c) => sameCell(c, cell))) {
+        setPrefire((prev) => prefireRemove(prev, cell))
+        clearPrefireSel()
+        toast('预报点已取消。', 'info')
+        return
+      }
+      const { list, ok, full } = prefireAdd(prefire, cell)
+      if (full) {
+        toast('预报点已达数量上限', 'error')
+        return
+      }
+      if (ok) {
+        setPrefire(list)
+        setSelectedPrefire(null)
+        setHighlight(null)
+        setInput(formatCoord(cell))
+      }
+      return
+    }
     if (selectedPrefire && sameCell(selectedPrefire, cell)) {
       confirmPrefireCell(cell) // 第二次单击同一格：创建 / 取消
     } else {
@@ -643,6 +680,11 @@ export function OnlineGame() {
       // 我方回合：盲棋允许重复报点（服务端裁决返回击空），常规拒绝已报格
       if (!modeBlind && alreadyShot(cell)) {
         toast('该格已经报过点了', 'error')
+        return
+      }
+      // v0.3.16 单击模式：单击空网格即发送报点（跳过二次确认）
+      if (singleTapShot) {
+        doShot(cell)
         return
       }
       if (highlight && highlight.r === cell.r && highlight.c === cell.c) {

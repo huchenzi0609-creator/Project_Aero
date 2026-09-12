@@ -13,6 +13,10 @@ export default tseslint.config(
         console: 'readonly',
         document: 'readonly',
         window: 'readonly',
+        // Playwright 脚本在 page.evaluate 回调里使用以下浏览器全局
+        fetch: 'readonly',
+        URL: 'readonly',
+        getComputedStyle: 'readonly',
       },
     },
   },

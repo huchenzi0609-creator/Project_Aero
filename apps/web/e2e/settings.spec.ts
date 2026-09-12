@@ -60,7 +60,7 @@ test.describe('设置', () => {
     expect(errs()).toEqual([])
   })
 
-  test('「允许移动参考飞机」与「快捷着色」开关：默认开，关闭/再开均持久化（刷新保持）', async ({ page }) => {
+  test('「允许移动参考飞机」「快捷着色」「单击报点」开关：默认值与持久化（刷新保持）', async ({ page }) => {
     const errs = watchErrors(page)
 
     await page.goto('/')
@@ -96,6 +96,14 @@ test.describe('设置', () => {
     await page.getByRole('button', { name: '设置' }).click()
     await expect(toggle('快捷着色')).toBeChecked()
     await expect(toggle('允许移动参考飞机')).not.toBeChecked()
+
+    // v0.3.16 单击报点：默认关（旧存档缺省视为 false，保持两步确认）→ 开启后刷新仍保持
+    await expect(toggle('单击报点')).not.toBeChecked()
+    await expect(section.locator('.paper-toggle').filter({ hasText: '单击报点' })).toContainText('单击方格')
+    await toggle('单击报点').check()
+    await page.reload()
+    await page.getByRole('button', { name: '设置' }).click()
+    await expect(toggle('单击报点')).toBeChecked()
 
     expect(errs()).toEqual([])
   })

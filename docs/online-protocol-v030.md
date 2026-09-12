@@ -35,11 +35,20 @@
 
   **server → client**
   - `match:waiting`：入池成功，等待配对（无参数）。
-  - `room:joined`：`{ roomCode: string, config: GridConfig }` —— 配对成功，直接进入该房间（placing）。
+  - `room:joined`：`{ roomCode: string, config: GridConfig, room: RoomSummary, you?: PlayerId }` —— 配对成功，直接进入该房间（placing）。
+    **v0.3.16 增补**：`room`（与 `createRoom` ack 的 `{room}` 对齐，进入房间前即可复位本地会话）与可选的 `you`（座位号）；
+    **发送顺序**：先 `broadcastRoomUpdate`（含新房间摘要）再 `room:joined`，避免客户端切页时读到上一局残留会话而误判「房间已解散」。
 
   配对规则：新请求与等待池中**任一**玩家的勾选组合存在**交集** → 取交集中的一个 combo
   生成配置建房（房主 = 先到者，坐 0 号位）→ 双方各收 `room:joined`；无交集 → 入池收
   `match:waiting`。断开连接自动移出池。
+
+  **v0.3.16 语义变更（残留房间处理）**：`createRoom` / `joinRoom` / `matchmake` / `quickMatch`
+  遇到请求者名下的等待中（waiting/placing）残留房间时，**只摘除请求者自己**（`detachFromStaleRoom` + `vacateSeat`）：
+  房间内无他人 → 静默回收；**仍有对手 → 房间保留（房码不变）并回 waiting，仅向对手广播一次 roomUpdate**。
+  不再向对手广播 `players: []`（旧语义即 v0.3.16「房间已解散」误报的根因）。
+  `notifyRoomClosed`（`players: []`）现仅用于两处：显式 `leaveRoom`、placing 断线宽限到期。
+  另：`joinRoom` 幂等化——已在该房间时按成功处理并补发 `roomUpdate`。
 
   进入房间后沿用既有流程：`roomUpdate` → `placeFleet` → `ready` → `phaseChange('playing')`。
 
@@ -88,7 +97,7 @@
 | C→S | `match:quick` | `{ combos }` | 进入快速匹配等待池 |
 | C→S | `match:cancel` | — | 取消等待 |
 | S→C | `match:waiting` | — | 已入池 |
-| S→C | `room:joined` | `{ roomCode, config }` | 配对成功进房 |
+| S→C | `room:joined` | `{ roomCode, config, room, you? }` | 配对成功进房（v0.3.16 增补 `room`/`you`，先 roomUpdate 后本事件） |
 | S→C | `clock:update` | `{ player: 'me'|'them', ms }` | blitz 时钟（每个接收者两条：me/them） |
 | S→C | `gameOver` | `{ winner, reason:'blitz-timeout', layouts, stats }` | blitz 时钟判负专用终局 |
 

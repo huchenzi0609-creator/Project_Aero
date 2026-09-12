@@ -356,18 +356,56 @@ export class RoomManager {
   }
 
   /**
-   * 兜底释放残留房间（客户端异常退出导致用户仍挂在 waiting/placing 阶段的房间）。
-   * 清理计时器、通知房间内另一玩家解散（roomUpdate players=[]）、从 rooms 删除。
-   * 对局中（playing/counterattack）不释放，返回 false。
+   * 兜底处理用户的残留房间（客户端异常退出/返回菜单后仍挂在 waiting/placing）。
+   *
+   * 与旧实现（v0.2.9 `releaseStaleRoomOf`：整房解散 + 给双方广播 players=[]）不同：
+   * **只把该用户自己从房间摘除（空出座位），绝不整房解散**——否则会把仍在摆阵/等待的
+   * 对手一并踢掉（对手客户端收到 players=[] 即提示「房间已解散」，v0.3.15 线上公网
+   * 快速匹配反复匹配时误报的根因）。
+   * - 摘除后房内已无其他玩家 → 静默回收房间（清理计时器 + 删除）；
+   * - 摘除后仍有对手在房 → 房间回到 waiting 等待新对手，并仅向对手广播 roomUpdate
+   *   （不含 players=[]，房码保留，仍可被 joinRoom 加入）。
+   * playing/counterattack 不处理并返回 false（调用方按「您已在其他对局中」拒绝）。
    */
-  private releaseStaleRoomOf(userId: string): boolean {
+  private detachFromStaleRoom(userId: string): boolean {
     const room = this.roomOfUser(userId)
     if (!room) return false
     if (room.phase === 'playing' || room.phase === 'counterattack') return false
-    this.clearRoomTimers(room)
-    this.notifyRoomClosed(room)
-    this.rooms.delete(room.code)
+    const seat = room.seats.find((s) => s.userId === userId)
+    if (!seat) return false
+    this.vacateSeat(seat)
+    const other = room.seats[(1 - seat.index) as 0 | 1]
+    if (!other.userId) {
+      // 房内已无其他玩家：静默回收（无人需要通知）
+      this.clearRoomTimers(room)
+      this.rooms.delete(room.code)
+      return true
+    }
+    // 保留房间给对手：回到等待态并广播（对手看到「对手已离开」而非「房间已解散」）
+    room.phase = 'waiting'
+    this.broadcastRoomUpdate(room)
     return true
+  }
+
+  /** 清空座位（摘除玩家时用），复位与该座位绑定的全部临时状态 */
+  private vacateSeat(seat: Seat): void {
+    if (seat.machineTimer) {
+      clearTimeout(seat.machineTimer)
+      seat.machineTimer = null
+    }
+    if (seat.disconnectTimer) {
+      clearTimeout(seat.disconnectTimer)
+      seat.disconnectTimer = null
+    }
+    seat.userId = ''
+    seat.name = ''
+    seat.socketId = null
+    seat.connected = false
+    seat.ready = false
+    seat.fleet = null
+    seat.machine = false
+    seat.frozenRemainingMs = null
+    seat.timing = createTimingState(this.timings)
   }
 
   createRoom(
@@ -379,9 +417,9 @@ export class RoomManager {
     // shared gridConfigSchema 已含 blitz/blind 布尔开关，字段类型非法即拒绝
     const parsed = gridConfigSchema.safeParse(config)
     if (!parsed.success) return { ok: false, error: '棋盘配置非法' }
-    // 兜底：若用户残留一个 waiting/placing 阶段的房间，先自动释放再建房；
+    // 兜底：若用户残留 waiting/placing 阶段的房间，先摘除自己（保留对手房间）再建房；
     // 对局中（playing/counterattack）仍拒绝
-    if (!this.releaseStaleRoomOf(userId)) {
+    if (!this.detachFromStaleRoom(userId)) {
       if (this.roomOfUser(userId)) return { ok: false, error: '您已在其他对局中，请先退出' }
     }
     const code = this.uniqueCode()
@@ -401,18 +439,24 @@ export class RoomManager {
     const room = this.rooms.get(code)
     if (!room) return { ok: false, error: '房间不存在' }
     if (room.phase === 'ended') return { ok: false, error: '对局已结束' }
+    // 幂等：用户已在该房间（客户端重复 join / 收到 room:joined 后再 join）→ 直接成功并补发状态，
+    // 与自定义房间的握手语义保持一致（不再报「您已在该房间中」误伤前端会话）
+    const mine = room.seats.find((s) => s.userId === userId)
+    if (mine) {
+      mine.socketId = socketId
+      mine.connected = true
+      this.emitToSeat(mine, 'roomUpdate', { ...this.roomSummary(room), you: mine.index } satisfies RoomUpdate)
+      return { ok: true }
+    }
     if (room.phase === 'playing') return { ok: false, error: '对局已开始' }
-    // 兜底：若用户残留 waiting/placing 阶段的房间，先自动释放再入房；
-    // 对局中仍拒绝；重复 join 自己所在的房间直接报错
+    // 兜底：若用户残留其他 waiting/placing 房间，先摘除自己（保留对手房间）再入房；
+    // 对局中仍拒绝
     const stale = this.roomOfUser(userId)
     if (stale) {
-      if (stale === room) return { ok: false, error: '您已在该房间中' }
       if (stale.phase === 'playing' || stale.phase === 'counterattack') {
         return { ok: false, error: '您已在其他对局中，请先退出' }
       }
-      this.clearRoomTimers(stale)
-      this.notifyRoomClosed(stale)
-      this.rooms.delete(stale.code)
+      this.detachFromStaleRoom(userId)
     }
     const freeIndex = room.seats.findIndex((s) => !s.userId)
     if (freeIndex === -1) return { ok: false, error: '房间已满' }
@@ -1028,8 +1072,8 @@ export class RoomManager {
     const key = this.configKey(parsed.data)
     const presetKeys = Object.values(PRESETS).map((c) => this.configKey(c))
     if (!presetKeys.includes(key)) return { ok: false, error: '自定义配置不进匹配池，请自建房间' }
-    // 兜底：若用户残留 waiting/placing 阶段的房间，先自动释放再入队；对局中仍拒绝
-    if (!this.releaseStaleRoomOf(userId)) {
+    // 兜底：若用户残留 waiting/placing 阶段的房间，先摘除自己（保留对手房间）再入队；对局中仍拒绝
+    if (!this.detachFromStaleRoom(userId)) {
       if (this.roomOfUser(userId)) return { ok: false, error: '您已在其他对局中，请先退出' }
     }
 
@@ -1126,7 +1170,7 @@ export class RoomManager {
   ): { ok: true } | { ok: false; error: string } {
     if (!Array.isArray(rawCombos) || rawCombos.length === 0) return { ok: false, error: '缺少匹配选项' }
     // 兜底：释放残留 waiting/placing 房间；对局中（playing/counterattack）仍拒绝
-    if (!this.releaseStaleRoomOf(userId)) {
+    if (!this.detachFromStaleRoom(userId)) {
       if (this.roomOfUser(userId)) return { ok: false, error: '您已在其他对局中，请先退出' }
     }
     const keys = new Set<string>()
@@ -1160,7 +1204,14 @@ export class RoomManager {
     return { ok: true }
   }
 
-  /** 按交集 combo 建房并广播 room:joined（房主 = 先入池者，坐 0 号位） */
+  /**
+   * 按交集 combo 建房并进入摆阵（房主 = 先入池者，坐 0 号位）。
+   *
+   * 握手顺序（v0.3.16 修复）：**先广播 roomUpdate（把新房间摘要写入客户端会话），再发 room:joined**。
+   * 否则客户端收到 room:joined 立即切到摆阵页，而挂载时读到的仍是上一局残留的 room 状态
+   * （可能为 players=[]）→ 误报「房间已解散」。room:joined 同时携带 room/you 摘要（与
+   * createRoom/joinRoom 的 ack `{room}` 语义对齐，客户端可据此直接复位会话）。
+   */
   private buildQuickRoom(
     config: GridConfig,
     host: { socketId: string; userId: string; name: string },
@@ -1172,10 +1223,18 @@ export class RoomManager {
     this.occupySeat(room, 0, host.userId, host.name, host.socketId)
     this.occupySeat(room, 1, guest.userId, guest.name, guest.socketId)
     room.phase = 'placing'
-    const joined = { roomCode: code, config } as const
-    this.emitToSocket(host.socketId, 'room:joined', joined)
-    this.emitToSocket(guest.socketId, 'room:joined', joined)
+    // 1) 先让双方拿到新房间的完整摘要（客户端 store 会话复位）
     this.broadcastRoomUpdate(room)
+    // 2) 再通知进入摆阵（携带 room/you 摘要，便于客户端立即复位会话，避免读到旧状态）
+    const summary = this.roomSummary(room)
+    for (const seat of room.seats) {
+      this.emitToSocket(seat.socketId as string, 'room:joined', {
+        roomCode: code,
+        config,
+        room: summary,
+        you: seat.index,
+      })
+    }
   }
 
   /** 取消快速匹配（match:cancel）：把用户移出等待池 */

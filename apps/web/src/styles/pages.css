@@ -281,6 +281,46 @@
   --cell: 34px;
   display: inline-block;
 }
+/* v0.3.16：编辑器包裹层（承载默认形状遮罩） */
+.shape-editor-wrap {
+  position: relative;
+  display: inline-block;
+}
+/* 默认形状遮罩：整块压暗（复用突显遮罩观感）；单击即解锁自定义绘制 */
+.shape-editor__mask {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  padding: 8px;
+  margin: 0;
+  border: 1.5px dashed rgba(96, 78, 50, 0.6);
+  border-radius: var(--radius-sm);
+  background: rgba(58, 46, 28, 0.42);
+  color: #fbf7ea;
+  font: inherit;
+  font-size: 12.5px;
+  line-height: 1.35;
+  letter-spacing: 0.04em;
+  text-align: center;
+  cursor: pointer;
+  transition: background-color 120ms ease;
+}
+.shape-editor__mask:hover {
+  background: rgba(58, 46, 28, 0.52);
+}
+.shape-editor__mask-hint {
+  font-weight: 600;
+  font-size: 13px;
+}
+.shape-editor__mask-sub {
+  font-size: 11px;
+  opacity: 0.9;
+}
 .shape-editor__board {
   display: grid;
   grid-template-columns: repeat(5, var(--cell));
@@ -351,6 +391,11 @@
   justify-content: flex-end;
   margin-top: 18px;
   flex-wrap: wrap;
+}
+/* v0.3.16：确认/取消独立于编辑器托盘——页面底部右侧的无托盘动作行 */
+.custom__actions--standalone {
+  margin-top: 14px;
+  padding: 0 4px;
 }
 .plane-preview {
   display: flex;
@@ -861,6 +906,17 @@
     padding: 8px;
     gap: 2px;
   }
+  /* v0.3.16：遮罩文案在窄舞台下同步收缩 */
+  .shape-editor__mask {
+    padding: 6px;
+    font-size: 10px;
+  }
+  .shape-editor__mask-hint {
+    font-size: 10.5px;
+  }
+  .shape-editor__mask-sub {
+    font-size: 9px;
+  }
   .editor-head {
     flex-wrap: wrap;
     row-gap: 2px;
@@ -906,6 +962,11 @@
     align-items: stretch;
     margin-top: 2px;
     gap: 6px;
+  }
+  /* v0.3.16：独立动作行在竖版下与上方网格留出间距 */
+  .custom__actions--standalone {
+    margin-top: 8px;
+    padding: 0;
   }
   .custom__actions .paper-btn {
     width: 100%;

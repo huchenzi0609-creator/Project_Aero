@@ -19,8 +19,8 @@ test.describe('主页', () => {
     await expect(page.getByRole('button', { name: '对战模式' })).toBeVisible()
     await expect(page.getByRole('button', { name: '设置' })).toBeVisible()
     await expect(page.getByRole('button', { name: '规则说明' })).toBeVisible()
-    // 版本角标 v0.3.15
-    await expect(page.locator('.home__version')).toHaveText('v0.3.15')
+    // 版本角标 v0.3.16
+    await expect(page.locator('.home__version')).toHaveText('v0.3.16')
     // 备案合规：工信部备案号链接（横版默认视口）
     const icp = page.locator('a.home__icp', { hasText: '浙ICP备2026073891号' })
     await expect(icp).toBeVisible()

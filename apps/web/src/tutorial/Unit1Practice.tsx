@@ -18,6 +18,7 @@ import type { Cell, PlacedPlane, Shot, ShotOutcome } from '@aero/shared'
 import { DEFAULT_PLANE_SHAPE } from '@aero/shared'
 import { rotateShape } from '@aero/game-core'
 import { useEffectiveOrientation } from '../hooks/useOrientation'
+import { useSettingsStore } from '../store/settingsStore'
 import { PaperButton } from '../components/ui/PaperButton'
 import { PaperGrid } from '../components/grid/PaperGrid'
 import { TutorialBubble } from './TutorialBubble'
@@ -77,6 +78,8 @@ export function Unit1Practice({ onExitHome, onDone }: { onExitHome: () => void; 
   const [s2Msg, setS2Msg] = useState<string | null>(null)
   /** 玩家报点留下的展示标记（同格覆盖预置值） */
   const [playerShots, setPlayerShots] = useState<Shot[]>([])
+  /** v0.3.16：设置「单击报点」开启时，单击即视为报点（默认关 → 仍为双击） */
+  const singleTapShot = useSettingsStore((s) => s.singleTapShot)
   const lastClickRef = useMemo(() => ({ coord: null as Cell | null, t: 0 }), [])
 
   /* ---------- 场景2 目标：E5（rot u = 0） ---------- */
@@ -114,7 +117,7 @@ export function Unit1Practice({ onExitHome, onDone }: { onExitHome: () => void; 
   }
 
   const onCellClick = (coord: Cell) => {
-    if (!isDouble(coord)) return
+    if (!singleTapShot && !isDouble(coord)) return
     if (scene === 2) {
       const outcome = classifyShot(s2Plane, coord)
       pushShot(coord, outcome)
@@ -276,8 +279,9 @@ export function Unit1Practice({ onExitHome, onDone }: { onExitHome: () => void; 
       </div>
 
       {/* measureKey：同一选择器在不同场景尺寸变化（5×5 ↔ 10×10）时强制重新测量 */}
-      {modal && !modalOpen ? (
+      {!modalOpen ? (
         <TutorialSpotlight
+          active={modal}
           target={target}
           dim={bubbleDim}
           measureKey={`${scene}-${phase}`}

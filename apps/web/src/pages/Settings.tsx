@@ -17,12 +17,14 @@ export function Settings() {
   const difficulty = useSettingsStore((s) => s.difficulty)
   const allowMoveRefPlane = useSettingsStore((s) => s.allowMoveRefPlane)
   const quickColor = useSettingsStore((s) => s.quickColor)
+  const singleTapShot = useSettingsStore((s) => s.singleTapShot)
   const setBgmVolume = useSettingsStore((s) => s.setBgmVolume)
   const setSfxVolume = useSettingsStore((s) => s.setSfxVolume)
   const toggleInvertMarks = useSettingsStore((s) => s.toggleInvertMarks)
   const setDifficulty = useSettingsStore((s) => s.setDifficulty)
   const toggleAllowMoveRefPlane = useSettingsStore((s) => s.toggleAllowMoveRefPlane)
   const toggleQuickColor = useSettingsStore((s) => s.toggleQuickColor)
+  const toggleSingleTapShot = useSettingsStore((s) => s.toggleSingleTapShot)
 
   // 「地狱」难度描述跟随新算法（v0.2.7 后：机头概率热图 + 斩首式报点）
   const difficultyOptions = DIFFICULTY_OPTIONS.map((o) =>
@@ -121,6 +123,14 @@ export function Settings() {
                 description="开启后，着色模式下点击幽灵飞机 = 整架批量着色并回收幽灵。（默认开）"
                 checked={quickColor}
                 onChange={toggleQuickColor}
+              />
+            </div>
+            <div className="settings__row">
+              <PaperToggle
+                label="单击报点"
+                description="开启后仅需单击方格即可完成报点或预报点，无需再次点击确认。"
+                checked={singleTapShot}
+                onChange={toggleSingleTapShot}
               />
             </div>
           </PaperCard>

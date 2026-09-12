@@ -94,6 +94,12 @@ export function GameScreen({ mode = 'single', onGameEvent, aiShotSelector, hideS
   const bgmVolume = useSettingsStore((s) => s.bgmVolume)
   const sfxVolume = useSettingsStore((s) => s.sfxVolume)
   const settingsAllowMove = useSettingsStore((s) => s.allowMoveRefPlane)
+  // v0.3.16：单击报点（M3 并行新增 settingsStore.singleTapShot，默认 false；未落盘前动态读取）
+  const singleTapShot = useSettingsStore(
+    (s) => (s as unknown as { singleTapShot?: boolean }).singleTapShot ?? false,
+  )
+  // 教程有自己的点击语义（双击报点/两步预报点），冲突时以教程流程为准（教程经 onGameEvent 注入）
+  const singleTap = singleTapShot && !onGameEvent
   const invertMarks = useSettingsStore((s) => s.invertMarks)
 
   const orientation = useEffectiveOrientation()
@@ -698,7 +704,11 @@ export function GameScreen({ mode = 'single', onGameEvent, aiShotSelector, hideS
       setInput(formatCoord(cell))
       return
     }
-    // 空网格：两步——第一次单击仅选中，第二次单击同一格才创建
+    // 空网格：v0.3.16 单击报点开 → 单击即创建；否则两步（首次选中、再点同格创建）
+    if (singleTap) {
+      addPrefire(cell)
+      return
+    }
     if (pfSel && pfSel.r === cell.r && pfSel.c === cell.c) {
       addPrefire(cell)
       return
@@ -716,6 +726,11 @@ export function GameScreen({ mode = 'single', onGameEvent, aiShotSelector, hideS
     }
     if (!isBlind && alreadyShot(cell)) {
       toast('该格已经报过点了', 'error')
+      return
+    }
+    if (singleTap) {
+      // v0.3.16：单击报点开 → 单击空网格即发射（引擎裁决与两步路径完全一致）
+      doShot(cell)
       return
     }
     if (highlight && highlight.r === cell.r && highlight.c === cell.c) {

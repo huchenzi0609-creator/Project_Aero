@@ -143,4 +143,79 @@ test.describe('联机全流程', () => {
     await ctxA.close()
     await ctxB.close()
   })
+
+  test('快速匹配双人链路：配对入房一致、无「房间已解散」；重复匹配不踢对手（房码不变、仍可加入）', async ({
+    browser,
+  }) => {
+    test.setTimeout(240_000)
+    const ctxA = await browser.newContext({ viewport: { width: 1280, height: 800 } })
+    const ctxB = await browser.newContext({ viewport: { width: 1280, height: 800 } })
+    const A = await ctxA.newPage()
+    const B = await ctxB.newPage()
+    const errsA = watchErrors(A)
+    const errsB = watchErrors(B)
+
+    // 双方进入对战模式（默认勾选经典三档 → 交集必配）
+    for (const p of [A, B]) {
+      await p.goto('/')
+      await expect(p.getByRole('heading', { name: '飞机杀' })).toBeVisible()
+      await p.getByRole('button', { name: '对战模式' }).click()
+      await expect(p.getByRole('heading', { name: '对战模式' })).toBeVisible()
+    }
+
+    // 双方点匹配 → 服务端配对
+    await expect(A.getByRole('button', { name: '开始匹配' })).toBeEnabled({ timeout: 20000 })
+    await A.getByRole('button', { name: '开始匹配' }).click()
+    await expect(B.getByRole('button', { name: '开始匹配' })).toBeEnabled({ timeout: 20000 })
+    await B.getByRole('button', { name: '开始匹配' }).click()
+
+    // 配对成功：双方进入联机摆阵，房码一致、配置一致
+    for (const p of [A, B]) {
+      await expect(p.getByRole('heading', { name: '摆阵 · 联机对局' })).toBeVisible({ timeout: 25000 })
+    }
+    const codeA = (await A.locator('.online__roomcode').innerText()).trim()
+    const codeB = (await B.locator('.online__roomcode').innerText()).trim()
+    expect(codeA).toMatch(/^[A-Z0-9]{6}$/)
+    expect(codeB).toBe(codeA)
+    for (const p of [A, B]) {
+      await expect(p.locator('.placement__head .page__subtitle')).toContainText('10×10 · 3 架飞机')
+      await expect(p.locator('.online__statusrow')).not.toContainText('等待对手加入')
+      await expect(p.locator('.online__statusrow')).toContainText('对手摆阵中')
+    }
+    // v0.3.16 修复点：配对入房后不得误报「房间已解散」
+    await A.waitForTimeout(800)
+    for (const p of [A, B]) {
+      expect(await p.locator('.toast').filter({ hasText: '房间已解散' }).count()).toBe(0)
+    }
+
+    // 重复匹配（配对后再点）：A 刷新回主页 → 再进对战模式 → 再次开始匹配
+    await A.reload()
+    await expect(A.getByRole('button', { name: '对战模式' })).toBeVisible({ timeout: 20000 })
+    await A.getByRole('button', { name: '对战模式' }).click()
+    await expect(A.getByRole('button', { name: '开始匹配' })).toBeEnabled({ timeout: 20000 })
+    await A.getByRole('button', { name: '开始匹配' }).click()
+    await expect(A.getByText('正在匹配对手…')).toBeVisible({ timeout: 10000 })
+
+    // 对手房间保留：房码不变、未出现「房间已解散」、仍在摆阵页且回到等待对手
+    await expect(B.locator('.online__roomcode')).toHaveText(codeA)
+    await B.waitForTimeout(800)
+    expect(await B.locator('.toast').filter({ hasText: '房间已解散' }).count()).toBe(0)
+    await expect(B.getByRole('heading', { name: '摆阵 · 联机对局' })).toBeVisible()
+    await expect(B.locator('.online__statusrow')).toContainText('等待对手加入')
+
+    // 取消匹配 → 用原房码重新加入（房码保留、对手房间仍可加入）
+    await A.getByRole('button', { name: '取消匹配' }).click()
+    await A.getByLabel('房码输入').fill(codeA)
+    const joinBtn = A.getByRole('button', { name: '加入已有对局' })
+    await expect(joinBtn).toBeEnabled({ timeout: 20000 })
+    await joinBtn.click()
+    await expect(A.getByRole('heading', { name: '摆阵 · 联机对局' })).toBeVisible({ timeout: 20000 })
+    await expect(A.locator('.online__roomcode')).toHaveText(codeA)
+    await expect(B.locator('.online__statusrow')).not.toContainText('等待对手加入')
+
+    expect(errsA()).toEqual([])
+    expect(errsB()).toEqual([])
+    await ctxA.close()
+    await ctxB.close()
+  })
 })

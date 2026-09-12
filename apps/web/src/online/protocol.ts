@@ -6,7 +6,7 @@
  * 事件名与 payload 先行声明本地类型，落地后仅需把下列类型替换为 shared 导出（或删掉本文件
  * 改用 shared），事件处理无需改动。差异点见交付报告。
  */
-import type { GridConfig, PlacedPlane } from '@aero/shared'
+import type { GridConfig, PlacedPlane, RoomSummary } from '@aero/shared'
 
 /* ---------- 模式与匹配 ---------- */
 
@@ -31,6 +31,10 @@ export interface QuickMatchWaitingPayload {
 export interface RoomJoinedPayload {
   roomCode: string
   config: GridConfig
+  /** v0.3.16：房间摘要（与 createRoom ack 的 {room} 对齐），进入房间前即可复位本地会话 */
+  room?: RoomSummary
+  /** v0.3.16：本方座位号（可选；缺省时随后续 roomUpdate 补齐） */
+  you?: 0 | 1
 }
 
 export interface ClockUpdatePayload {

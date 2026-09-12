@@ -39,6 +39,8 @@ type TestSocket = Socket<ServerToClientEvents, ClientToServerEvents>
 
 class TestClient {
   readonly socket: TestSocket
+  /** 事件到达顺序（v0.3.16 断言服务端握手次序用） */
+  readonly eventLog: string[] = []
   private buffers = new Map<string, unknown[]>()
   private disposed = false
 
@@ -46,6 +48,7 @@ class TestClient {
     // socket.io-client 4.8 的 lookup 签名不带泛型，这里断言为项目协议类型
     this.socket = ioClient(url) as unknown as TestSocket
     this.socket.onAny((event, ...args) => {
+      this.eventLog.push(event)
       const arr = this.buffers.get(event) ?? []
       arr.push(args.length > 0 ? args[0] : undefined)
       this.buffers.set(event, arr)
@@ -694,7 +697,7 @@ describe('围棋读秒 → 系统代走 / 机器接管（快速计时）', () =>
   })
 })
 
-describe('残留房间自动释放（客户端异常退出兜底）', () => {
+describe('残留房间摘除（客户端异常退出兜底；保留对手房间不误杀）', () => {
   let server: ServerHandle
   let core: GameCoreApi
 
@@ -733,7 +736,7 @@ describe('残留房间自动释放（客户端异常退出兜底）', () => {
     }
   })
 
-  it('placing 阶段残留：A 与 B 同房时再 createRoom → 成功，B 收到 players=[] 解散', async () => {
+  it('placing 阶段摘除：A 与 B 同房时再 createRoom → A 建房成功，B 房间被保留（不误杀对手）', async () => {
     const a = new TestClient(server.url)
     const b = new TestClient(server.url)
     try {
@@ -742,13 +745,28 @@ describe('残留房间自动释放（客户端异常退出兜底）', () => {
       const r1 = await emitAck<{ roomCode?: string }>(a.socket, 'createRoom', { config: PRESETS.small })
       const j1 = await emitAck<{ room?: RoomSummary }>(b.socket, 'joinRoom', { code: r1.roomCode as string })
       expect(j1.room).toBeDefined()
-      // A 在 placing 阶段再建房：B 应收到房间解散（players=[]），A 建房成功
-      const bClosed = b.waitFor<RoomUpdate>('roomUpdate', (r) => r.players.length === 0)
+      // A 在 placing 阶段再建房：A 被从原房间摘除（保留 B 的房间），A 建房成功
       const r2 = await emitAck<{ roomCode?: string }>(a.socket, 'createRoom', { config: PRESETS.small })
       expect(r2.roomCode).toBeDefined()
-      const closed = await bClosed
-      expect(closed.code).toBe(r1.roomCode)
-      expect(closed.players).toHaveLength(0)
+      expect(r2.roomCode).not.toBe(r1.roomCode)
+      await b.waitFor<RoomUpdate>(
+        'roomUpdate',
+        (r) => r.code === r1.roomCode && r.players[(1 - r.you) as 0 | 1]?.name === '',
+        3_000,
+      )
+      // v0.3.16：绝不向仍在房内的对手广播 players=[]（否则对手客户端提示「房间已解散」）
+      const closedB = b.history<RoomUpdate>('roomUpdate').filter((r) => r.players.length === 0)
+      expect(closedB).toHaveLength(0)
+      // 原房间房码保留、仍可加入
+      const c = new TestClient(server.url)
+      try {
+        await authClient(c)
+        const jc = await emitAck<{ room?: RoomSummary }>(c.socket, 'joinRoom', { code: r1.roomCode as string })
+        expect(jc.room?.code).toBe(r1.roomCode)
+        c.socket.emit('leaveRoom')
+      } finally {
+        c.dispose()
+      }
       a.socket.emit('leaveRoom')
     } finally {
       a.dispose()
@@ -1099,6 +1117,9 @@ interface ClockUpdateLike {
 interface RoomJoinedLike {
   roomCode: string
   config: GridConfig
+  /** v0.3.16：room:joined 附带的房间摘要（与 createRoom/joinRoom ack 的 room 语义对齐） */
+  room?: RoomSummary
+  you?: 0 | 1
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
@@ -1320,6 +1341,161 @@ describe('v0.3.0：超快棋 / 盲棋 / 快速匹配', () => {
       const q2 = await rawEmit<{ ok: boolean; error?: string }>(b, 'match:quick', { combos: [] })
       expect(q2.ok).toBe(false)
       expect(q2.error).toContain('缺少')
+    } finally {
+      a.dispose()
+      b.dispose()
+    }
+  })
+})
+
+/* ---------------------------------------------------------------- v0.3.16 */
+
+describe('v0.3.16：公网快速匹配（match:quick）房间生命周期', () => {
+  let server: ServerHandle
+  let core: GameCoreApi
+
+  beforeAll(async () => {
+    const resolved = resolveGameCore()
+    core = resolved.core
+    server = await startServer({ port: 0, dataDir: ':memory:', roomManagerOptions: { core } })
+  })
+  afterAll(async () => {
+    await server.close()
+  })
+
+  const combo = { gridSize: 10, planes: 3, blitz: false, blind: false }
+  /** 客户端收到的「房间已解散」广播（players=[]） */
+  const closedUpdates = (c: TestClient): RoomUpdate[] =>
+    c.history<RoomUpdate>('roomUpdate').filter((r) => r.players.length === 0)
+
+  /** 双方依次 match:quick（同 combo）→ 返回双方 room:joined 载荷 */
+  async function pairQuick(a: TestClient, b: TestClient): Promise<{ joinedA: RoomJoinedLike; joinedB: RoomJoinedLike }> {
+    const waitingA = a.waitFor<void>('match:waiting', undefined, 5_000)
+    const ackA = await rawEmit<{ ok: boolean; error?: string }>(a, 'match:quick', { combos: [combo] })
+    expect(ackA.ok).toBe(true)
+    await waitingA
+    const joinedAP = a.waitFor<RoomJoinedLike>('room:joined', undefined, 5_000)
+    const joinedBP = b.waitFor<RoomJoinedLike>('room:joined', undefined, 5_000)
+    const ackB = await rawEmit<{ ok: boolean; error?: string }>(b, 'match:quick', { combos: [combo] })
+    expect(ackB.ok).toBe(true)
+    return { joinedA: await joinedAP, joinedB: await joinedBP }
+  }
+
+  it('首次配对：双方 room:joined 同房码、进入 placing 摆阵态、房间未被回收', { timeout: 15_000 }, async () => {
+    const a = new TestClient(server.url)
+    const b = new TestClient(server.url)
+    try {
+      await authClient(a)
+      await authClient(b)
+      const { joinedA, joinedB } = await pairQuick(a, b)
+      expect(joinedA.roomCode).toBe(joinedB.roomCode)
+      expect(joinedA.config.width).toBe(10)
+      // room:joined 附带房间摘要（客户端可据此复位会话，无需依赖旧 store 状态）
+      expect(joinedA.room?.code).toBe(joinedA.roomCode)
+      expect(joinedA.room?.players.length).toBe(2)
+      expect(joinedA.room?.phase).toBe('placing')
+      expect(joinedA.you).toBe(0)
+      expect(joinedB.you).toBe(1)
+      // v0.3.16 握手顺序：新房间的 roomUpdate 必须先于 room:joined 到达，
+      // 否则客户端切到摆阵页时读到的仍是上一局残留会话（players=[]）→ 误报「房间已解散」
+      const logA = a.eventLog
+      expect(logA.indexOf('roomUpdate')).toBeGreaterThanOrEqual(0)
+      expect(logA.indexOf('roomUpdate')).toBeLessThan(logA.indexOf('room:joined'))
+      const logB = b.eventLog
+      expect(logB.indexOf('roomUpdate')).toBeGreaterThanOrEqual(0)
+      expect(logB.indexOf('roomUpdate')).toBeLessThan(logB.indexOf('room:joined'))
+      // 双方均处于 placing、2 人在房
+      const ruA = await a.waitFor<RoomUpdate>('roomUpdate', (r) => r.players.length === 2, 3_000)
+      const ruB = await b.waitFor<RoomUpdate>('roomUpdate', (r) => r.players.length === 2, 3_000)
+      expect(ruA.code).toBe(joinedA.roomCode)
+      expect(ruA.phase).toBe('placing')
+      expect(ruB.phase).toBe('placing')
+      // 配对后观察窗内不得出现「房间已解散」广播
+      await sleep(500)
+      expect(closedUpdates(a)).toHaveLength(0)
+      expect(closedUpdates(b)).toHaveLength(0)
+      // 房间仍可用：双方摆阵 + 就绪 → 进入 playing
+      const fleetA = core.generateFleet(10, 10, 3, DEFAULT_PLANE_SHAPE, 'normal', core.mulberry32(201))
+      const fleetB = core.generateFleet(10, 10, 3, DEFAULT_PLANE_SHAPE, 'normal', core.mulberry32(202))
+      const pfA = await emitAck<{ errors?: string[] }>(a.socket, 'placeFleet', { planes: fleetA })
+      const pfB = await emitAck<{ errors?: string[] }>(b.socket, 'placeFleet', { planes: fleetB })
+      expect(pfA.errors ?? []).toEqual([])
+      expect(pfB.errors ?? []).toEqual([])
+      await readyBoth(a, b)
+      // 收尾
+      const endAP = a.waitFor<GameEndPayload>('gameEnd', undefined, 5_000)
+      const endBP = b.waitFor<GameEndPayload>('gameEnd', undefined, 5_000)
+      b.socket.emit('resign')
+      await Promise.all([endAP, endBP])
+    } finally {
+      a.dispose()
+      b.dispose()
+    }
+  })
+
+  it('配对后一方再次 match:quick：对手房间不应被解散（无 players=[] 广播）', { timeout: 15_000 }, async () => {
+    const a = new TestClient(server.url)
+    const b = new TestClient(server.url)
+    try {
+      await authClient(a)
+      await authClient(b)
+      const { joinedA } = await pairQuick(a, b)
+      await b.waitFor<RoomUpdate>('roomUpdate', (r) => r.players.length === 2, 3_000)
+      // A 仍在 placing 房间时再次发起匹配（模拟：返回菜单后重新点「开始匹配」）
+      const waitingAP = a.waitFor<void>('match:waiting', undefined, 5_000)
+      const ackA = await rawEmit<{ ok: boolean; error?: string }>(a, 'match:quick', { combos: [combo] })
+      expect(ackA.ok).toBe(true)
+      await waitingAP
+      await sleep(500)
+      // 关键：B（原对手）不得收到「房间已解散」
+      expect(closedUpdates(b)).toHaveLength(0)
+      // B 仍留在原房间（房码不变、二人摘要按座位索引对齐），仅对手座位空出
+      const lastRoomB = b.history<RoomUpdate>('roomUpdate').at(-1) as RoomUpdate
+      expect(lastRoomB.code).toBe(joinedA.roomCode)
+      const vacated = lastRoomB.players[(1 - lastRoomB.you) as 0 | 1] as RoomUpdate['players'][number]
+      expect(vacated.name).toBe('')
+      expect(vacated.connected).toBe(false)
+      // 房间保留且可继续使用：新玩家 C 凭房码加入 → 双方回到 placing 2 人
+      const c = new TestClient(server.url)
+      try {
+        await authClient(c)
+        const joinC = await emitAck<{ room?: RoomSummary; error?: string }>(c.socket, 'joinRoom', {
+          code: joinedA.roomCode,
+        })
+        expect(joinC.room?.code).toBe(joinedA.roomCode)
+        await b.waitFor<RoomUpdate>('roomUpdate', (r) => r.players.length === 2 && r.phase === 'placing', 3_000)
+      } finally {
+        rawSend(a, 'match:cancel')
+        c.socket.emit('leaveRoom')
+        c.dispose()
+      }
+    } finally {
+      a.dispose()
+      b.dispose()
+    }
+  })
+
+  it('连续多轮匹配稳定：每轮双方配对成功且全程无解散广播', { timeout: 30_000 }, async () => {
+    const a = new TestClient(server.url)
+    const b = new TestClient(server.url)
+    try {
+      await authClient(a)
+      await authClient(b)
+      const codes: string[] = []
+      for (let round = 0; round < 3; round++) {
+        const { joinedA, joinedB } = await pairQuick(a, b)
+        expect(joinedA.roomCode).toBe(joinedB.roomCode)
+        codes.push(joinedA.roomCode)
+        await a.waitFor<RoomUpdate>('roomUpdate', (r) => r.players.length === 2 && r.code === joinedA.roomCode, 3_000)
+        await b.waitFor<RoomUpdate>('roomUpdate', (r) => r.players.length === 2 && r.code === joinedA.roomCode, 3_000)
+        // 正常退出摆阵（M6「返回」行为）
+        a.socket.emit('leaveRoom')
+        b.socket.emit('leaveRoom')
+        await sleep(120)
+      }
+      // 每轮房码唯一、均在 placing 各就位（显式 leaveRoom 的解散广播属预期，不计入违规）
+      expect(new Set(codes).size).toBe(3)
+      expect(codes.every((c) => /^[A-Z0-9]{6}$/.test(c))).toBe(true)
     } finally {
       a.dispose()
       b.dispose()

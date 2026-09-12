@@ -58,6 +58,8 @@ export function OnlineMenu() {
   const [checks, setChecks] = useState<Record<Mode, Record<Tier, boolean>>>(DEFAULT_CHECKS)
   const [waiting, setWaiting] = useState(false)
   const [busy, setBusy] = useState(false)
+  // v0.3.16：已发起匹配（等待中或已配对）期间锁定「开始匹配」，避免重复 match:quick
+  const [matchLocked, setMatchLocked] = useState(false)
   const [conn, setConn] = useState<ClientStatus>('idle')
 
   // 本页承载联机会话 → 连接 v0.3 客户端
@@ -68,21 +70,23 @@ export function OnlineMenu() {
 
   const connected = conn === 'connected'
 
-  // room:joined（快速匹配配对成功）→ 复位匹配态并进入房间流程
+  // room:joined（快速匹配配对成功）→ 复位匹配态（保持锁定，防重复触发）并进入房间流程
   useEffect(
     () =>
       onV030('room:joined', () => {
         setWaiting(false)
         setBusy(false)
+        setMatchLocked(true)
         setView('onlinePlacement')
       }),
     [setView],
   )
-  // match:waiting → 进入等待态（可取消）
+  // match:waiting → 进入等待态（已锁定开始匹配，可取消）
   useEffect(
     () =>
       onV030('match:waiting', () => {
         setWaiting(true)
+        setMatchLocked(true)
         setBusy(false)
       }),
     [],
@@ -112,7 +116,7 @@ export function OnlineMenu() {
   }, [checks])
 
   const startMatch = async () => {
-    if (busy || combos.length === 0) return
+    if (busy || matchLocked || combos.length === 0) return
     setBusy(true)
     const res = await v030Api.matchQuick(combos)
     if (!res.ok) {
@@ -122,11 +126,13 @@ export function OnlineMenu() {
     }
     // ack 成功即视为已入等待池（waiting 事件会同步 UI）；若事件先行丢失，本页兜底
     setWaiting(true)
+    setMatchLocked(true)
   }
 
   const cancelMatch = () => {
     setWaiting(false)
     setBusy(false)
+    setMatchLocked(false)
     v030Api.cancelMatch()
     toast('已退出匹配', 'info')
   }
@@ -247,7 +253,7 @@ export function OnlineMenu() {
               <span className="online__summary">{summary}</span>
               <PaperButton
                 variant="primary"
-                disabled={busy || !connected || combos.length === 0}
+                disabled={busy || matchLocked || !connected || combos.length === 0}
                 onClick={() => void startMatch()}
               >
                 开始匹配

@@ -1,5 +1,5 @@
 /**
- * settingsStore —— 音量 / 反转 X 与 O / AI 难度 / 参考飞机 / 快捷着色，localStorage 持久化。
+ * settingsStore —— 音量 / 反转 X 与 O / AI 难度 / 参考飞机 / 快捷着色 / 单击报点，localStorage 持久化。
  */
 import { create } from 'zustand'
 import { createJSONStorage, persist } from 'zustand/middleware'
@@ -21,12 +21,15 @@ interface SettingsState {
   allowMoveRefPlane: boolean
   /** 快捷着色（v0.3.0）：着色模式点击幽灵飞机 = 整架批量着色并回收幽灵；旧存档缺省视为 true */
   quickColor: boolean
+  /** 单击报点（v0.3.16）：单击方格即完成报点/预报点，无需再次点击确认；旧存档缺省视为 false（关） */
+  singleTapShot: boolean
   setBgmVolume: (v: number) => void
   setSfxVolume: (v: number) => void
   toggleInvertMarks: () => void
   setDifficulty: (d: Difficulty) => void
   toggleAllowMoveRefPlane: () => void
   toggleQuickColor: () => void
+  toggleSingleTapShot: () => void
 }
 
 export const useSettingsStore = create<SettingsState>()(
@@ -38,22 +41,25 @@ export const useSettingsStore = create<SettingsState>()(
       difficulty: 'normal',
       allowMoveRefPlane: true,
       quickColor: true,
+      singleTapShot: false,
       setBgmVolume: (bgmVolume) => set({ bgmVolume }),
       setSfxVolume: (sfxVolume) => set({ sfxVolume }),
       toggleInvertMarks: () => set((s) => ({ invertMarks: !s.invertMarks })),
       setDifficulty: (difficulty) => set({ difficulty }),
       toggleAllowMoveRefPlane: () => set((s) => ({ allowMoveRefPlane: !s.allowMoveRefPlane })),
       toggleQuickColor: () => set((s) => ({ quickColor: !s.quickColor })),
+      toggleSingleTapShot: () => set((s) => ({ singleTapShot: !s.singleTapShot })),
     }),
     {
       name: 'aero-settings',
       storage: createJSONStorage(() => localStorage),
-      // 旧存档（无 allowMoveRefPlane / quickColor 字段）合并后取默认 true，保证新增开关默认开
+      // 旧存档合并：allowMoveRefPlane / quickColor 缺省 true（默认开），singleTapShot 缺省 false（默认关）
       merge: (persisted, current) => ({
         ...current,
         ...(persisted as Partial<SettingsState>),
         allowMoveRefPlane: (persisted as Partial<SettingsState> | null)?.allowMoveRefPlane ?? true,
         quickColor: (persisted as Partial<SettingsState> | null)?.quickColor ?? true,
+        singleTapShot: (persisted as Partial<SettingsState> | null)?.singleTapShot ?? false,
       }),
     },
   ),
