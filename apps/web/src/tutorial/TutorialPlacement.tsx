@@ -52,7 +52,7 @@ const T2 = {
 /** 需要同时可交互的拖拽区（模态突显下非突显区域不可点） */
 const DRAG_HL = ['.placement__tray', '.placement__board-wrap']
 
-type Phase = 'welcome' | 'tray' | 'drag' | 'more' | 'rotateHint' | 'rotateWait' | 'thanks' | 'detect'
+type Phase = 'welcome' | 'tray' | 'drag' | 'more' | 'rotateWait' | 'thanks' | 'detect'
 
 export function TutorialPlacement({
   onDone,
@@ -130,9 +130,10 @@ export function TutorialPlacement({
       flash('success')
       setPh('more')
     } else if (cur === 'more' && e.type === 'allPlanesPlaced') {
+      // v0.3.14：气泡「单击飞机可以使飞机旋转90度」触发的同时即 <取消当前突显><突显空网格>
       flash('success')
-      setPh('rotateHint')
-    } else if ((cur === 'rotateWait' || cur === 'rotateHint') && e.type === 'planeRotated') {
+      setPh('rotateWait')
+    } else if (cur === 'rotateWait' && e.type === 'planeRotated') {
       thanksCauseRef.current = versionRef.current
       setPh('thanks')
     }
@@ -143,7 +144,6 @@ export function TutorialPlacement({
     const cur = phaseRef.current
     if (cur === 'welcome') setPh('tray')
     else if (cur === 'tray') setPh('drag')
-    else if (cur === 'rotateHint') setPh('rotateWait')
     // 其余（drag/more/rotateWait/thanks/detect）：点击仅翻段，不消失
     else force((x) => x + 1)
   }
@@ -162,12 +162,12 @@ export function TutorialPlacement({
     if (p === 'tray') return [T2.tray]
     if (p === 'drag') return [T2.drag]
     if (p === 'more') return [T2.more]
-    if (p === 'rotateHint' || p === 'rotateWait') return [T2.rotate]
+    if (p === 'rotateWait') return [T2.rotate]
     if (p === 'thanks') return [T2.thanks]
     if (p === 'detect') return check.ok ? [T2.confirm] : [T2.invalid]
     return []
   }
-  const isClickNode = phase === 'welcome' || phase === 'tray' || phase === 'rotateHint'
+  const isClickNode = phase === 'welcome' || phase === 'tray'
   const segments = segmentsOf(phase)
   const seg = Math.min(segIdx, Math.max(segments.length - 1, 0))
   const segText = segments.length > 0 ? (segments[seg] ?? '') : ''
@@ -184,14 +184,17 @@ export function TutorialPlacement({
   // 突显目标：'bubble'=整屏压暗突出气泡（开场 / 旋转引导）；
   // 待选栏；拖拽/旋转步骤 = 待选栏 + 网格；detect 合法 → 确认按钮，非法 → 无突显
   const highlightFor = (p: Phase): string | string[] | null => {
-    if (p === 'welcome' || p === 'rotateHint') return 'bubble'
+    // 'bubble' = <突显对话气泡>：整屏压暗无洞 + 阻断；'bubble-soft' 同款压暗但不阻断
+    // （thanks / 阵形非法：气泡期间玩家仍需挪动或旋转飞机）
+    if (p === 'welcome') return 'bubble'
+    if (p === 'thanks') return 'bubble-soft'
     if (p === 'tray') return '.placement__tray'
     if (p === 'drag' || p === 'more' || p === 'rotateWait') return DRAG_HL
-    if (p === 'detect') return check.ok ? '.tutorial-confirm' : null
+    if (p === 'detect') return check.ok ? '.tutorial-confirm' : 'bubble-soft'
     return null
   }
   const rawHl = highlightFor(phase)
-  const bubbleDim = rawHl === 'bubble'
+  const bubbleDim = rawHl === 'bubble' || rawHl === 'bubble-soft'
   const highlight = bubbleDim ? null : rawHl
   // 气泡默认底部；突显确认按钮（页头）时同样保持底部
   const exit = () => setExitOpen(true)
@@ -242,7 +245,9 @@ export function TutorialPlacement({
 
       {/* 教程层（detect 非法 → highlight null → 无遮罩全亮）；「点击继续」仅 click 节点显示。
           弹窗打开期间（自身退出确认 exitOpen，或任何外部弹窗）不渲染阻断带/暗层/气泡 */}
-      {!modalOpen ? <TutorialSpotlight target={highlight} dim={bubbleDim} /> : null}
+      {!modalOpen ? (
+        <TutorialSpotlight target={highlight} dim={bubbleDim} block={rawHl !== 'bubble-soft'} />
+      ) : null}
       {!modalOpen && segments.length > 0 ? (
         <TutorialBubble key={phase} text={segText} showHint={isClickNode} onClick={clickSeg} />
       ) : null}

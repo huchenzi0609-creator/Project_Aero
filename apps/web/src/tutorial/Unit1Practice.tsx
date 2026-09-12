@@ -1,14 +1,22 @@
 /**
- * Unit1Practice —— 教程·单元1「辨认飞机和基本操作」（v0.3.13 全新）。
+ * Unit1Practice —— 教程·单元1「辨认飞机和基本操作」（v0.3.14 修订）。
  *
  * 三个练习场景（纯前端演示网格，不进入对局引擎）：
- * 1) 5×5 居中：己方飞机 (A3,u) 演示态（不可旋转/拖拽）——认识飞机与机头标识；
- * 2) 10×10：对方目标飞机 (E5,u) + 已报点；双击 E5 → 成功提示 + 幽灵飞机；否则失败提示循环；
- * 3) 10×10：对方目标飞机 (F7,l) + 已报点；先突显网格讲解歧义 → 突显 J7 试错 → 突显 F7 命中 → 进入单元2。
+ * 1) 5×5 居中：己方飞机演示态（不可旋转/拖拽）——认识飞机与机头标识；
+ * 2) 10×10 居中：对方目标飞机 (E5,u) + 预置报点；双击 E5 → 成功提示 + 幽灵飞机，否则失败提示循环；
+ * 3) 10×10 居中：对方目标飞机 (F7,l) + 预置报点；突显气泡讲歧义 → 突显 J7 试错 → 突显 F7 命中 →
+ *    在【同一网格】的真实位置生成幽灵飞机 → 进入单元2。
+ *
+ * v0.3.14 修复：
+ * - 预置报点结果【显式声明】（场景2 D7/G8/F9、场景3 H6 为击空），不再由真实机体推导；
+ * - 玩家每次报点都写入展示用 shots 列表（机头=★击毁 / 机身=◯击中 / 空=✗击空）；
+ * - 场景3 命中后不再另开网格，改为在同一 10×10 网格的真实位置生成幽灵飞机；
+ * - 网格水平+垂直居中（见 tutorial.css `.tutorial-unit1__body` / `.u1-grid-wrap`）。
  */
 import { useMemo, useState } from 'react'
-import type { Cell, PlacedPlane, Shot } from '@aero/shared'
+import type { Cell, PlacedPlane, Shot, ShotOutcome } from '@aero/shared'
 import { DEFAULT_PLANE_SHAPE } from '@aero/shared'
+import { rotateShape } from '@aero/game-core'
 import { useEffectiveOrientation } from '../hooks/useOrientation'
 import { PaperButton } from '../components/ui/PaperButton'
 import { PaperGrid } from '../components/grid/PaperGrid'
@@ -22,12 +30,17 @@ const cell = (coord: string): Cell => ({
   r: Number(coord.slice(1)) - 1,
   c: coord.charCodeAt(0) - 65,
 })
-const shotAt = (coord: string): Shot => ({ coord: cell(coord), outcome: 'hit' })
 
-/** 场景2：已报机身点（9 个） */
-const S2_SHOTS = ['C6', 'D6', 'E6', 'F8', 'G8', 'F9', 'D7', 'G6', 'E8'].map(shotAt)
-/** 场景3：已报机身点（6 个） */
-const S3_SHOTS = ['G6', 'G8', 'I6', 'I8', 'H7', 'H6'].map(shotAt)
+/** 场景2 预置报点：显式结果（击空 D7/G8/F9） */
+const S2_PRESET: Shot[] = [
+  ...['C6', 'D6', 'E6', 'F8', 'G6', 'E8'].map((c) => ({ coord: cell(c), outcome: 'hit' as ShotOutcome })),
+  ...['D7', 'G8', 'F9'].map((c) => ({ coord: cell(c), outcome: 'miss' as ShotOutcome })),
+]
+/** 场景3 预置报点：显式结果（击空 H6） */
+const S3_PRESET: Shot[] = [
+  ...['G6', 'G8', 'I6', 'I8', 'H7'].map((c) => ({ coord: cell(c), outcome: 'hit' as ShotOutcome })),
+  { coord: cell('H6'), outcome: 'miss' as ShotOutcome },
+]
 
 /** 机头相对偏移（默认形状，顺时针 rotation） */
 function headRel(rotation: 0 | 1 | 2 | 3): Cell {
@@ -40,11 +53,17 @@ function originFromHead(head: Cell, rotation: 0 | 1 | 2 | 3): Cell {
   return { r: head.r - rel.r, c: head.c - rel.c }
 }
 
+/** 报点结果判定：机头 → kill；机身 → hit；其余 → miss */
+function classifyShot(plane: PlacedPlane, coord: Cell): ShotOutcome {
+  const rotated = rotateShape(DEFAULT_PLANE_SHAPE, plane.rotation)
+  const head = { r: plane.origin.r + rotated.head.r, c: plane.origin.c + rotated.head.c }
+  if (head.r === coord.r && head.c === coord.c) return 'kill'
+  const body = rotated.cells.some((c) => plane.origin.r + c.r === coord.r && plane.origin.c + c.c === coord.c)
+  return body ? 'hit' : 'miss'
+}
+
 type Scene = 1 | 2 | 3
-type Phase =
-  | 's1a' | 's1b'
-  | 's2'
-  | 's3a' | 's3j7' | 's3afterj7' | 's3f7' | 's3done'
+type Phase = 's1a' | 's1b' | 's2' | 's3a' | 's3j7' | 's3afterj7' | 's3f7' | 's3done'
 
 export function Unit1Practice({ onExitHome, onDone }: { onExitHome: () => void; onDone: () => void }) {
   const orientation = useEffectiveOrientation()
@@ -56,6 +75,8 @@ export function Unit1Practice({ onExitHome, onDone }: { onExitHome: () => void; 
   const [seg, setSeg] = useState(0)
   const [s2Resolved, setS2Resolved] = useState(false)
   const [s2Msg, setS2Msg] = useState<string | null>(null)
+  /** 玩家报点留下的展示标记（同格覆盖预置值） */
+  const [playerShots, setPlayerShots] = useState<Shot[]>([])
   const lastClickRef = useMemo(() => ({ coord: null as Cell | null, t: 0 }), [])
 
   /* ---------- 场景2 目标：E5（rot u = 0） ---------- */
@@ -65,6 +86,15 @@ export function Unit1Practice({ onExitHome, onDone }: { onExitHome: () => void; 
   const s3Head = cell('F7')
   const s3Plane: PlacedPlane = { id: 10, rotation: 3, origin: originFromHead(s3Head, 3) }
   const j7 = cell('J7')
+
+  /** 展示用报点列表：预置 + 玩家 */
+  const shots = useMemo(() => {
+    const base = scene === 2 ? S2_PRESET : scene === 3 ? S3_PRESET : []
+    const map = new Map<string, Shot>()
+    for (const s of base) map.set(`${s.coord.r},${s.coord.c}`, s)
+    for (const s of playerShots) map.set(`${s.coord.r},${s.coord.c}`, s)
+    return [...map.values()]
+  }, [scene, playerShots])
 
   /** 双击判定（同格 600ms 内两次） */
   const isDouble = (coord: Cell): boolean => {
@@ -76,27 +106,44 @@ export function Unit1Practice({ onExitHome, onDone }: { onExitHome: () => void; 
     return Boolean(same && fast)
   }
 
+  const pushShot = (coord: Cell, outcome: ShotOutcome) => {
+    setPlayerShots((prev) => [
+      ...prev.filter((s) => !(s.coord.r === coord.r && s.coord.c === coord.c)),
+      { coord, outcome },
+    ])
+  }
+
   const onCellClick = (coord: Cell) => {
     if (!isDouble(coord)) return
     if (scene === 2) {
-      if (!s2Resolved && coord.r === s2Head.r && coord.c === s2Head.c) {
-        setS2Resolved(true)
-        flash('success')
-        setS2Msg('致命打击！干得漂亮！')
-      } else if (!s2Resolved) {
-        flash('failure')
-        setS2Msg('机头不在这里，想想飞机的形状！')
+      const outcome = classifyShot(s2Plane, coord)
+      pushShot(coord, outcome)
+      if (!s2Resolved) {
+        if (outcome === 'kill') {
+          setS2Resolved(true)
+          flash('success')
+          setS2Msg('致命打击！干得漂亮！')
+        } else {
+          flash('failure')
+          setS2Msg('机头不在这里，想想飞机的形状！')
+        }
       }
       return
     }
     if (scene === 3) {
-      if (phase === 's3j7' && coord.r === j7.r && coord.c === j7.c) {
-        setPhase('s3afterj7')
+      const outcome = classifyShot(s3Plane, coord)
+      pushShot(coord, outcome)
+      if (outcome === 'kill') {
+        if (phase !== 's3done') {
+          setPhase('s3done')
+          setSeg(0)
+          flash('success')
+        }
         return
       }
-      if ((phase === 's3j7' || phase === 's3afterj7' || phase === 's3f7') && coord.r === s3Head.r && coord.c === s3Head.c) {
-        setPhase('s3done')
-        return
+      if (phase === 's3j7' && coord.r === j7.r && coord.c === j7.c) {
+        setPhase('s3afterj7')
+        setSeg(0)
       }
     }
   }
@@ -140,11 +187,13 @@ export function Unit1Practice({ onExitHome, onDone }: { onExitHome: () => void; 
       setScene(2)
       setPhase('s2')
       setSeg(0)
+      setPlayerShots([])
     } else if (scene === 2 && s2Resolved) {
       setScene(3)
       setPhase('s3a')
       setSeg(0)
       setS2Msg(null)
+      setPlayerShots([])
     } else if (scene === 3 && phase === 's3a') {
       setPhase('s3j7')
       setSeg(0)
@@ -156,8 +205,11 @@ export function Unit1Practice({ onExitHome, onDone }: { onExitHome: () => void; 
     }
   }
 
-  /** 突显目标：模态洞（网格 / J7 格 / F7 格 / 气泡暗层）
-   *  场景2 必须突显网格（而非仅压暗气泡）：本场景要玩家双击报点，dim 会阻断网格交互。 */
+  /**
+   * 突显目标：<突显对话气泡> 节点 → target=null（bubbleDim 走整屏暗层）；
+   * <突显网格/格子> 节点 → 选择器洞。
+   * 场景2 以网格为突显目标（玩家需看清“O”并双击，不能压暗）；场景3 命中后“取消突显”（亮出幽灵飞机）。
+   */
   const target: string | string[] | null =
     scene === 1
       ? phase === 's1b'
@@ -166,16 +218,34 @@ export function Unit1Practice({ onExitHome, onDone }: { onExitHome: () => void; 
       : scene === 2
         ? '.u1-grid'
         : phase === 's3a'
-          ? '.u1-grid'
+          ? null
           : phase === 's3j7'
             ? '.u1-grid button[aria-label="J7"]'
             : phase === 's3afterj7' || phase === 's3f7'
               ? '.u1-grid button[aria-label="F7"]'
               : null
-  const bubbleDim = showBubble && target === null
+  /** <突显对话气泡>：整屏压暗无洞（场景1 开场、场景3 歧义讲解） */
+  const bubbleDim = showBubble && target === null && !(scene === 3 && phase === 's3done')
   const modal = showBubble || target !== null
 
   const gridSize = scene === 1 ? 5 : 10
+  /** 幽灵飞机：场景2/3 命中后在同一网格内按真实位置显示（不可交互） */
+  const planes: PlacedPlane[] =
+    scene === 1
+      ? [{ id: 1, rotation: 0, origin: { r: 1, c: 0 } }]
+      : scene === 2
+        ? s2Resolved
+          ? [s2Plane]
+          : []
+        : phase === 's3done'
+          ? [s3Plane]
+          : []
+  const planesLayer =
+    scene === 1
+      ? { ghost: false }
+      : (scene === 2 && s2Resolved) || (scene === 3 && phase === 's3done')
+        ? { ghost: true }
+        : undefined
 
   return (
     <div className={`page tutorial-unit1 tutorial-unit1--${orientation}`}>
@@ -195,45 +265,24 @@ export function Unit1Practice({ onExitHome, onDone }: { onExitHome: () => void; 
               cellSize={scene === 1 ? 46 : 30}
               showLabels
               onCellClick={onCellClick}
-              shots={scene === 2 ? S2_SHOTS : scene === 3 ? S3_SHOTS : []}
-              planes={
-                scene === 1
-                  ? [{ id: 1, rotation: 0, origin: { r: 1, c: 0 } }]
-                  : scene === 2 && s2Resolved
-                    ? [s2Plane]
-                    : []
-              }
+              shots={shots}
+              planes={planes}
               shape={DEFAULT_PLANE_SHAPE}
-              planesLayer={
-                scene === 2 && s2Resolved
-                  ? { ghost: true }
-                  : scene === 1
-                    ? { ghost: false }
-                    : undefined
-              }
+              planesLayer={planesLayer}
               ariaLabel="教程练习网格"
             />
           </div>
         </div>
-        {scene === 3 && phase === 's3done' ? (
-          <div className="u1-grid-wrap">
-            <div className="u1-grid">
-              <PaperGrid
-                width={10}
-                height={10}
-                cellSize={22}
-                showLabels
-                shots={S3_SHOTS}
-                planes={[s3Plane]}
-                shape={DEFAULT_PLANE_SHAPE}
-                ariaLabel="目标机揭示"
-              />
-            </div>
-          </div>
-        ) : null}
       </div>
 
-      {modal && !modalOpen ? <TutorialSpotlight target={target} dim={bubbleDim} /> : null}
+      {/* measureKey：同一选择器在不同场景尺寸变化（5×5 ↔ 10×10）时强制重新测量 */}
+      {modal && !modalOpen ? (
+        <TutorialSpotlight
+          target={target}
+          dim={bubbleDim}
+          measureKey={`${scene}-${phase}`}
+        />
+      ) : null}
       {showBubble && !modalOpen ? (
         <TutorialBubble
           key={`${scene}-${phase}`}

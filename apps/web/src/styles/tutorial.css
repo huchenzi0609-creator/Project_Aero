@@ -3,13 +3,15 @@
    ============================================================ */
 
 /* ---------- 遮罩 ---------- */
-/* v0.3.3：单层 SVG evenodd 挖洞遮罩（z 低于弹窗 .paper-modal 60 → 弹窗豁免不被压暗）；
-   无突显目标时组件渲染 null，页面全亮（不再有 --dim 常驻压暗层） */
+/* v0.3.3：单层 SVG evenodd 挖洞遮罩（z 低于弹窗 → 弹窗豁免不被压暗）；
+   无突显目标时组件渲染 null，页面全亮（不再有 --dim 常驻压暗层）。
+   v0.3.14：层级由 56 提到 130 —— 页面内常规元素最高 z-index 80（见 components.css/m4.css），
+   原 56 会被部分页面元素（如对局状态条 z70）盖住，导致“只压暗了一部分”。 */
 .tutorial-spotlight {
   position: fixed;
   left: 0;
   top: 0;
-  z-index: 56;
+  z-index: 130;
   pointer-events: none;
 }
 
@@ -102,11 +104,50 @@
   align-items: center;
 }
 
-/* ============ v0.3.9 ============
-   「突显对话气泡」= 整屏压暗、无洞（气泡 z 210 > 遮罩 56，气泡天然豁免压暗；
-   背景整体压暗使气泡轮廓被精确突显）。 */
+/* ============ v0.3.9 / v0.3.14 ============
+   「突显对话气泡」= 整屏压暗、无洞（气泡 z 210 > 遮罩 130，气泡天然豁免压暗；
+   背景整体压暗使气泡轮廓被精确突显）。
+   v0.3.14 修复：原实现漏写尺寸，`.tutorial-spotlight` 只给了 left/top → 暗层为 0×0，
+   等于完全没压暗（用户反馈“未生效/只 dim 了一部分”）。现显式铺满视口。 */
 .tutorial-spotlight--dim {
-  background: rgba(58, 46, 28, 0.4);
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  background: rgba(58, 46, 28, 0.52);
+}
+
+/* ============ v0.3.14：单元1 练习网格居中（竖版 3:5 舞台内居中，横版同样居中） ============
+   页头绝对定位脱离文档流：否则页头高度会把“剩余空间”的居中位整体下推（实测偏 ~32px），
+   网格无法相对整幅舞台居中。 */
+.tutorial-unit1 {
+  padding: 0;
+  position: relative;
+}
+.tutorial-unit1 .page__head {
+  position: absolute;
+  top: 14px;
+  left: 18px;
+  right: 18px;
+  z-index: 5;
+}
+.tutorial-unit1 .tutorial-unit1__body {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 0;
+  overflow: hidden;
+}
+.tutorial-unit1 .u1-grid-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+}
+.tutorial-unit1 .u1-grid {
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 /* ============ v0.3.10：横屏气泡放大（适配横屏阅读；竖版保持现状） ============

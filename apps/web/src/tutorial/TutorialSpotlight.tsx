@@ -22,7 +22,7 @@ export interface TargetRect {
 }
 
 const PAD = 6 // 开洞外扩（目标呼吸空间）
-const DARK = 'rgba(58, 46, 28, 0.5)'
+const DARK = 'rgba(58, 46, 28, 0.52)'
 
 /** 求目标矩形；隐藏目标返回 null */
 function targetRectOf(selector: string): TargetRect | null {
@@ -36,13 +36,24 @@ function targetRectOf(selector: string): TargetRect | null {
 export function TutorialSpotlight({
   target,
   dim = false,
+  block = true,
+  measureKey,
 }: {
   target?: string | string[] | null
   /** 整屏压暗、无洞（气泡突显专用：target 忽略）。false 时 target 为空 = 不渲染遮罩 */
   dim?: boolean
+  /** 目标元素尺寸/位置随场景变化但选择器不变时（如 5×5 ↔ 10×10 同为 `.u1-grid`），
+   *  传入变化值即可强制重新测量（不重挂载组件）。 */
+  measureKey?: string | number
+  /**
+   * 是否附加模态交互阻断带（默认 true）。dim 场景下若玩家仍需操作页面
+   * （如摆阵「thanks / 阵形非法」气泡期间要挪动或旋转飞机），传 block={false}：只压暗、不阻断。
+   */
+  block?: boolean
 }) {
   const targets = Array.isArray(target) ? target : target ? [target] : []
   const [rects, setRects] = useState<TargetRect[]>([])
+  const [escapeRects, setEscapeRects] = useState<TargetRect[]>([])
   const targetsRef = useRef(targets)
   targetsRef.current = targets
   /** 纵深防护（v0.3.13 加固）：任何弹窗打开期间都不渲染阻断带/暗层，弹窗永不被教程层拦截 */
@@ -56,6 +67,16 @@ export function TutorialSpotlight({
         if (r) out.push(r)
       }
       setRects(out)
+      // 豁免元素（左上角退出按钮等，标识 .tutorial-escape）永远不参与阻断：
+      // 其矩形作为“交互洞”并入阻断补集（v0.3.14 item 3：dim / 混合 / 挖洞三种模式一律放行）
+      const es: TargetRect[] = []
+      for (const el of Array.from(document.querySelectorAll('.tutorial-escape'))) {
+        const b = el.getBoundingClientRect()
+        if (b.width > 0 && b.height > 0) {
+          es.push({ left: b.left, top: b.top, width: b.width, height: b.height })
+        }
+      }
+      setEscapeRects(es)
     }
 
     // 直接测量 + 延迟再测（目标可能晚一帧就位）+ 目标尺寸/位置变化即时跟随
@@ -76,55 +97,94 @@ export function TutorialSpotlight({
       ro.disconnect()
       window.removeEventListener('resize', measure)
     }
-  }, [target])
+  }, [target, measureKey])
 
   // 弹窗打开期间一律不渲染（阻断带/暗层都不出现），弹窗按钮可 100% 真实点击
   if (modalOpen) return null
 
-  // dim：整屏暗层（无洞）——模态语义：整屏阻断交互（气泡/退出按钮 z 更高，仍可点）
-  if (dim) {
+  /** 目标洞（含 PAD 外扩 + 并集合并）：evenodd 下单层亮度一致（重叠洞会反向填充变暗 —— v0.3.5） */
+  const W = window.innerWidth
+  const H = window.innerHeight
+  const padMerge = (list: TargetRect[]) => {
+    const outer = list
+      .map((r) => ({
+        left: Math.max(0, r.left - PAD),
+        top: Math.max(0, r.top - PAD),
+        right: Math.min(W, r.left + r.width + PAD),
+        bottom: Math.min(H, r.top + r.height + PAD),
+      }))
+      .map((r) => ({ left: r.left, top: r.top, width: r.right - r.left, height: r.bottom - r.top }))
+    return mergeHoleRects(outer)
+  }
+  const visualHoles = rects.length > 0 ? padMerge(rects) : []
+  /** 交互洞 = 突显目标 + 豁免元素（豁免元素永不被阻断） */
+  const interactiveHoles = padMerge([...rects, ...escapeRects])
+
+  // dim 且无突显目标 = 纯气泡突显：整屏暗层（无视觉洞）
+  if (dim && visualHoles.length === 0) {
     return (
       <>
-        <div className="tutorial-spotlight tutorial-spotlight--dim" aria-hidden="true" />
-        <div className="tutorial-block" aria-hidden="true" />
+        <div
+          className="tutorial-spotlight tutorial-spotlight--dim"
+          data-spotlight-mode="dim"
+          aria-hidden="true"
+        />
+        {block ? <BlockBands holes={interactiveHoles} W={W} H={H} /> : null}
       </>
     )
   }
-  if (targets.length === 0 || rects.length === 0) return null
+  // 无 dim 且无目标 = 不渲染遮罩（页面全亮）
+  if (visualHoles.length === 0) return null
 
-  // 先对洞矩形（含 PAD 外扩）做并集合并：保证洞互不重叠，evenodd 下单层亮度始终一致
-  // （重叠洞子路径在 evenodd 下会被反向填充而变暗 —— v0.3.5 修复）
-  const W = window.innerWidth
-  const H = window.innerHeight
-  const outer = rects
-    .map((r) => ({
-      left: Math.max(0, r.left - PAD),
-      top: Math.max(0, r.top - PAD),
-      right: Math.min(W, r.left + r.width + PAD),
-      bottom: Math.min(H, r.top + r.height + PAD),
-    }))
-    .map((r) => ({ left: r.left, top: r.top, width: r.right - r.left, height: r.bottom - r.top }))
-  const merged = mergeHoleRects(outer)
+  // 其余两种：<突显目标>（挖洞）/ <突显对话气泡>并且<突显目标>（混合：整屏压暗 + 开洞）
   const frame = `M0 0 H${W} V${H} H0 Z`
-  const holes = merged
+  const holes = visualHoles
     .map((r) => `M${r.left} ${r.top} H${r.left + r.width} V${r.top + r.height} H${r.left} Z`)
     .join(' ')
 
-  // 模态交互阻断（v0.3.13）：除突显区外不可点/不可拖。
-  // 实现：按所有洞的 x 边界做纵向切片，每片只阻断该片内洞上下方的区域
-  // （洞之间的小空隙可能被一并阻断，但绝不阻断任何突显目标本身）。
-  // 逐洞各围四带不可行：一个洞的整幅横带会盖住另一个洞。
-  // 气泡（z 210）与退出按钮（.tutorial-escape z 160）高于阻断带（z 150）仍可交互。
-  const xs = Array.from(
-    new Set([0, W, ...merged.flatMap((r) => [r.left, r.left + r.width])]),
-  ).sort((a, b) => a - b)
+  return (
+    <>
+      <svg
+        className="tutorial-spotlight"
+        data-spotlight-mode={dim ? 'hybrid' : 'holes'}
+        width={W}
+        height={H}
+        aria-hidden="true"
+      >
+        <path d={`${frame} ${holes}`} fillRule="evenodd" fill={DARK} />
+      </svg>
+      {block ? <BlockBands holes={interactiveHoles} W={W} H={H} /> : null}
+    </>
+  )
+}
+
+/**
+ * 阻断带：取【交互洞】的补集（按 x 边界纵向切片，逐片只阻断洞上下方区域）。
+ * 逐洞各围四带不可行：一个洞的整幅横带会盖住另一个洞；气泡（z 210）与
+ * 豁免元素（.tutorial-escape z 160）高于阻断带（z 150）仍可交互。
+ */
+function BlockBands({
+  holes,
+  W,
+  H,
+}: {
+  holes: TargetRect[]
+  W: number
+  H: number
+}) {
+  if (holes.length === 0) {
+    return <div className="tutorial-block" aria-hidden="true" />
+  }
+  const xs = Array.from(new Set([0, W, ...holes.flatMap((r) => [r.left, r.left + r.width])])).sort(
+    (a, b) => a - b,
+  )
   const blocks: Array<{ left: number; top: number; width: number; height: number }> = []
   for (let i = 0; i < xs.length - 1; i++) {
     const x0 = xs[i]!
     const x1 = xs[i + 1]!
     const w = x1 - x0
     if (w <= 0) continue
-    const inSlice = merged.filter((r) => r.left < x1 && r.left + r.width > x0)
+    const inSlice = holes.filter((r) => r.left < x1 && r.left + r.width > x0)
     if (inSlice.length === 0) {
       blocks.push({ left: x0, top: 0, width: w, height: H })
       continue
@@ -134,12 +194,8 @@ export function TutorialSpotlight({
     blocks.push({ left: x0, top: 0, width: w, height: Math.max(0, top) })
     blocks.push({ left: x0, top: bottom, width: w, height: Math.max(0, H - bottom) })
   }
-
   return (
     <>
-      <svg className="tutorial-spotlight" width={W} height={H} aria-hidden="true">
-        <path d={`${frame} ${holes}`} fillRule="evenodd" fill={DARK} />
-      </svg>
       {blocks.map((b, i) => (
         <div
           key={i}
