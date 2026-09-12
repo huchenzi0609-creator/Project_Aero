@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+## [0.3.15] - 2026-09-12
+
+### Changed
+
+- 测试基建提速：新增 `scripts/e2e-local.sh` 一键 e2e（内置 chromium 路径、dev server 单例化、确定性种子）
+- 引入 e2e 确定性随机种子（`e2eSeed` 查询参数 / `localStorage.aero.e2eSeed`）：种子存在时 AI 报点与对手阵型可复现，教程/单机 e2e 无需长循环猎杀；无种子时保持随机
+- 验证协议收口（docs/team.md §1.2）：每版最多 2 轮全量 e2e（QA 一轮 + 组长终验一轮），功能 agent 只跑相关单 spec
+- 版本号全部升至 0.3.15
+
 ## [0.3.14] - 2026-09-12
 
 ### Fixed

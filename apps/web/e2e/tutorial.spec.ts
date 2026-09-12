@@ -21,7 +21,14 @@
  */
 import { expect, test } from '@playwright/test'
 import type { Locator, Page } from '@playwright/test'
-import { allCoords, oppCell, watchErrors } from './helpers'
+import {
+  diagCoords,
+  oppCell,
+  readBattleSnapshot,
+  useE2eSeed,
+  waitMyTurn,
+  watchErrors,
+} from './helpers'
 
 
 /* ================= 通用定位/断言 ================= */
@@ -145,6 +152,7 @@ async function clickBlockedArea(page: Page): Promise<void> {
   await page.mouse.click(best.x + best.w / 2, best.y + 8)
 }
 async function openTutorial(page: Page) {
+  await useE2eSeed(page) // v0.3.15：E2E_SEED → localStorage（教程单元3 对手阵型/机头可复现）
   await page.goto('/')
   await expect(page.getByRole('heading', { name: '飞机杀' })).toBeVisible()
   await page.getByRole('button', { name: '新手教程' }).click()
@@ -159,17 +167,6 @@ function coordToCell(coord: string) {
 }
 function cellToCoord(c: { r: number; c: number }) {
   return `${LETTERS[c.c]}${c.r + 1}`
-}
-/** 对角序（r+c 升序，r 降序）：保证任一朝向的飞机在机头之前至少被扫到一个【无歧义机身格】 */
-function diagCoords(): string[] {
-  return allCoords(10, 10).sort((a, b) => {
-    const ca = coordToCell(a)
-    const cb = coordToCell(b)
-    const da = ca.r + ca.c
-    const db = cb.r + cb.c
-    if (da !== db) return da - db
-    return cb.r - ca.r
-  })
 }
 /** 默认形状格（未旋转）与机头 */
 const SHAPE_CELLS: Array<[number, number]> = [
@@ -239,6 +236,13 @@ function headMatchVis(head: { r: number; c: number }, rot: number) {
   const b = shapeBBox(rot)
   return { r: head.r - h.r + b.minR, c: head.c - h.c + b.minC }
 }
+/** 机头落在 head 时，该朝向可视左上角是否仍在 10×10 界内（越界会被 snapOrigin 夹取 → 判定为「位置不符」） */
+function rotRealizableAtHead(head: { r: number; c: number }, rot: number): boolean {
+  const vis = headMatchVis(head, rot)
+  const b = shapeBBox(rot)
+  return vis.r >= 0 && vis.c >= 0 && vis.r <= 10 - b.h && vis.c <= 10 - b.w
+}
+
 /** 落点格 → 可视左上角 的吸附偏移（v0.3.13 实测标定：参考网格与对手棋盘格宽不同） */
 function dropCell(vis: { r: number; c: number }, rot: number) {
   const b = shapeBBox(rot)
@@ -491,23 +495,8 @@ async function runUnit2(page: Page): Promise<void> {
 type Outcome = 'miss' | 'hit' | 'kill'
 type ShotLog = Map<string, Outcome>
 
-function isMyTurnStatus(st: string): boolean {
-  const t = st.trim()
-  return t.includes('轮到我方报点') || t.includes('绝地反击') || /^对方报点/.test(t)
-}
 async function gameEnded(page: Page): Promise<boolean> {
   return (await modal(page).count()) > 0
-}
-async function waitMyTurn(page: Page, timeoutMs = 25_000): Promise<void> {
-  const status = page.locator('.game__status-text')
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
-    if (await gameEnded(page)) return
-    const st = (await status.textContent().catch(() => '')) ?? ''
-    if (isMyTurnStatus(st)) return
-    await page.waitForTimeout(120)
-  }
-  throw new Error('等待我方回合超时')
 }
 /** 我方回合报一个坐标（坐标输入一步）；接受任意「我方报点 X：结果」（含预报点自动上报） */
 async function fireCoord(
@@ -539,9 +528,16 @@ async function fireCoord(
  * 对角序保证被击毁飞机在机头之前至少被扫到一个无歧义机身格 → 朝向可确定性推断。
  * 预报点队列非空时回合开始会自动上报（手动报点被禁），此处按实际上报坐标记账。
  */
-async function shootUntil(page: Page, log: ShotLog, minKills: number, deadlineMs = 360_000): Promise<void> {
-  const deadline = Date.now() + deadlineMs
-  const order = diagCoords()
+async function shootUntil(
+  page: Page,
+  log: ShotLog,
+  minKills: number,
+  opts: { heads?: string[]; deadlineMs?: number } = {},
+): Promise<void> {
+  const deadline = Date.now() + (opts.deadlineMs ?? 360_000)
+  // v0.3.15：已知对手机头（会话快照）时优先直取；其余坐标对角序补扫
+  const known = new Set(opts.heads ?? [])
+  const order = [...(opts.heads ?? []), ...diagCoords().filter((c) => !known.has(c))]
   const pending: string[] = []
   let idx = 0
   let guard = 0
@@ -572,6 +568,10 @@ async function shootUntil(page: Page, log: ShotLog, minKills: number, deadlineMs
       for (const c of headCandidates(res.coord)) if (!log.has(c)) pending.push(c)
     }
   }
+}
+/** 机头落在 head 时界内可实现的朝向集合 */
+function realizableRots(head: { r: number; c: number }): number[] {
+  return [0, 1, 2, 3].filter((r) => rotRealizableAtHead(head, r))
 }
 /** 判定真朝向候选集（真朝向必在其中；命中越多越可信） */
 function inferRotations(head: { r: number; c: number }, hits: Array<{ r: number; c: number }>): number[] {
@@ -635,8 +635,14 @@ async function runUnit3Intro(
   await expect(bubble(page)).toContainText('好极了！运用你刚才学到的所有技巧', { timeout: 12_000 })
 }
 
-/** k1..k6 击毁支线（含 k2 幽灵三态与 k4 取消空网格突显） */
-async function runUnit3KillBranch(page: Page, log: ShotLog): Promise<void> {
+/** k1..k6 击毁支线（含 k2 幽灵三态与 k4 取消空网格突显）
+ *  trueRotation：v0.3.15 会话快照给出的被毁飞机真朝向（已知时幽灵三态判定全确定；
+ *  未知时回退「机身命中→朝向候选推断」。 */
+async function runUnit3KillBranch(
+  page: Page,
+  log: ShotLog,
+  opts: { trueRotation?: number | null; headCoord?: string | null } = {},
+): Promise<void> {
   // k1（混合模式）
   await expect(bubble(page)).toContainText('你成功摧毁了对方的飞机！', { timeout: 20_000 })
   await expectMixedModeInteractive(page)
@@ -651,12 +657,22 @@ async function runUnit3KillBranch(page: Page, log: ShotLog): Promise<void> {
   expect(k2Now.includes('飞机就在这里'), 'k2 不应跳到成功节点').toBe(false)
 
   const killCoords = [...log.entries()].filter(([, o]) => o === 'kill').map(([c]) => c)
-  const head = coordToCell(killCoords[0]!)
+  const head = coordToCell(opts.headCoord ?? killCoords[0]!)
   const hits = [...log.entries()]
     .filter(([, o]) => o === 'hit')
     .map(([c]) => coordToCell(c))
-  const candidates = inferRotations(head, hits)
-  const wrongRot = [0, 1, 2, 3].find((r) => !candidates.includes(r)) ?? (candidates[0]! + 1) % 4
+  const knownRotation = opts.trueRotation ?? null
+  const candidates =
+    knownRotation != null ? [knownRotation] : inferRotations(head, hits)
+  // 「机头对、朝向错」需该朝向在界内可实现（否则 snapOrigin 夹取 → 变成「位置不符」）
+  const realizable = [0, 1, 2, 3].filter((r) => rotRealizableAtHead(head, r))
+  const wrongRealizable =
+    knownRotation != null ? realizable.find((r) => r !== knownRotation) ?? null : null
+  const wrongRot =
+    wrongRealizable ??
+    (knownRotation != null
+      ? (knownRotation + 1) % 4
+      : (realizable.find((r) => !candidates.includes(r)) ?? (candidates[0]! + 1) % 4))
 
   // ① 位置不符（none）：按住拖到机头不对的位置 → 既不成功也不提示；松手于参考区（不落子）
   // 宽幽灵可被判读为 rot0 或 rot2 两种朝向，两者推出的机头都必须 ≠ 真机头，才是纯「位置不符」
@@ -691,8 +707,10 @@ async function runUnit3KillBranch(page: Page, log: ShotLog): Promise<void> {
   await placeGhostAt(page, headMatchVis(head, wrongRot), wrongRot, { release: false })
   await page.waitForTimeout(320)
   const advancedByWrong = (await bubbleTextSafe(page)).includes('飞机就在这里')
-  // 对角扫描保证被毁飞机在机头前有无歧义机身命中：候选集 <4 时 wrongRot 必非真解 → 失败分支必然覆盖
-  if (candidates.length < 4) {
+  // 对角扫描保证被毁飞机在机头前有无歧义机身命中；快照已知真朝向时首猜（错朝向）必不通过
+  if (knownRotation != null && wrongRealizable != null) {
+    expect(advancedByWrong, '已知真朝向且错朝向界内可实现时，首猜不应直接成功').toBe(false)
+  } else if (knownRotation == null && candidates.length < 4) {
     expect(advancedByWrong, '候选集已知时首猜（错朝向）不应直接成功').toBe(false)
   }
   if (!advancedByWrong) {
@@ -793,12 +811,28 @@ test.describe('新手教程', () => {
     await runUnit3Intro(page, { log })
     await clickBubble(page) // i6 读毕 → 自由对局（首杀支线若已排队则立即开播）
 
+    // v0.3.15 提速：读会话快照取对手机头 → 一击命中直取；被毁飞机真朝向用于幽灵三态判定
+    const snap = await readBattleSnapshot(page)
+    const allHeads = snap?.oppHeads ?? []
+    // 首杀优先选「机头处另有界内可实现朝向」的飞机：保证幽灵失败分支（机头对/朝向错）可确定复现
+    const firstTarget =
+      allHeads.find((h) => realizableRots(h.head).some((r) => r !== h.rotation)) ?? allHeads[0]
+    const heads = firstTarget
+      ? [firstTarget.coord, ...allHeads.filter((h) => h.id !== firstTarget.id).map((h) => h.coord)]
+      : []
+
     // 首杀 → k1..k6
-    await shootUntil(page, log, 1)
-    await runUnit3KillBranch(page, log)
+    await shootUntil(page, log, 1, { heads })
+    const snapAfter = await readBattleSnapshot(page)
+    const destroyedId = snapAfter?.destroyedPlaneIds[0]
+    const target = snapAfter?.oppHeads.find((h) => h.id === destroyedId) ?? null
+    await runUnit3KillBranch(page, log, {
+      trueRotation: target?.rotation ?? null,
+      headCoord: target?.coord ?? null,
+    })
 
     // 继续清剿直至自然结束（教程对局 AI 避机头，只能由我方全歼结束）
-    await shootUntil(page, log, 3)
+    await shootUntil(page, log, 3, { heads })
     await expect(modal(page)).toContainText('教程完成', { timeout: 60_000 })
     await expect(modal(page)).toContainText('本局对局已结束，恭喜完成新手教程！')
     // 完成提示仅提供「返回主页」（不再有「继续对局」/「完成教程」）
@@ -854,8 +888,9 @@ test.describe('新手教程', () => {
     await expect(bubble(page)).toContainText('预报点标记最多可以同时存在10个。')
     await clickBubble(page) // 读毕 → 本支线结束
 
-    // 随后触发首杀 → k1 播报（验证两条支线触发顺序无关）
-    await shootUntil(page, log, 1)
+    // 随后触发首杀 → k1 播报（验证两条支线触发顺序无关；v0.3.15：快照机头一击命中）
+    const snap3 = await readBattleSnapshot(page)
+    await shootUntil(page, log, 1, { heads: (snap3?.oppHeads ?? []).map((h) => h.coord) })
     await expect(bubble(page)).toContainText('你成功摧毁了对方的飞机！', { timeout: 20_000 })
     await expectMixedModeInteractive(page)
 

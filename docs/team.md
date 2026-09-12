@@ -33,6 +33,15 @@
 5. CHANGELOG 定版（[x.y.z] - 日期）+ README/design 同步。
 6. check:ci 全绿 + e2e 全绿后打 annotated tag；不 push。
 
+## 1.2 验证协议（v0.3.15 起，控制测试耗时）
+
+每个版本**最多跑 2 轮 e2e 全量**，禁止"连续 2–3 轮全绿"式重复：
+1. **功能 agent**：只跑**自己改动相关的单个 spec**（如 `playwright test e2e/tutorial.spec.ts`）或**针对性临时冒烟**，不跑全量；完成后汇报命令与结果。
+2. **QA（M7）**：跑**一轮全量** e2e（+ 修复 e2e 侧适配），失败项逐条定位；如非产品缺陷则只修 harness，不再重复全量。
+3. **组长**：终验跑**一轮全量**（check:ci + e2e），作为发版依据。
+4. 统一用 `scripts/e2e-local.sh` 运行（内置 chromium 路径与确定性种子；避免忘记 env 导致整轮失败）；运行前该脚本会清理重复 dev server 保证单实例。
+5. 教程/单机等重用例优先使用**确定性种子**（`localStorage.aero.e2eSeed` 或 `?e2eSeed=`），避免"猎杀机头"式长循环。
+
 **M4 与 M8 的边界（明确版）**：M4 = 对局本身的运行逻辑（GameScreen 对局流程、单机 wiring、对局 bug）；M8 = 教程驱动层（教程步骤机/气泡/遮罩/入口，以及为教程目的在 GameScreen 上增加的**最小、可选的 props/事件**）。教程文件里引用 GameScreen 的功能一律只读使用；GameScreen 内部行为变更归 M4（或组长指派的修复人），M8 只在确需时提出并在派单中经组长授权。
 
 ## 3. 文件域（互不重叠，v0.3.2 起）

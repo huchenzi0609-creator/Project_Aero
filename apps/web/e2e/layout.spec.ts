@@ -11,7 +11,17 @@
  */
 import { expect, test } from '@playwright/test'
 import type { BrowserContext, Page } from '@playwright/test'
-import { allCoords, oppCell, practiceToPlacement, watchErrors } from './helpers'
+import {
+  allCoords,
+  diagCoords,
+  isMyTurnText,
+  oppCell,
+  practiceToPlacement,
+  readBattleSnapshot,
+  useE2eSeed,
+  waitMyTurn,
+  watchErrors,
+} from './helpers'
 
 interface Rect {
   x: number
@@ -145,6 +155,7 @@ test.describe('竖版 9:16 舞台布局', () => {
     const ctx = await browser.newContext({ viewport: { width: 390, height: 667 } })
     const page = await ctx.newPage()
     const errs = watchErrors(page)
+    await useE2eSeed(page) // v0.3.15：E2E_SEED → localStorage（AI 序列可复现）
     // 难度地狱：AI 更快找到我方机队，缩短对局
     await page.addInitScript(() => {
       localStorage.setItem(
@@ -163,47 +174,56 @@ test.describe('竖版 9:16 舞台布局', () => {
     await expect(page.locator('.game-banner')).toBeVisible()
     await expect(page.locator('.game-banner')).toBeHidden({ timeout: 5000 })
 
-    // ---- 报点循环至结算（复用 single.spec 手法：双点报点/输入框报点交替） ----
-    // v0.3.10 起坐标输入在对方回合保持可用 → 走预报点队列，回合切换自动上报；
-    // 因此不按「我方收到报点递增」门控（AI 先手时首枪易漏计造成死锁），改为与
-    // single.spec 相同的轮询节奏 + 预报点自动消化，全量并行下稳定收敛到结算。
+    // ---- 报点循环至结算（v0.3.15 提速）：读会话快照取对手机头 → 2 发陪跑 + 3 个机头直取；
+    //      保留「双点报点（1/3）与输入框报点（2/3）交替」与「≥5 发」语义；无快照时回退对角门控。
     const result = page.locator('.result')
     const coordInput = page.getByLabel('报点坐标，如 A5')
-    const shotCoords = allCoords(10, 10)
     const shotSet = new Set<string>()
-    let shotIndex = 0
-    let rounds = 0
-    let inputShot = 0
-    while (rounds < 300 && !(await result.isVisible().catch(() => false))) {
-      rounds += 1
-      // 等 AI 走完 → 我方回合（或已结算）
-      for (let i = 0; i < 60; i++) {
-        if (await result.isVisible().catch(() => false)) break
-        if (await coordInput.isEnabled()) break
-        await page.waitForTimeout(150)
-      }
-      if (!(await coordInput.isEnabled())) continue
-      // 取下一个未报点坐标（报点由本测试发起，追踪精确）
-      while (shotSet.has(shotCoords[shotIndex] ?? '')) shotIndex += 1
-      const coord = shotCoords[shotIndex] ?? 'A1'
-      shotSet.add(coord)
-
-      // 每 3 枪用一次双点报点覆盖该交互，其余走输入框（回车），避免点击竞态拖慢收敛
-      if (rounds % 3 === 0) {
+    let shotsTaken = 0
+    const fireOnce = async (coord: string, useDoubleClick: boolean) => {
+      if (useDoubleClick) {
         const cell = oppCell(page, coord)
-        await cell.click({ timeout: 1500 }).catch(() => {})
-        if (await result.isVisible().catch(() => false)) break
+        await cell.click({ timeout: 2000 }).catch(() => {})
+        if (await result.isVisible().catch(() => false)) return
         await page.waitForTimeout(140)
-        if (await result.isVisible().catch(() => false)) break
-        await cell.click({ timeout: 1500 }).catch(() => {})
+        await cell.click({ timeout: 2000 }).catch(() => {})
       } else {
-        inputShot += 1
         await coordInput.fill(coord)
         await coordInput.press('Enter')
         await expect(coordInput).toHaveValue('', { timeout: 3000 }).catch(() => {})
       }
     }
-    expect(inputShot + Math.floor(rounds / 3)).toBeGreaterThanOrEqual(5) // 确实进行过报点循环
+    const snapshot = await readBattleSnapshot(page)
+    const heads = (snapshot?.oppHeads ?? []).map((h) => h.coord)
+    if (heads.length >= 3) {
+      const fillers = allCoords(10, 10).filter((c) => !heads.includes(c)).slice(0, 2)
+      const plan = [...fillers, ...heads]
+      for (let i = 0; i < plan.length; i++) {
+        if (await result.isVisible().catch(() => false)) break
+        await waitMyTurn(page)
+        await fireOnce(plan[i]!, (i + 1) % 3 === 0)
+        shotsTaken += 1
+      }
+    } else {
+      const order = diagCoords(10, 10)
+      let idx = 0
+      let rounds = 0
+      while (rounds < 300 && !(await result.isVisible().catch(() => false))) {
+        rounds += 1
+        const st = (await page.locator('.game__status-text').textContent().catch(() => '')) ?? ''
+        if (!isMyTurnText(st)) {
+          await page.waitForTimeout(120)
+          continue
+        }
+        while (idx < order.length && shotSet.has(order[idx]!)) idx += 1
+        if (idx >= order.length) break
+        const coord = order[idx]!
+        shotSet.add(coord)
+        shotsTaken += 1
+        await fireOnce(coord, rounds % 3 === 0)
+      }
+    }
+    expect(shotsTaken).toBeGreaterThanOrEqual(5) // 确实进行过报点循环
     await expect(result).toBeVisible({ timeout: 90000 })
 
     // ---- 两真实阵型棋盘并排（同行、x 递增） ----

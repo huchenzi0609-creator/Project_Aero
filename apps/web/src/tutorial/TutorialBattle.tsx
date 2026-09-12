@@ -20,7 +20,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Cell, GridConfig, PlacedPlane } from '@aero/shared'
 import { DEFAULT_PLANE_SHAPE, PRESETS } from '@aero/shared'
 import { rotateShape } from '@aero/game-core'
-import { chooseTutorialShot, generateFleet, mulberry32 } from '@aero/game-core/ai'
+import { chooseTutorialShot, generateFleet } from '@aero/game-core/ai'
 import type { Rng, ShotKnowledge } from '@aero/game-core/ai'
 import { useEffectiveOrientation } from '../hooks/useOrientation'
 import { useGameStore } from '../store/gameStore'
@@ -33,6 +33,7 @@ import { TutorialBubble } from './TutorialBubble'
 import { TutorialSpotlight } from './TutorialSpotlight'
 import { TutorialFxBand, useTutorialFx } from './TutorialFx'
 import { useAnyModalOpen } from './useAnyModalOpen'
+import { makeRng } from '../lib/rng'
 import type { TutorialGameEvent } from './events'
 
 /* ============ 节点模型 ============ */
@@ -388,7 +389,8 @@ export function TutorialBattle({ fleet, onExitHome }: TutorialBattleProps) {
       setStartFailed(true)
       return
     }
-    const rng = mulberry32(((Date.now() ^ Math.floor(Math.random() * 0xffffffff)) >>> 0) || 1)
+    // v0.3.15：教程内随机源统一走 makeRng（e2e 注入种子后对手阵型完全可复现；无种子保持随机）
+    const rng = makeRng(101)
     try {
       const opp = generateFleet(config.width, config.height, config.planeCount, config.shape, difficulty, rng)
       oppFleetRef.current = opp

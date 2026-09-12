@@ -11,7 +11,7 @@
 import { useState } from 'react'
 import type { PlacedPlane } from '@aero/shared'
 import { PRESETS } from '@aero/shared'
-import { generateFleet, mulberry32 } from '@aero/game-core/ai'
+import { generateFleet } from '@aero/game-core/ai'
 import { useGameStore } from '../store/gameStore'
 import { useSettingsStore } from '../store/settingsStore'
 import { useEffectiveOrientation } from '../hooks/useOrientation'
@@ -20,6 +20,7 @@ import { PaperModal } from '../components/ui/PaperModal'
 import { TutorialPlacement } from '../tutorial/TutorialPlacement'
 import { TutorialBattle } from '../tutorial/TutorialBattle'
 import { Unit1Practice } from '../tutorial/Unit1Practice'
+import { makeRng } from '../lib/rng'
 import '../styles/tutorial.css'
 
 export type TutorialStage = 'entry' | 'unit1' | 'placement' | 'battle'
@@ -44,7 +45,8 @@ export function TutorialEntry({ onExit }: { onExit: () => void }) {
     let full = planes
     if (full.length < cfg.planeCount) {
       const diff = useSettingsStore.getState().difficulty
-      const rng = mulberry32(((Date.now() ^ Math.floor(Math.random() * 0xffffffff)) >>> 0) || 1)
+      // v0.3.15：随机源统一走 makeRng（e2e 种子下可复现）
+      const rng = makeRng(102)
       try {
         full = generateFleet(cfg.width, cfg.height, cfg.planeCount, cfg.shape, diff, rng)
       } catch {

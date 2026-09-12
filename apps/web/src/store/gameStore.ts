@@ -24,6 +24,7 @@ import {
 } from '@aero/game-core'
 import type { EndgameSeed, GameState, ShotResult } from '@aero/game-core'
 import { generateFleet, mulberry32 } from '@aero/game-core/ai'
+import { makeRng } from '../lib/rng'
 import type { Rng } from '@aero/game-core/ai'
 import { useSettingsStore } from './settingsStore'
 
@@ -139,7 +140,8 @@ export const useGameStore = create<GameStoreState>()((set, get) => ({
     if (!mine.ok) return { ok: false, errors: mine.errors }
     state = mine.state
     const difficulty = useSettingsStore.getState().difficulty
-    const aiRng = mulberry32(((Date.now() ^ Math.floor(Math.random() * 0xffffffff)) >>> 0) || 1)
+    // v0.3.15：教程 AI 随机源统一走 makeRng（e2e 种子下 AI 报点序列完全可复现）
+    const aiRng = makeRng(202)
     let aiFleet: PlacedPlane[]
     try {
       aiFleet = oppPlanes && oppPlanes.length > 0
@@ -165,7 +167,7 @@ export const useGameStore = create<GameStoreState>()((set, get) => ({
 
   // 教程单元3：残局开局（我方一架已被击毁 + 对方先手），规则标记一律经典
   beginTutorialEndgame: (config, myPlanes, opponentPlanes, seed) => {
-    const aiRng = mulberry32(((Date.now() ^ Math.floor(Math.random() * 0xffffffff)) >>> 0) || 1)
+    const aiRng = makeRng(203)
     const res = createEndgameState(
       config.width,
       config.height,

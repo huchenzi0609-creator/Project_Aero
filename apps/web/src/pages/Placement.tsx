@@ -7,7 +7,7 @@
  */
 import { useEffect, useRef, useState } from 'react'
 import type { PlacedPlane } from '@aero/shared'
-import { generateFleet, mulberry32 } from '@aero/game-core/ai'
+import { generateFleet } from '@aero/game-core/ai'
 import { useAppStore } from '../store/appStore'
 import { useSettingsStore } from '../store/settingsStore'
 import { useToastStore } from '../store/toastStore'
@@ -18,6 +18,7 @@ import { PaperButton } from '../components/ui/PaperButton'
 import { PaperModal } from '../components/ui/PaperModal'
 import { FleetPlacementBoard, fleetCheckState } from '../components/placement/FleetPlacementBoard'
 import type { TutorialGameEvent } from '../tutorial/events'
+import { makeRng } from '../lib/rng'
 
 const DIFFICULTY_LABEL: Record<string, string> = {
   easy: '简单',
@@ -87,7 +88,7 @@ export function Placement({ onGameEvent }: PlacementProps) {
 
   const randomFleet = () => {
     const diff = useSettingsStore.getState().difficulty
-    const rng = mulberry32(((Date.now() ^ Math.floor(Math.random() * 0xffffffff)) >>> 0) || 1)
+    const rng = makeRng(1) // v0.3.15：随机摆阵走确定性随机源（e2e 种子注入时复现）
     try {
       const fleet = generateFleet(width, height, planeCount, shape, diff, rng)
       handlePlanesChange(fleet)

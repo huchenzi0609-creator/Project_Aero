@@ -37,6 +37,7 @@ import { useToastStore } from '../store/toastStore'
 import { useEffectiveOrientation, useViewport } from '../hooks/useOrientation'
 import type { Viewport } from '../hooks/useOrientation'
 import { audioService } from '../lib/audioService'
+import { makeRng } from '../lib/rng'
 import { PaperButton } from '../components/ui/PaperButton'
 import { PaperCard } from '../components/ui/PaperCard'
 import { PaperModal } from '../components/ui/PaperModal'
@@ -250,10 +251,13 @@ export function GameScreen({ mode = 'single', onGameEvent, aiShotSelector, hideS
       }
     }
 
-    // 默认 AI：单发延时（300~900ms 思考）
+    // 默认 AI：单发延时（300~900ms 思考）；v0.3.15：rng 走确定性随机源（salt=turnNo，
+    // e2e 注入种子后每回合可复现且回合间不同；无种子时退回随机来源）
+    const aiRng = makeRng(state.turnNo)
+    const thinkMs = 300 + aiRng() * 600
     const t = window.setTimeout(() => {
-      fireAiShot(chooseShot(knowledge, difficulty, session.aiRng))
-    }, 300 + Math.random() * 600)
+      fireAiShot(chooseShot(knowledge, difficulty, aiRng))
+    }, thinkMs)
     return () => window.clearTimeout(t)
     // 依赖逻辑回合签名而非整个 state：blitz 时钟写入（每 ~100ms 新 state）不得重排本定时器（R2）
   }, [turnSig, screen, session?.nonce, onGameEvent, aiShotSelector])
