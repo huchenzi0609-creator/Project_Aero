@@ -19,8 +19,8 @@ test.describe('主页', () => {
     await expect(page.getByRole('button', { name: '对战模式' })).toBeVisible()
     await expect(page.getByRole('button', { name: '设置' })).toBeVisible()
     await expect(page.getByRole('button', { name: '规则说明' })).toBeVisible()
-    // 版本角标 v0.3.17-beta3
-    await expect(page.locator('.home__version')).toHaveText('v0.3.17-beta3')
+    // 版本角标 v0.3.17-beta4
+    await expect(page.locator('.home__version')).toHaveText('v0.3.17-beta4')
     // 备案合规：工信部备案号链接（横版默认视口）
     const icp = page.locator('a.home__icp', { hasText: '浙ICP备2026073891号' })
     await expect(icp).toBeVisible()
@@ -59,7 +59,7 @@ test.describe('主页', () => {
     await page.getByRole('button', { name: '← 返回主页' }).click()
     await expect(page.getByRole('heading', { name: '飞机杀' })).toBeVisible()
 
-    // 练习模式面板：四子模式入口可见；v0.3.17-beta3 模式小字说明为恢复状态（每卡一条）→ 返回主页
+    // 练习模式面板：四子模式入口可见；v0.3.17-beta4 练习模式小字说明（新文案）→ 返回主页
     await page.getByRole('button', { name: '练习模式' }).click()
     await expect(page.getByRole('heading', { name: '练习模式' })).toBeVisible()
     for (const m of ['经典模式', '超快棋模式', '盲棋模式', '自定义模式']) {
@@ -68,10 +68,20 @@ test.describe('主页', () => {
     const modeCards = page.locator('.practice__mode-card')
     await expect(modeCards).toHaveCount(4)
     await expect(page.locator('.practice__mode-sub')).toHaveCount(4)
-    await expect(modeCards.filter({ hasText: '经典模式' })).toContainText('常规对局')
-    await expect(modeCards.filter({ hasText: '超快棋模式' })).toContainText('开局倒计时 10×n 秒')
-    await expect(modeCards.filter({ hasText: '盲棋模式' })).toContainText('不记旧报点')
+    // v0.3.17-beta4 item 4：三张模式卡换新文案（自定义卡原文案不变）
+    await expect(modeCards.filter({ hasText: '经典模式' })).toContainText('无特殊规则，不限时。推荐新手尝试。')
+    await expect(modeCards.filter({ hasText: '超快棋模式' })).toContainText('限时10*n秒，每步加一秒，超时判负。')
+    await expect(modeCards.filter({ hasText: '盲棋模式' })).toContainText(
+      '仅显示最近3个报点，禁用参考与着色。难度较高，谨慎选择。',
+    )
     await expect(modeCards.filter({ hasText: '自定义模式' })).toContainText('自定棋盘尺寸')
+    // 旧文案必须彻底不存在
+    for (const old of ['常规对局', '开局倒计时', '不记旧报点']) {
+      await expect(
+        page.locator('.practice__mode-sub').filter({ hasText: old }),
+        `旧文案「${old}」不应存在`,
+      ).toHaveCount(0)
+    }
     await page.getByRole('button', { name: '← 返回主页' }).click()
     await expect(page.getByRole('heading', { name: '飞机杀' })).toBeVisible()
 

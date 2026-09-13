@@ -27,7 +27,6 @@ import { useGameStore } from '../store/gameStore'
 import { useSettingsStore } from '../store/settingsStore'
 import { useToastStore } from '../store/toastStore'
 import { PaperButton } from '../components/ui/PaperButton'
-import { PaperModal } from '../components/ui/PaperModal'
 import { GameScreen } from '../pages/GameScreen'
 import { TutorialBubble } from './TutorialBubble'
 import { TutorialSpotlight } from './TutorialSpotlight'
@@ -191,7 +190,6 @@ export function TutorialBattle({ fleet, onExitHome }: TutorialBattleProps) {
   const oppFleetRef = useRef<PlacedPlane[] | null>(null)
 
   const [startFailed, setStartFailed] = useState(false)
-  const [endedOpen, setEndedOpen] = useState(false)
   const [, tick] = useState(0)
   const rerender = useCallback(() => tick((x) => x + 1), [])
 
@@ -207,7 +205,7 @@ export function TutorialBattle({ fleet, onExitHome }: TutorialBattleProps) {
     prefire: 'idle' | 'queued' | 'running' | 'done'
   }>({ kill: 'idle', prefire: 'idle' })
   const domModalOpen = useAnyModalOpen()
-  const anyModalOpen = endedOpen || domModalOpen
+  const anyModalOpen = domModalOpen
 
   const currentNode = useCallback((): FlowNode | null => {
     const p = ptrRef.current
@@ -467,13 +465,13 @@ export function TutorialBattle({ fleet, onExitHome }: TutorialBattleProps) {
     if (startedRef.current && !useGameStore.getState().session) onExitHome()
   }, [sessionLive, onExitHome])
 
-  /** 对局自然结束（胜负判定）→ 完成提示（不再提供“继续对局/提前完成”） */
+  /**
+   * 对局自然结束（胜负判定）：清掉教学覆盖层，**交给 GameScreen 的常规结算画面**展示
+   * （v0.3.17-beta4 item 3：不再有教程自己的完成弹窗；结算页无「再来一局」由 hideRematch 控制）
+   */
   useEffect(() => {
     const st = useGameStore.getState().session?.state
-    if (st?.phase === 'ended') {
-      ptrRef.current = null
-      setEndedOpen(true)
-    }
+    if (st?.phase === 'ended') ptrRef.current = null
   }, [sessionNonce, sessionLive])
 
   /* ---------- 幽灵判定（v0.3.17-beta3 item 7） ----------
@@ -553,12 +551,13 @@ export function TutorialBattle({ fleet, onExitHome }: TutorialBattleProps) {
 
   return (
     <>
-      {/* hideBannerBackdrop：教程内不显示“您先手/后手”横幅自带暗底（M4 契约）；
-          横幅本身带 .tutorial-escape → 遮罩既不开洞遮挡它也不阻断它 */}
+      {/* 教程对局：hideBannerBackdrop = 横幅不渲染自带暗底（避免与遮罩双重压暗）；
+          hideRematch = 结算画面不显示「再来一局」（教程上下文只回主页）；
+          不再传 hideSettlement —— 教程对局需要展示常规结算画面 */}
       <GameScreen
         onGameEvent={dispatchEvent}
         aiShotSelector={aiShotSelector}
-        hideSettlement
+        hideRematch
         hideBannerBackdrop
       />
 
@@ -575,19 +574,6 @@ export function TutorialBattle({ fleet, onExitHome }: TutorialBattleProps) {
       ) : null}
       <TutorialFxBand fx={fx} />
 
-      {/* 完成提示：对局自然结束后展示（仅“返回主页”，不再提供继续/提前完成） */}
-      <PaperModal
-        open={endedOpen}
-        title="教程完成"
-        onClose={() => {}}
-        footer={
-          <PaperButton variant="primary" onClick={onExitHome}>
-            返回主页
-          </PaperButton>
-        }
-      >
-        <p style={{ margin: 0 }}>本局对局已结束，恭喜完成新手教程！</p>
-      </PaperModal>
     </>
   )
 }

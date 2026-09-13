@@ -154,6 +154,45 @@ test.describe('自定义模式', () => {
     expect(errs()).toEqual([])
   })
 
+  test('单机自定义：设置存档 allowMoveRefPlane=false 仍可拖出幽灵（v0.3.17-beta4 item 6）', async ({
+    page,
+  }) => {
+    const errs = watchErrors(page)
+    // 设置存档关闭参考飞机拖拽 —— 单机自定义（配置页开关默认开）仍应允许
+    await page.addInitScript(() => {
+      localStorage.setItem(
+        'aero-settings',
+        JSON.stringify({ state: { allowMoveRefPlane: false }, version: 0 }),
+      )
+    })
+    await openPractice(page)
+    await page.getByRole('button', { name: '自定义模式' }).click()
+    await expect(page.getByRole('heading', { name: '自定义配置' })).toBeVisible()
+    await page.getByRole('button', { name: '确认 · 进入摆阵' }).click()
+    await page.getByRole('button', { name: '随机摆阵' }).click()
+    await page.getByRole('button', { name: '确认布阵' }).click()
+    await expect(page.locator('.game__status-text')).toContainText(/轮到我方报点|等待对方报点|对方报点/, {
+      timeout: 15_000,
+    })
+    await expect(page.locator('.game-banner')).toBeHidden({ timeout: 15_000 })
+
+    const refPlane = page.locator('.game__ref .paper-grid__plane')
+    await expect(refPlane).toBeVisible()
+    const rp = await refPlane.boundingBox()
+    const ob = await page.locator('.game__opp .paper-grid__board').boundingBox()
+    if (!rp || !ob) throw new Error('参考飞机/棋盘不可见')
+    await page.mouse.move(rp.x + rp.width / 2, rp.y + rp.height / 2)
+    await page.mouse.down()
+    await page.mouse.move(ob.x + ob.width / 2, ob.y + ob.height / 2, { steps: 10 })
+    await page.mouse.up()
+    await expect(
+      page.locator('.game__opp .paper-grid__plane--ghost'),
+      '单机自定义在设置存档 false 时仍应允许拖出幽灵',
+    ).toHaveCount(1)
+
+    expect(errs()).toEqual([])
+  })
+
   test('v0.3.16：默认形状遮罩点击即解锁；「确认 · 进入摆阵」独立于编辑器托盘', async ({ page }) => {
     const errs = watchErrors(page)
     await openPractice(page)

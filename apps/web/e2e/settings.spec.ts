@@ -60,7 +60,9 @@ test.describe('设置', () => {
     expect(errs()).toEqual([])
   })
 
-  test('「允许移动参考飞机」「快捷着色」「单击报点」开关：默认值与持久化（刷新保持）', async ({ page }) => {
+  test('「快捷着色」「单击报点」开关：默认值与持久化（刷新保持）；「允许移动参考飞机」已下线', async ({
+    page,
+  }) => {
     const errs = watchErrors(page)
 
     await page.goto('/')
@@ -75,7 +77,9 @@ test.describe('设置', () => {
 
     // 默认均开
     await expect(section).toBeVisible()
-    await expect(toggle('允许移动参考飞机')).toBeChecked()
+    // v0.3.17-beta4 item 5：设置页不再提供「允许移动参考飞机」开关（单机恒允许，盲棋强制禁用）
+    await expect(toggle('允许移动参考飞机'), '「允许移动参考飞机」开关应已下线').toHaveCount(0)
+    await expect(page.getByText('允许移动参考飞机')).toHaveCount(0)
     // v0.3.0 快捷着色：默认开，含说明文案
     await expect(toggle('快捷着色')).toBeChecked()
     await expect(section.locator('.paper-toggle').filter({ hasText: '快捷着色' })).toContainText('批量着色')
@@ -87,15 +91,13 @@ test.describe('设置', () => {
     await page.getByRole('button', { name: '设置' }).click()
     await expect(toggle('快捷着色')).not.toBeChecked()
 
-    // 再开回 → 刷新后仍开启；允许移动参考飞机同步回归
+    // 再开回 → 刷新后仍开启（其余开关不受影响）
     await toggle('快捷着色').check()
-    await toggle('允许移动参考飞机').uncheck()
     await expect(toggle('快捷着色')).toBeChecked()
-    await expect(toggle('允许移动参考飞机')).not.toBeChecked()
     await page.reload()
     await page.getByRole('button', { name: '设置' }).click()
     await expect(toggle('快捷着色')).toBeChecked()
-    await expect(toggle('允许移动参考飞机')).not.toBeChecked()
+    await expect(toggle('允许移动参考飞机')).toHaveCount(0)
 
     // v0.3.16 单击报点：默认关（旧存档缺省视为 false，保持两步确认）→ 开启后刷新仍保持
     await expect(toggle('单击报点')).not.toBeChecked()

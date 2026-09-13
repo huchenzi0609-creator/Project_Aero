@@ -33,6 +33,8 @@ const PAD = 6 // 开洞外扩（目标呼吸空间）
 const DARK = 'rgba(58, 46, 28, 0.52)'
 /** 空洞几何动画时长（ms，300–400 可调） */
 const HOLE_ANIM_MS = 340
+/** 聚焦前静止期（ms）：基础态/整页洞 → 突显目标 时，先等待再开始收缩（v0.3.17-beta4 item 1） */
+const FOCUS_DELAY_MS = 500
 /**
  * 空洞几何缓动：smootherstep 6t⁵−15t⁴+10t³ —— 起点速度与终点速度**都为 0**，
  * 中段最快，避免“起手一顿/收尾一顿”的机械感（逐帧速度采样见验证脚本）。
@@ -183,10 +185,20 @@ export function TutorialSpotlight({
   const rafRef = useRef(0)
   const labelRef = useRef<AnimLabel>('none')
   const loopGenRef = useRef(0)
+  /** 上一次规划是否已把「气泡矩形」落定（item 2：气泡尺寸变化直接突变跟随，不播动画） */
+  const bubbleSettledRef = useRef(false)
+  /** 最近一次渲染是否纯 dim（气泡）节点：卸载时决定是否需要跨阶段暂存洞几何 */
+  const dimOnlyRef = useRef(dimOnly)
+  dimOnlyRef.current = dimOnly
+  /** 本实例是否已经历过第一次真实过渡（跨阶段续接只在第一次补齐读取） */
+  const carryUsedRef = useRef(false)
   const [frame, setFrame] = useState<{ rects: TargetRect[]; anim: AnimLabel }>({
     rects: initialRects,
     anim: 'none',
   })
+  /** 引擎是否已“落定”（动画结束或瞬时落位）：未落定时即便 anim==='none' 也不能渲染纯 dim 暗层，
+   *  否则 focus 延迟期间会先整屏压暗、随后又因整页洞而变亮（闪一下）。 */
+  const [idle, setIdle] = useState(true)
   const frameRef = useRef(frame)
   frameRef.current = frame
 
@@ -231,6 +243,8 @@ export function TutorialSpotlight({
       commit(finalRects, done ? 'none' : labelRef.current)
       if (done) {
         rafRef.current = 0
+        if (dimOnly) bubbleSettledRef.current = true
+        setIdle(true)
         return
       }
       void finalRects
@@ -244,6 +258,7 @@ export function TutorialSpotlight({
     animsRef.current = []
     curRef.current = rects
     commit(rects, 'none')
+    setIdle(true)
   }
 
   /**
@@ -251,8 +266,35 @@ export function TutorialSpotlight({
    * @param dest 目标几何（空 = 基础态或 dim 态）
    */
   const plan = (dest: TargetRect[]) => {
-    const cur = curRef.current
+    setIdle(false)
+    let cur = curRef.current
     const now = performance.now()
+    /* ---------- 跨阶段续接补齐（v0.3.17-beta4） ----------
+     * 新旧阶段在同一次 commit 内替换：新实例 render 时旧实例尚未卸载，peek 必然为空。
+     * 这里在本实例【第一次真实过渡】时补读旧实例卸载时暂存的洞几何，并只取与目标最近的洞作为起点
+     * （摆阵页「确认布阵」按钮洞 → 单元3 气泡洞 = transfer），随后立即清空避免重复消费。 */
+    if (dest.length > 0 && !carryUsedRef.current) {
+      carryUsedRef.current = true
+      if (cur.length === 1 && sameRect(cur[0]!, pageRect, 2)) {
+        const carried = peekSpotlightCarry()
+        if (carried && carried.length > 0) {
+          clearSpotlightCarry()
+          const anchor = dest[0]!
+          const nearest = carried.reduce((a, b) => (dist(a, anchor) <= dist(b, anchor) ? a : b))
+          curRef.current = [nearest]
+          cur = [nearest]
+        }
+      }
+    }
+    // item 2：仅当“上一次已把气泡洞落定”且目标仍是气泡且尺寸变了 → 直接突变跟随（不播动画）。
+    // 该判定必须用【旧值】并且不能由本函数提前置 true，否则会误吞正在进行的 focus 动画。
+    const bubbleJump =
+      dimOnly &&
+      bubbleSettledRef.current &&
+      cur.length === 1 &&
+      dest.length === 1 &&
+      !sameRect(cur[0]!, dest[0]!, 0.5)
+    if (!bubbleJump) bubbleSettledRef.current = false
 
     const mk = (from: TargetRect, to: TargetRect, label: AnimLabel): AnimHole => ({
       id: holeIdRef.current++,
@@ -262,6 +304,21 @@ export function TutorialSpotlight({
       dur: HOLE_ANIM_MS,
       label,
     })
+
+    /**
+     * item 1 的延迟聚焦：从 seed（整页）延迟 FOCUS_DELAY_MS 后收缩到目标。
+     * 若已有一组「同 seed、同目标数量」的 focus 动画仍在飞行（通常是首帧后测量更新导致的重规划），
+     * 则**只更新目标矩形、保留原 start**——否则每次重规划都会重置 500ms 静止期（静止期被无限拉长）。
+     */
+    const delayFocusFrom = (seed: TargetRect, dst: TargetRect[], nowMs: number): AnimHole[] => {
+      const pending = animsRef.current
+      const reusable =
+        pending.length === dst.length &&
+        pending.length > 0 &&
+        pending.every((a) => a.label === 'focus' && sameRect(a.from, seed, 2))
+      if (reusable) return pending.map((a, i) => ({ ...a, to: dst[i]! }))
+      return dst.map((t) => ({ ...mk(seed, t, 'focus'), start: nowMs + FOCUS_DELAY_MS }))
+    }
 
     // ① 无当前洞：基础态初始化（无动画）或 rest→focus（从整页/气泡矩形收缩到目标）
     const label0 = (l: AnimLabel) => {
@@ -275,7 +332,8 @@ export function TutorialSpotlight({
       // rest → 目标：从整页收缩（dim 节点的目标即气泡矩形，天然是“暗→暗”连续）
       const seed = pageRect
       label0('focus')
-      animsRef.current = dest.map((t) => mk(seed, t, 'focus'))
+      // item 1：从整页洞收缩前先静止 FOCUS_DELAY_MS
+      animsRef.current = delayFocusFrom(seed, dest, now)
       runLoop()
       return
     }
@@ -298,8 +356,15 @@ export function TutorialSpotlight({
     const isBase = cur.length === 1 && sameRect(cur[0]!, pageRect, 2)
     if (isBase) {
       label0('focus')
-      animsRef.current = dest.map((t) => mk(cur[0]!, t, 'focus'))
+      // item 1：聚焦前静止 FOCUS_DELAY_MS 再开始收缩（仅此一类过渡加延迟）
+      animsRef.current = delayFocusFrom(cur[0]!, dest, now)
       runLoop()
+      return
+    }
+
+    // ②c 气泡洞（item 2）：目标仍是气泡且气泡矩形变了（换段/换行/字号）→ 立即突变跟随，不播尺寸动画
+    if (bubbleJump) {
+      settleAt(dest) // settleAt 会保持 bubbleSettled=true
       return
     }
 
@@ -398,6 +463,24 @@ export function TutorialSpotlight({
   // 否则 effect 侧永远测不到气泡 → 首帧后无重试触发 → 规划器死等
   const effTargetsRef = useRef<string[]>(engineTargets)
   effTargetsRef.current = active ? engineTargets : []
+  /** 几何等值判断（避免无谓 setState 触发渲染循环） */
+  const sameRectList = (a: TargetRect[], b: TargetRect[]) =>
+    a.length === b.length &&
+    a.every((r, i) => sameRect(r, b[i]!, 0.5))
+
+  /**
+   * 每次提交后重新测量（v0.3.17-beta4）：
+   * 气泡换段/换行/字号变化不会改变选择器，若只在 targetKey 变化时测量，dest 会停留在旧矩形
+   * （表现为“洞没跟上气泡”）。这里无 deps 的 layout effect 每次提交都测一次，值相同则不 setState。
+   */
+  useLayoutEffect(() => {
+    if (!active) return
+    const nextT = measureRects(effTargetsRef.current)
+    setMeasured((prev) => (sameRectList(prev, nextT) ? prev : nextT))
+    const nextE = measureEscapeRects()
+    setEscapes((prev) => (sameRectList(prev, nextE) ? prev : nextE))
+  })
+
   useLayoutEffect(() => {
     const measure = () => {
       setMeasured(measureRects(effTargetsRef.current))
@@ -423,16 +506,16 @@ export function TutorialSpotlight({
     // eslint 无 react-hooks 插件：deps 用 targetKey（字符串）而非数组字面量，避免每次渲染重跑
   }, [targetKey, measureKey, active, dimOnly, sig])
 
-  // 首帧提交后清空 carry（不重复消费）；卸载时停 rAF 并把当前洞几何留给下一阶段
-  useEffect(() => {
-    clearSpotlightCarry()
-  }, [])
+  // 说明（v0.3.17-beta4）：这里原先在挂载时 clearSpotlightCarry()。
+  // 但组件替换发生在同一次 commit：新实例的 render（读 carry）早于旧实例的卸载 cleanup（写 carry），
+  // 挂载期清空会把刚写好的几何立刻抹掉 → 跨阶段续接（item 6）永不生效。
+  // 现在改为：在【本实例第一次真实过渡】时补读 carry，读完即清（见 plan）。
   useEffect(
     () => () => {
       loopGenRef.current++
       cancelAnimationFrame(rafRef.current)
       rafRef.current = 0
-      rememberSpotlightRects(curRef.current)
+      rememberSpotlightRects(curRef.current, { dimOnly: dimOnlyRef.current })
     },
     [],
   )
@@ -460,7 +543,7 @@ export function TutorialSpotlight({
   const animating = frame.anim !== 'none'
   const mode: 'dim' | 'holes' | 'hybrid' = dim ? (dimOnly ? 'dim' : 'hybrid') : 'holes'
   /** 纯 dim 且动画静止：渲染整屏暗层（气泡 z 豁免）；过渡期（含切到气泡）由空洞引擎承担 */
-  const renderDimLayer = dimOnly && !animating
+  const renderDimLayer = dimOnly && !animating && idle
 
   const padMerge = (list: TargetRect[]) => {
     const outer = list
@@ -499,6 +582,10 @@ export function TutorialSpotlight({
           data-spotlight-anim="none"
           data-spotlight-holes={1}
           data-spotlight-holes-raw={0}
+          data-spotlight-dest={destRects
+            .map((r) => `${Math.round(r.left)},${Math.round(r.top)},${Math.round(r.width)},${Math.round(r.height)}`)
+            .join(';')}
+          data-spotlight-sel={engineTargets.join('|')}
           data-spotlight-block={block ? '1' : '0'}
           aria-hidden="true"
         />

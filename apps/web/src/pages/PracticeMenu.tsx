@@ -31,19 +31,19 @@ const MODE_CARDS: ReadonlyArray<{
     key: 'classic',
     label: '经典模式',
     badgeClass: 'practice__badge--classic',
-    sub: '常规对局：先摆阵，再随机先后手轮流报点。',
+    sub: '无特殊规则，不限时。推荐新手尝试。',
   },
   {
     key: 'blitz',
     label: '超快棋模式',
     badgeClass: 'practice__badge--blitz',
-    sub: '开局倒计时 10×n 秒（3/5/7 架为 30/50/70 秒），超时判负。',
+    sub: '限时10*n秒，每步加一秒，超时判负。',
   },
   {
     key: 'blind',
     label: '盲棋模式',
     badgeClass: 'practice__badge--blind',
-    sub: '不记旧报点，禁用参考飞机与着色。',
+    sub: '仅显示最近3个报点，禁用参考与着色。难度较高，谨慎选择。',
   },
   {
     key: 'custom',

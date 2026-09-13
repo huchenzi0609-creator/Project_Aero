@@ -16,8 +16,14 @@ interface Carry {
 const CARRY_TTL_MS = 2500
 let carry: Carry | null = null
 
-/** 卸载时暂存当前洞几何（无洞或整页洞不暂存，避免污染下一阶段） */
-export function rememberSpotlightRects(rects: TargetRect[]): void {
+/**
+ * 卸载时暂存当前洞几何（无洞或整页洞不暂存，避免污染下一阶段）。
+ * v0.3.17-beta4：**纯 dim（气泡）节点不暂存**——气泡洞是「本次突显的对象」而非「上一阶段的界面元素」，
+ * 把它带到下一阶段会让本该「整页洞 → 收缩聚焦（item 1：先静止 500ms）」的 rest→focus 变成 transfer，
+ * 与跨阶段续接的语义（把上一阶段界面元素的洞续到下一阶段）不符。摆阵页属于 hybrid（dim + 目标洞）→ 照常暂存。
+ */
+export function rememberSpotlightRects(rects: TargetRect[], opts?: { dimOnly?: boolean }): void {
+  if (opts?.dimOnly) return
   if (rects.length === 0) return
   const pageOnly =
     rects.length === 1 &&

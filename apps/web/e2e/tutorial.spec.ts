@@ -10,6 +10,13 @@
  *   6) 阵型合法时 thanks 阶段即突显「确认布阵」；
  *   7) 放错位置的幽灵被自动回收 → 换朝向重试可真正落下。
  *
+ * v0.3.17-beta4 增补：
+ *   1) 聚焦静止期：整页洞 → 目标前先静止 380–900ms 再收缩（判「仍整页」用洞并集面积 ≥0.98·W·H）；
+ *      add/transfer/blur 等其他过渡无静止期（几何立刻开始变化）；
+ *   2) 气泡换段/换行 → 气泡洞立即突变跟随（全程 anim=none，dest ≈ 气泡 rect ≤0.5px）；
+ *   3) 教程结束 = 常规结算（无「再来一局」、有「返回主页」）；
+ *   7) 跨阶段续接回归：确认布阵 → 单元3 首个 transfer 首帧非整页（从确认按钮洞续接）。
+ *
  * v0.3.17-beta2 增补（洞动画引擎 + 跨阶段续接）：
  *   1) 教程页首帧即渲染遮罩（恒渲染）；弹窗期同样渲染基础态且阻断带为 0；
  *   3) 压暗→目标切换期间无零洞帧（不闪整页洞）；
@@ -32,7 +39,7 @@
  *    - 幽灵标记三态：位置不符=无提示、机头对朝向错=失败提示、完全正确=成功（拖动中持续检测）；
  *    - k4 进入着色教学时空网格已取消突显（该处点击命中阻断带）；
  *    - 首杀支线与预报点支线【并行且顺序无关】：kill-first（用例2）与 prefire-first（用例3）；
- *    - 对局自然结束 → 完成提示仅「返回主页」（无「继续对局」）→ 主页；
+ *    - 对局自然结束 → **常规结算画面**（.result，无「再来一局」hideRematch）→「返回主页」→ 主页；
  * 4) 突显为模态（v0.3.13 弹窗纵深防护回归）：非突显区不可点、气泡/退出可点、弹窗打开时阻断带为 0。
  *
  * 全程 console 零 error。
@@ -228,21 +235,69 @@ interface SpotlightFrame {
   raw: number
   holes: number
   block: string | null
+  /** 采样时刻（performance.now()） */
+  t: number
+  /** 洞几何签名（逐洞四舍五入到 1px）——用于判定“几何是否已开始变化” */
+  sig: string
+  /** 洞并集面积（px²；无 path 的静止 dim 层为 0） */
+  area: number
+  /** 洞是否仍≈整页（≥0.98·W·H，二值：整页静止期的判据，不能只看单片宽——洞是 x 切片） */
+  full: boolean
 }
-/** rAF 轮询逐帧采样遮罩属性（dest 变化前开始观测；覆盖 ~340ms smootherstep 过渡） */
+/** rAF 轮询逐帧采样遮罩属性（dest 变化前开始观测；覆盖 ~340ms smootherstep 过渡 + v0.3.17-beta4 聚焦静止期） */
 async function observeFrames(page: Page, ms = 700): Promise<SpotlightFrame[]> {
   return page.evaluate(async (dur: number) => {
-    const out: Array<{ anim: string | null; mode: string | null; raw: number; holes: number; block: string | null }> = []
+    const parseHoles = (d: string) => {
+      const re = /M(-?[\d.]+) (-?[\d.]+) H(-?[\d.]+) V(-?[\d.]+) H(-?[\d.]+) Z/g
+      const rects: Array<[number, number, number, number]> = []
+      let m: RegExpExecArray | null
+      while ((m = re.exec(d))) rects.push([+m[1]!, +m[2]!, +m[3]!, +m[4]!])
+      return rects.slice(1) // 首个子路径恒为整屏外框，其余为洞
+    }
+    const out: Array<{
+      anim: string | null
+      mode: string | null
+      raw: number
+      holes: number
+      block: string | null
+      t: number
+      sig: string
+      area: number
+      full: boolean
+    }> = []
     const t0 = performance.now()
     while (performance.now() - t0 < dur) {
       const el = document.querySelector('.tutorial-spotlight')
       if (el) {
+        const path = el.querySelector('path')
+        const holes = path ? parseHoles(path.getAttribute('d') ?? '') : []
+        const area = holes.reduce(
+          (a, [l, t, r, b]) => a + Math.max(0, r - l) * Math.max(0, b - t),
+          0,
+        )
+        const vp = window.innerWidth * window.innerHeight
+        // 几何签名用【并集包围盒】：去重叠分解会因豁免元素微动而改变切片数，
+        // 但并集范围只随真正的洞形变而变（静止期恒为整页 bbox）
+        const sig = holes.length
+          ? [
+              Math.min(...holes.map((r) => r[0])),
+              Math.min(...holes.map((r) => r[1])),
+              Math.max(...holes.map((r) => r[2])),
+              Math.max(...holes.map((r) => r[3])),
+            ]
+              .map((v) => Math.round(v))
+              .join(',')
+          : ''
         out.push({
           anim: el.getAttribute('data-spotlight-anim'),
           mode: el.getAttribute('data-spotlight-mode'),
           raw: Number(el.getAttribute('data-spotlight-holes-raw') ?? '-1'),
           holes: Number(el.getAttribute('data-spotlight-holes') ?? '-1'),
           block: el.getAttribute('data-spotlight-block'),
+          t: performance.now(),
+          sig,
+          area,
+          full: vp > 0 && area >= 0.98 * vp,
         })
       }
       await new Promise((r) => requestAnimationFrame(() => r(null)))
@@ -251,9 +306,63 @@ async function observeFrames(page: Page, ms = 700): Promise<SpotlightFrame[]> {
   }, ms)
 }
 /** 过渡期间出现过的 data-spotlight-anim 取值集合 */
-async function observeAnim(page: Page, ms = 700): Promise<string[]> {
-  const frames = await observeFrames(page, ms)
+function animSet(frames: SpotlightFrame[]): string[] {
   return [...new Set(frames.map((f) => f.anim).filter((v): v is string => Boolean(v)))]
+}
+/** 聚焦静止期：focus 首帧（整页）→ 洞并集面积首次跌破 0.98·W·H（开始收缩） */
+function focusHoldMs(frames: SpotlightFrame[]): number | null {
+  const i0 = frames.findIndex((f) => f.anim === 'focus')
+  if (i0 < 0) return null
+  const i1 = frames.findIndex((f, i) => i > i0 && !f.full)
+  return i1 < 0 ? null : frames[i1]!.t - frames[i0]!.t
+}
+/** 过渡持续时长：首个 label 帧 → 落定（anim 变为非 label） */
+function transitionMs(frames: SpotlightFrame[], label: string): number | null {
+  const i0 = frames.findIndex((f) => f.anim === label)
+  if (i0 < 0) return null
+  const i1 = frames.findIndex((f, i) => i > i0 && f.anim !== label)
+  return i1 < 0 ? null : frames[i1]!.t - frames[i0]!.t
+}
+/**
+ * v0.3.17-beta4 item 1：focus（整页 → 目标）应先静止 380–900ms 再收缩。
+ * 判「仍整页」用**洞并集面积**（≥0.98·W·H）——洞是 x 切片，单片宽不可用。
+ */
+function expectFocusHold(frames: SpotlightFrame[], label: string): void {
+  const i0 = frames.findIndex((f) => f.anim === 'focus')
+  expect(i0, `${label} 应观测到 focus 过渡`).toBeGreaterThanOrEqual(0)
+  expect(frames[i0]!.full, `${label} focus 首帧洞应为整页（静止期）`).toBe(true)
+  const hold = focusHoldMs(frames)
+  expect(hold, `${label} 应观测到聚焦开始收缩`).not.toBeNull()
+  expect(hold!, `${label} 聚焦静止期应 ≥380ms（实测 ${hold!.toFixed(0)}ms）`).toBeGreaterThanOrEqual(380)
+  expect(hold!, `${label} 聚焦静止期应 ≤900ms（实测 ${hold!.toFixed(0)}ms）`).toBeLessThanOrEqual(900)
+  // 整段 = 静止 500ms + 收缩 340ms ≈ 840ms（远长于其他过渡的 ~340ms）
+  const total = transitionMs(frames, 'focus')
+  expect(total, `${label} 应观测到 focus 落定`).not.toBeNull()
+  expect(total!, `${label} focus 总时长应 ≥750ms（实测 ${total!.toFixed(0)}ms）`).toBeGreaterThanOrEqual(750)
+}
+/**
+ * v0.3.17-beta4 item 1：add/transfer/blur 等其他过渡**不加静止期** —— 整段时长应≈单次动画
+ * （~340ms；若有 500ms 静止期会拉到 ~840ms）。
+ */
+function expectNoStartDelay(frames: SpotlightFrame[], label: string, maxMs = 700): void {
+  const total = transitionMs(frames, label)
+  expect(total, `应观测到 ${label} 过渡并落定`).not.toBeNull()
+  expect(
+    total!,
+    `${label} 不应有额外静止期（整段 ${total!.toFixed(0)}ms，应≈单次动画 ~340ms）`,
+  ).toBeLessThanOrEqual(maxMs)
+}
+/** data-spotlight-dest 解析（目标几何） */
+async function destRects(page: Page): Promise<Array<{ left: number; top: number; width: number; height: number }>> {
+  const raw = await spotlightAttr(page, 'data-spotlight-dest')
+  if (!raw) return []
+  return raw
+    .split(';')
+    .filter(Boolean)
+    .map((seg) => {
+      const [left, top, width, height] = seg.split(',').map(Number)
+      return { left: left!, top: top!, width: width!, height: height! }
+    })
 }
 /** data-spotlight-holes-raw / -sel（引擎目标洞数与选择器） */
 async function rawHoles(page: Page): Promise<number> {
@@ -731,8 +840,31 @@ async function runUnit2(page: Page): Promise<void> {
   await expect(page.getByRole('heading', { name: '新手教程 · 摆阵' })).toBeVisible({ timeout: 10_000 })
   await expect(bubble(page)).toContainText('很好！接下来我们即将进入实战！', { timeout: 10_000 })
   await expectPureDim(page)
+  // v0.3.17-beta4 item 2：气泡换段（换行/尺寸变化）→ 气泡洞【立即突变跟随】，不播尺寸动画
+  const bubbleFrames = observeFrames(page, 900)
   await clickBubble(page)
   await expect(bubble(page)).toContainText('首先要做的一件事是')
+  const bf = await bubbleFrames
+  expect(
+    bf.filter((f) => f.anim && f.anim !== 'none').length,
+    '气泡换段不应播放洞动画（应保持 anim=none 突变跟随）',
+  ).toBe(0)
+  await expect
+    .poll(
+      async () => {
+        const d = (await destRects(page))[0]
+        const b = await page.locator('.tutorial-bubble').boundingBox()
+        if (!d || !b) return null
+        return Math.max(
+          Math.abs(d.left - b.x),
+          Math.abs(d.top - b.y),
+          Math.abs(d.width - b.width),
+          Math.abs(d.height - b.height),
+        )
+      },
+      { timeout: 4000, message: '换段后 data-spotlight-dest 应≈气泡 rect（≤0.5px）' },
+    )
+    .toBeLessThanOrEqual(0.5)
   await clickBubble(page)
   await expect(bubble(page)).toContainText('对手将尝试破解我方阵型')
   await clickBubble(page)
@@ -747,11 +879,15 @@ async function runUnit2(page: Page): Promise<void> {
   await expect.poll(() => rawHoles(page), { timeout: 5000 }).toBe(2)
   expect(await engineSel(page)).toContain('.placement__board-wrap')
   // item 6：跨阶段交接——确认布阵后单元3 首个遮罩过渡应为 transfer（洞从确认按钮续接）
-  const animCarry = observeAnim(page, 1500)
+  const carryFrames = observeFrames(page, 1500)
   // item 7：横幅仅在开战初期显示 ~1.5s → 与交接观测并行启动（点击前开始轮询可见性）
   const bannerCheck = expectTutorialBanner(page)
   await page.getByRole('button', { name: '确认布阵' }).click()
-  expect(await animCarry, 'unit2→unit3 应为 transfer（spotlightCarry 跨阶段续接）').toContain('transfer')
+  const cf = await carryFrames
+  // v0.3.17-beta4 item 7：跨阶段续接回归——首个过渡必须是 transfer，且起点非整页（续接确认按钮洞）
+  expect(animSet(cf), 'unit2→unit3 应为 transfer（spotlightCarry 跨阶段续接）').toContain('transfer')
+  const firstCarry = cf.find((f) => f.anim === 'transfer')
+  expect(firstCarry?.full, '交接首帧不应是整页洞（应从确认按钮洞续接）').toBe(false)
   await bannerCheck
 }
 
@@ -882,10 +1018,12 @@ async function runUnit3Intro(
     }
   }
   await expectHit(page, '.game__mine', 'blocked', false)
-  const animTR = observeAnim(page, 800) // 先开始观测，再触发 i2→i3
+  const trFrames = observeFrames(page, 900) // 先开始观测，再触发 i2→i3
   await clickBubble(page) // → i3（突显参考网格）
   await expect(bubble(page)).toContainText('这是参考网格')
-  expect(await animTR, 'i2→i3 过渡应为 transfer（洞连续转移）').toContain('transfer')
+  const trf = await trFrames
+  expect(animSet(trf), 'i2→i3 过渡应为 transfer（洞连续转移）').toContain('transfer')
+  expectNoStartDelay(trf, 'transfer') // item 1：transfer 不加静止期
   await expectHit(page, '.game__ref', 'blocked', false)
   await clickBubble(page) // → i4（等真实报点，不可点击推进）
   await expect(bubble(page)).toContainText('这是空网格，你需要通过双击报点来获得对方飞机的信息。试试看！')
@@ -922,9 +1060,11 @@ async function runUnit3KillBranch(
   // k1（混合模式）
   await expect(bubble(page)).toContainText('你成功摧毁了对方的飞机！', { timeout: 20_000 })
   await expectMixedModeInteractive(page)
-  const animAdd = observeAnim(page, 800) // 先开始观测，再触发 k1→k2
+  const addFrames = observeFrames(page, 900) // 先开始观测，再触发 k1→k2
   await clickBubble(page)
-  expect(await animAdd, 'k1→k2 新增参考网格洞应为 add（自中心生长）').toContain('add')
+  const af = await addFrames
+  expect(animSet(af), 'k1→k2 新增参考网格洞应为 add（自中心生长）').toContain('add')
+  expectNoStartDelay(af, 'add') // item 1：add 不加静止期
   // v0.3.17-beta2 item 8：k2 = 参考网格 + 空网格 双目标（引擎洞数 2）
   await expect.poll(() => rawHoles(page), { timeout: 5000 }).toBe(2)
   expect(await engineSel(page)).toContain('.game__ref')
@@ -1017,14 +1157,16 @@ async function runUnit3KillBranch(
       break
     }
     await setRefRotation(page, rot)
-    const animBlur = observeAnim(page, 1200) // 覆盖落子判定（≤6×60ms 重试）到 k3 过渡
+    const blurFrames = observeFrames(page, 1300) // 覆盖落子判定（≤6×60ms 重试）到 k3 过渡
     const areaFrames = observeHoleAreas(page, 1200) // v0.3.17-beta3 item 4：融合面积连续性
     await placeGhostAt(page, headMatchVis(head, rot), rot, { release: true })
     await page.waitForTimeout(320)
     const frames = await areaFrames
+    const blf = await blurFrames
     if ((await bubbleTextSafe(page)).includes('飞机就在这里')) {
       exact = true
-      expect(await animBlur, 'k2→k3 部分移除应为 blur（被移除洞收拢消失）').toContain('blur')
+      expect(animSet(blf), 'k2→k3 部分移除应为 blur（被移除洞收拢消失）').toContain('blur')
+      expectNoStartDelay(blf, 'blur') // item 1：blur 不加静止期
       // item 4：被移除洞「收拢并入」保留洞，去重叠分解下并集面积应逐帧连续（无融合跳变）
       expectHoleAreaContinuity(frames, 'k2→k3 融合')
     }
@@ -1072,7 +1214,10 @@ test.describe('新手教程', () => {
     const errs = watchErrors(page)
 
     await openTutorial(page)
+    // v0.3.17-beta4 item 1：观测教程首帧「整页 → 气泡」聚焦（先启动观测，再进入教程）
+    const enterFrames = observeFrames(page, 2200)
     await modal(page).getByRole('button', { name: '还不了解' }).click()
+    expectFocusHold(await enterFrames, '教程首帧聚焦')
     await runUnit1(page)
     await runUnit2(page)
 
@@ -1107,7 +1252,9 @@ test.describe('新手教程', () => {
     expect(errs()).toEqual([])
   })
 
-  test('我已了解 → 单元2 → 单元3：首杀支线（幽灵三态/着色）+ 自然结束完成提示返回主页', async ({ page }) => {
+  test('我已了解 → 单元2 → 单元3：首杀支线（幽灵三态/着色）+ 自然结束→常规结算返回主页', async ({
+    page,
+  }) => {
     test.setTimeout(600_000)
     const errs = watchErrors(page)
     const log: ShotLog = new Map()
@@ -1140,13 +1287,16 @@ test.describe('新手教程', () => {
 
     // 继续清剿直至自然结束（教程对局 AI 避机头，只能由我方全歼结束）
     await shootUntil(page, log, 3, { heads })
-    await expect(modal(page)).toContainText('教程完成', { timeout: 60_000 })
-    await expect(modal(page)).toContainText('本局对局已结束，恭喜完成新手教程！')
-    // 完成提示仅提供「返回主页」（不再有「继续对局」/「完成教程」）
-    await expect(modal(page).getByRole('button', { name: '返回主页' })).toHaveCount(1)
-    await expect(modal(page).getByRole('button', { name: '继续对局' })).toHaveCount(0)
-    await expect(modal(page).getByRole('button', { name: '完成教程' })).toHaveCount(0)
-    await modal(page).getByRole('button', { name: '返回主页' }).click()
+    // v0.3.17-beta4 item 3：教程结束不再有「教程完成」PaperModal，改为 **常规结算画面**
+    await expect(page.locator('.result__title--win'), '教程全歼 → 常规结算胜利标题').toBeVisible({
+      timeout: 60_000,
+    })
+    await expect(page.locator('.result')).toContainText('对方真实阵型')
+    await expect(page.locator('.paper-modal__dialog'), '教程结束不应再弹 PaperModal').toHaveCount(0)
+    // hideRematch：教程上下文无「再来一局」，仅「返回主页」
+    await expect(page.locator('.result').getByRole('button', { name: '再来一局' })).toHaveCount(0)
+    await expect(page.locator('.result').getByRole('button', { name: '返回主页' })).toHaveCount(1)
+    await page.locator('.result').getByRole('button', { name: '返回主页' }).click()
     await expect(page.getByRole('heading', { name: '飞机杀' })).toBeVisible({ timeout: 10_000 })
 
     expect(errs()).toEqual([])
@@ -1170,7 +1320,7 @@ test.describe('新手教程', () => {
     if (preKill === 0) await expectNoHighlight(page)
 
     // 对手回合内创建预报点（`--theirs` 回合色边框为回合信号）→ p1 先播
-    const animFocus = observeAnim(page, 3000) // 覆盖创建重试窗口，捕捉 rest→focus
+    const animFocus = observeFrames(page, 3000) // 覆盖创建重试窗口，捕捉 rest→focus（含聚焦静止期）
     const input = page.getByLabel('报点坐标，如 A5')
     const prefire = page.locator('.game__opp .paper-grid__stamp .prefire-mark')
     const n16Text = '你刚才看见的红色'
@@ -1193,7 +1343,10 @@ test.describe('新手教程', () => {
     await expect(bubble(page)).toContainText('你刚才看见的红色“？”是预报点标记。', { timeout: 10_000 })
     await expectMixedModeInteractive(page)
     if (preKill === 0) {
-      expect(await animFocus, '基础态→p1 应为 focus（洞由整页收缩到目标）').toContain('focus')
+      const pff = await animFocus
+      expect(animSet(pff), '基础态→p1 应为 focus（洞由整页收缩到目标）').toContain('focus')
+      // v0.3.17-beta4 item 1：focus 前应先静止 380–900ms 再开始收缩（整页静止期判据用洞并集面积）
+      expectFocusHold(pff, '基础态→p1')
     }
     for (let k = 0; k < 6; k++) {
       if ((await bubbleTextSafe(page)).includes('预报点标记最多可以同时存在10个。')) break

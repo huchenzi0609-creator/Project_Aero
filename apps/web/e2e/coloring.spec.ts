@@ -9,7 +9,8 @@
  *
  * 用例 3（快捷着色关闭）：点击幽灵飞机仅批量着色，不回收、不退出。
  *
- * 用例 4（开关关闭 allowMoveRefPlane=false）：参考飞机不可拖拽（无放置副本），点击旋转仍允许。
+ * 用例 4（v0.3.17-beta4 单机参考飞机恒定允许）：即使设置存档 allowMoveRefPlane=false，经典单机
+ *   仍可拖出幽灵副本（点击旋转亦允许）；盲棋强制禁用见 v030.spec。
  *
  * 用例 5（摆阵本体命中）：包围盒空白格不旋转、本体格旋转。
  */
@@ -250,11 +251,13 @@ test.describe('对局着色工具', () => {
     await ctx.close()
   })
 
-  test('开关关闭后参考飞机不可拖拽（点击旋转仍允许）', async ({ browser }) => {
+  test('单机参考飞机恒定允许：设置存档 allowMoveRefPlane=false 仍可拖出幽灵（点击旋转亦允许）', async ({
+    browser,
+  }) => {
     const ctx: BrowserContext = await browser.newContext({ viewport: { width: 1280, height: 800 } })
     const page = await ctx.newPage()
     const errs = watchErrors(page)
-    // 预置设置存档：allowMoveRefPlane=false（zustand persist 格式）
+    // 预置设置存档：allowMoveRefPlane=false（zustand persist 格式）——v0.3.17-beta4 起单机忽略该设置项
     await page.addInitScript(() => {
       localStorage.setItem(
         'aero-settings',
@@ -275,7 +278,7 @@ test.describe('对局着色工具', () => {
     expect(before.width > before.height).toBeTruthy()
     expect(after.width < after.height).toBeTruthy()
 
-    // 拖拽到对手棋盘 → 不产生放置副本
+    // v0.3.17-beta4 item 6：拖拽到对手棋盘 → 仍产生幽灵放置副本（单机恒允许，设置存档不生效）
     const oppBoard = page.locator('.game__opp .paper-grid__board')
     const rp = await refPlane.boundingBox()
     const ob = await oppBoard.boundingBox()
@@ -284,7 +287,10 @@ test.describe('对局着色工具', () => {
     await page.mouse.down()
     await page.mouse.move(ob.x + ob.width / 2, ob.y + ob.height / 2, { steps: 10 })
     await page.mouse.up()
-    await expect(page.locator('.game__opp .paper-grid__plane')).toHaveCount(0)
+    await expect(
+      page.locator('.game__opp .paper-grid__plane--ghost'),
+      '设置存档 allowMoveRefPlane=false 时经典单机仍应允许拖出幽灵',
+    ).toHaveCount(1)
 
     expect(errs()).toEqual([])
     await ctx.close()

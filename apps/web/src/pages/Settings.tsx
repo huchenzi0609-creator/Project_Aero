@@ -15,14 +15,12 @@ export function Settings() {
   const sfxVolume = useSettingsStore((s) => s.sfxVolume)
   const invertMarks = useSettingsStore((s) => s.invertMarks)
   const difficulty = useSettingsStore((s) => s.difficulty)
-  const allowMoveRefPlane = useSettingsStore((s) => s.allowMoveRefPlane)
   const quickColor = useSettingsStore((s) => s.quickColor)
   const singleTapShot = useSettingsStore((s) => s.singleTapShot)
   const setBgmVolume = useSettingsStore((s) => s.setBgmVolume)
   const setSfxVolume = useSettingsStore((s) => s.setSfxVolume)
   const toggleInvertMarks = useSettingsStore((s) => s.toggleInvertMarks)
   const setDifficulty = useSettingsStore((s) => s.setDifficulty)
-  const toggleAllowMoveRefPlane = useSettingsStore((s) => s.toggleAllowMoveRefPlane)
   const toggleQuickColor = useSettingsStore((s) => s.toggleQuickColor)
   const toggleSingleTapShot = useSettingsStore((s) => s.toggleSingleTapShot)
 
@@ -110,13 +108,6 @@ export function Settings() {
               onChange={setDifficulty}
               options={difficultyOptions}
             />
-            <div className="settings__row">
-              <PaperToggle
-                label="允许移动参考飞机"
-                checked={allowMoveRefPlane}
-                onChange={toggleAllowMoveRefPlane}
-              />
-            </div>
             <div className="settings__row">
               <PaperToggle
                 label="快捷着色"

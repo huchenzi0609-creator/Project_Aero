@@ -17,7 +17,11 @@ interface SettingsState {
   sfxVolume: number // 0..1
   invertMarks: boolean
   difficulty: Difficulty
-  /** 是否允许在对局中拖拽移动样式参考飞机；旧存档缺省时视为 true */
+  /**
+   * 是否允许在对局中拖拽移动样式参考飞机。
+   * v0.3.17-beta4：字段兼容保留（存档不破坏），但已不再由设置页暴露；
+   * 恒为 true（旧存档缺省亦按 true）；M4 单机读取改为恒定允许（盲棋仍禁用）。
+   */
   allowMoveRefPlane: boolean
   /** 快捷着色（v0.3.0）：着色模式点击幽灵飞机 = 整架批量着色并回收幽灵；旧存档缺省视为 true */
   quickColor: boolean

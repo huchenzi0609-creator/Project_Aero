@@ -79,6 +79,8 @@ interface GameScreenProps {
   hideSettlement?: boolean
   /** 教程（v0.3.17）：先后手横幅不渲染自带半透明暗底（避免与教程遮罩双重压暗）；默认 false 不影响普通对局 */
   hideBannerBackdrop?: boolean
+  /** 教程（v0.3.17-beta4）：结算画面隐藏「再来一局」按钮（其余结算内容不变）；默认 false */
+  hideRematch?: boolean
 }
 
 export function GameScreen({
@@ -87,6 +89,7 @@ export function GameScreen({
   aiShotSelector,
   hideSettlement,
   hideBannerBackdrop = false,
+  hideRematch = false,
 }: GameScreenProps) {
   const session = useGameStore((s) => s.session)
   const applyShotAt = useGameStore((s) => s.applyShotAt)
@@ -101,7 +104,6 @@ export function GameScreen({
   const difficulty = useSettingsStore((s) => s.difficulty)
   const bgmVolume = useSettingsStore((s) => s.bgmVolume)
   const sfxVolume = useSettingsStore((s) => s.sfxVolume)
-  const settingsAllowMove = useSettingsStore((s) => s.allowMoveRefPlane)
   // v0.3.16：单击报点（M3 并行新增 settingsStore.singleTapShot，默认 false；未落盘前动态读取）
   const singleTapShot = useSettingsStore(
     (s) => (s as unknown as { singleTapShot?: boolean }).singleTapShot ?? false,
@@ -165,8 +167,9 @@ export function GameScreen({
   })
   const isColoring = coloring.coloringMode
 
-  /* ---------- 样式参考飞机：允许拖拽开关（config 优先，回退设置，默认 true；盲棋强制禁用） ---------- */
-  const allowMoveRefPlane = isBlind ? false : (config?.allowMoveRefPlane ?? settingsAllowMove ?? true)
+  /* ---------- 样式参考飞机：v0.3.17-beta4 起单机恒定允许拖拽（settings 开关已废弃为兼容字段）；
+     仅保留【盲棋强制禁用】与 CustomConfig 单机模式级配置（config.allowMoveRefPlane）语义 ---------- */
+  const allowMoveRefPlane = isBlind ? false : (config?.allowMoveRefPlane ?? true)
 
   /* ---------- 音量占位接线（M7 实现真实音效） ---------- */
   useEffect(() => {
@@ -1151,16 +1154,18 @@ export function GameScreen({
               >
                 返回主页
               </PaperButton>
-              <PaperButton
-                variant="primary"
-                onClick={() => {
-                  resetGame()
-                  audioService.playSfx('page-flip')
-                  setView('placement')
-                }}
-              >
-                再来一局
-              </PaperButton>
+              {!hideRematch ? (
+                <PaperButton
+                  variant="primary"
+                  onClick={() => {
+                    resetGame()
+                    audioService.playSfx('page-flip')
+                    setView('placement')
+                  }}
+                >
+                  再来一局
+                </PaperButton>
+              ) : null}
             </div>
           </div>
         </div>
