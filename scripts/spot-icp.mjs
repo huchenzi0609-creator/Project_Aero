@@ -1,9 +1,9 @@
 /**
  * ICP 备案合规页面断言（双通道 × 双协议）：
  *   - https://feijisha.online/       期望角标 v0.2.10
- *   - https://feijisha.online/beta   期望角标 v0.3.12
+ *   - https://feijisha.online/beta   期望角标 v0.3.17-beta5
  *   - http://116.62.121.70:8080/     期望角标 v0.2.10（备用通道也须含备案号）
- *   - http://116.62.121.70:8080/beta/ 期望角标 v0.3.12
+ *   - http://116.62.121.70:8080/beta/ 期望角标 v0.3.17-beta5
  * 断言：角标文案、备案号文本（浙ICP备2026073891号）、a[href*=beian.miit.gov.cn]、target=_blank。
  * 用法：node scripts/spot-icp.mjs
  */
@@ -15,9 +15,9 @@ const exe =
 
 const CASES = [
   { url: 'https://feijisha.online/', badge: 'v0.2.10' },
-  { url: 'https://feijisha.online/beta', badge: 'v0.3.15' },
+  { url: 'https://feijisha.online/beta', badge: 'v0.3.17-beta5' },
   { url: 'http://116.62.121.70:8080/', badge: 'v0.2.10' },
-  { url: 'http://116.62.121.70:8080/beta/', badge: 'v0.3.15' },
+  { url: 'http://116.62.121.70:8080/beta/', badge: 'v0.3.17-beta5' },
 ]
 const ICP = '浙ICP备2026073891号'
 
