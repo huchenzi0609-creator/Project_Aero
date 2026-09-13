@@ -32,6 +32,8 @@
 
 **beta 整树更新流程（服务端代码有变时用，2026-09-14 v0.3.17-beta5 验证）**：`cd apps/web && pnpm exec vite build --base=/beta/`（**勿用 `pnpm --filter @aero/web build`**：其 script 不含 base，会产出 `/assets/` 根前缀，beta 会白屏）→ tar（排除 node_modules/.git/data/test-results，保留 dist）→ beta DB 备份 + 记 md5 → `sudo mv /opt/aero-beta /opt/aero-beta.bak.v<旧版>` + `cp -a` 克隆回（复用 node_modules，**前提：package.json 依赖零变化**）→ `/tmp` 以 admin 解压 → `sudo cp -a /tmp/<dir>/. /opt/aero-beta/` → `chown -R admin:admin` → 完整性检查（rooms.ts 关键符号 / dist 前缀 `/beta/` / package.json 版本）→ `pm2 restart aero-server-beta`（勿 --update-env）→ 验证 `/beta/health`、角标、ICP（spot-icp.mjs）、pub-smoke、e2e-beta-room、DB md5、根通道 pub-smoke-v0210 回归。**nginx 与根通道一律不动。**
 
+> **版本号 ↔ 线上产物的偏差（2026-09-14 起）**：仓库（release/v0.3.8 与 main）版本号已归一为 **0.3.17**、角标 `v0.3.17`（main 打标 `v0.3.17-alpha`），而 `/beta` 线上 dist 仍是提升前的 **v0.3.17-beta5** 构建（源==标签 207de20，仅版本字符串不同）。因此：`scripts/pub-smoke.mjs` 与 `scripts/spot-icp.mjs` 里 beta 的期望角标仍为 **`v0.3.17-beta5`**（断言线上实况，勿跟着仓库版本号改）；下一次部署 beta 时构建出的角标将是 `v0.3.17`+，届时同步这两个脚本的期望值与本节记录。
+
 ## 3. 域名 / ICP / HTTPS（2026-09-08 已完成）
 
 - 域名 `feijisha.online` 与 `www.feijisha.online`，A 记录 → 116.62.121.70（www 与主域均有记录）。
