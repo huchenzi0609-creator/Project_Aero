@@ -29,28 +29,6 @@ const DARK = 'rgba(58, 46, 28, 0.52)'
 const FADE_IN_MS = 160
 const FADE_OUT_MS = 170
 
-/** 批量求目标矩形（渲染期即时测量用：目标切换的同一帧即可拿到新几何） */
-function measureRects(list: string[]): TargetRect[] {
-  const out: TargetRect[] = []
-  for (const sel of list) {
-    const r = targetRectOf(sel)
-    if (r) out.push(r)
-  }
-  return out
-}
-
-/** 豁免元素（.tutorial-escape）矩形：永远不参与阻断 */
-function measureEscapeRects(): TargetRect[] {
-  const out: TargetRect[] = []
-  for (const el of Array.from(document.querySelectorAll('.tutorial-escape'))) {
-    const b = el.getBoundingClientRect()
-    if (b.width > 0 && b.height > 0) {
-      out.push({ left: b.left, top: b.top, width: b.width, height: b.height })
-    }
-  }
-  return out
-}
-
 /** 求目标矩形；隐藏目标返回 null */
 function targetRectOf(selector: string): TargetRect | null {
   const el = document.querySelector(selector)
@@ -113,26 +91,26 @@ export function TutorialSpotlight({
   const effTargetsRef = useRef(effTargets)
   effTargetsRef.current = effTargets
 
-  /**
-   * 渲染期即时测量（v0.3.17 修闪烁）：目标切换发生在同一次状态更新内，若只依赖 effect 里的异步测量，
-   * 切换后的首帧会拿到“上一次的 rects”（dim 节点为空）→ 出现一帧“取消所有突显”的空白/géométrie 清空。
-   * 这里在渲染期直接测量当前目标；测不到（元素尚未渲染）则沿用上一次几何，保证任何一帧都不会
-   * 比前后帧更弱（不清空洞、不整屏压暗）。
-   */
-  const liveRects = active ? measureRects(targets) : []
-  const mergedRects = liveRects.length > 0 ? liveRects : rects
-  const liveEscapes = active ? measureEscapeRects() : escapeRects
-  const mergedEscapes = liveEscapes.length > 0 ? liveEscapes : escapeRects
-
-
   /* ---------- 目标测量（含豁免元素） ---------- */
   useEffect(() => {
     if (!show) return
     const measure = () => {
-      setRects(measureRects(effTargetsRef.current))
+      const out: TargetRect[] = []
+      for (const sel of effTargetsRef.current) {
+        const r = targetRectOf(sel)
+        if (r) out.push(r)
+      }
+      setRects(out)
       // 豁免元素（左上角退出按钮等，标识 .tutorial-escape）永远不参与阻断：
       // 其矩形作为“交互洞”并入阻断补集（v0.3.14 item 3：dim / 混合 / 挖洞三种模式一律放行）
-      setEscapeRects(measureEscapeRects())
+      const es: TargetRect[] = []
+      for (const el of Array.from(document.querySelectorAll('.tutorial-escape'))) {
+        const b = el.getBoundingClientRect()
+        if (b.width > 0 && b.height > 0) {
+          es.push({ left: b.left, top: b.top, width: b.width, height: b.height })
+        }
+      }
+      setEscapeRects(es)
     }
 
     // 直接测量 + 延迟再测（目标可能晚一帧就位）+ 目标尺寸/位置变化即时跟随
@@ -157,7 +135,7 @@ export function TutorialSpotlight({
 
   /* ---------- 淡入：首次 / 换模式 / 换洞时播一次 ease-out（不重挂载） ---------- */
   const rootRef = useRef<HTMLElement | null>(null)
-  const fadeKey = `${effDim ? 'dim' : 'holes'}|${mergedRects
+  const fadeKey = `${effDim ? 'dim' : 'holes'}|${rects
     .map((r) => `${Math.round(r.left)},${Math.round(r.top)},${Math.round(r.width)},${Math.round(r.height)}`)
     .join(';')}`
   useEffect(() => {
@@ -187,9 +165,9 @@ export function TutorialSpotlight({
       .map((r) => ({ left: r.left, top: r.top, width: r.right - r.left, height: r.bottom - r.top }))
     return mergeHoleRects(outer)
   }
-  const visualHoles = mergedRects.length > 0 ? padMerge(mergedRects) : []
+  const visualHoles = rects.length > 0 ? padMerge(rects) : []
   /** 交互洞 = 突显目标 + 豁免元素（豁免元素永不被阻断） */
-  const interactiveHoles = padMerge([...mergedRects, ...mergedEscapes])
+  const interactiveHoles = padMerge([...rects, ...escapeRects])
   // 淡出期间目标已消失（旧选择器不再命中）→ 直接隐藏，避免整屏压暗闪一下
   if (leaving && visualHoles.length === 0 && !effDim) return null
 

@@ -19,8 +19,8 @@ test.describe('主页', () => {
     await expect(page.getByRole('button', { name: '对战模式' })).toBeVisible()
     await expect(page.getByRole('button', { name: '设置' })).toBeVisible()
     await expect(page.getByRole('button', { name: '规则说明' })).toBeVisible()
-    // 版本角标 v0.3.17
-    await expect(page.locator('.home__version')).toHaveText('v0.3.17')
+    // 版本角标 v0.3.16
+    await expect(page.locator('.home__version')).toHaveText('v0.3.16')
     // 备案合规：工信部备案号链接（横版默认视口）
     const icp = page.locator('a.home__icp', { hasText: '浙ICP备2026073891号' })
     await expect(icp).toBeVisible()
@@ -59,22 +59,12 @@ test.describe('主页', () => {
     await page.getByRole('button', { name: '← 返回主页' }).click()
     await expect(page.getByRole('heading', { name: '飞机杀' })).toBeVisible()
 
-    // 练习模式面板：四子模式入口可见、卡片仅「图标 + 标题」（v0.3.17 删除全部小字说明）→ 返回主页
+    // 练习模式面板：四子模式入口可见 → 返回主页
     await page.getByRole('button', { name: '练习模式' }).click()
     await expect(page.getByRole('heading', { name: '练习模式' })).toBeVisible()
     for (const m of ['经典模式', '超快棋模式', '盲棋模式', '自定义模式']) {
       await expect(page.getByRole('button', { name: m })).toBeVisible()
     }
-    const modeCards = page.locator('.practice__mode-card')
-    await expect(modeCards).toHaveCount(4)
-    await expect(page.locator('.practice__mode-sub')).toHaveCount(0) // 小字说明已移除
-    // 每张卡片文本块恰为标题（无描述文案）
-    expect((await modeCards.locator('.practice__mode-text').allInnerTexts()).map((t) => t.trim())).toEqual([
-      '经典模式',
-      '超快棋模式',
-      '盲棋模式',
-      '自定义模式',
-    ])
     await page.getByRole('button', { name: '← 返回主页' }).click()
     await expect(page.getByRole('heading', { name: '飞机杀' })).toBeVisible()
 
