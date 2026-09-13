@@ -11,9 +11,11 @@
  *   · 击毁支线 k1..k6：首杀 → 成功提示 → 幽灵标记教学（拖动中持续判定）→ 着色按钮 → 着色点幽灵 → 收尾文案；
  *   · 预报点支线 p1：玩家触发预报点 → 5 段教学。
  *   两条件各自自第一帧起被监听；先到者先播，另一条排队（不丢失）。
- * - 幽灵标记判定（v0.3.14 item 10/11）：读取空网格上幽灵/拖拽预览 DOM（包围盒左上角 + 朝向），
- *   · 拖动/移动过程中每 120ms 持续判定，机头格与朝向【完全一致】即刻成功（无需松手）；
- *   · 松手（ghostCreated）时：机头格一致但 rotation 不一致 → 失败提示；位置不符 → 不提示、继续尝试。
+ * - 幽灵标记判定（v0.3.17-beta5）：读取空网格上幽灵 DOM（包围盒左上角 + 朝向）做【每步重复检测】——
+ *   · 只要幽灵发生位置/朝向变化（拖动落定、点击旋转、移出再放回）就重新评估三态；
+ *   · 仍保留 beta3「必须松手才算」语义：pointerdown 期间（拖动中）一律不判定，松手落定后才评估；
+ *   · 同一架飞机同一判定结果只提示一次，结果变化后才允许再次提示（不刷屏）；
+ *   · 失败【不自动回收】幽灵：玩家可直接拖动/旋转同一架幽灵重试（引擎对已放置副本走 move/rotate，同 id 不会被重叠拒绝）。
  * - 完成：教程不再提供“提前完成/继续对局”弹窗；对局自然结束（胜负判定）后展示完成提示 → 返回主页。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -99,9 +101,12 @@ const KILL: FlowNode[] = [
   {
     id: 'k2',
     kind: 'wait',
-    // 判定不通过（机头一致/朝向不一致）时追加失败文案；正常展示教学两段
-    text: (e) => (k2FailedFlag && e?.type === 'ghostCreated' ? T.k2fail : T.k2),
-    wait: (e) => e.type === 'ghostCreated',
+    // 判定不通过（机头一致/朝向不一致）时显示失败文案；否则展示教学两段
+    // （v0.3.17-beta5：文案只由“最近一次判定结果”决定，移动/旋转同样能触发失败文案）
+    text: () => (k2FailedFlag ? T.k2fail : T.k2),
+    // v0.3.17-beta5：判定改由「每步重复检测」watcher 驱动（松手落定后反复评估三态），
+    // 本节点不再靠事件推进；恒不匹配，避免 ghostCreated 直接把节点推到 k3。
+    wait: () => false,
     next: 'k3',
     highlight: GHOST_DRAG_HL,
   },
@@ -132,8 +137,11 @@ const PREFIRE: FlowNode[] = [
   { id: 'p1', kind: 'click', text: T.p1, after: null, highlight: ['bubble', '.game__opp'] },
 ]
 
-/** k2 失败文案开关（模块级：避免每次重建节点表） */
+/** k2 失败文案开关（模块级：避免每次重建节点表）；由每步重复检测 watcher 维护 */
 let k2FailedFlag = false
+
+/** k2 幽灵三态判定结果 */
+type K2Verdict = 'exact' | 'headOnly' | 'none'
 
 /** 旋转后包围盒信息（默认形状 4 朝向的 (minR,minC,w,h) 互不相同） */
 function bboxOf(rotation: number): { minR: number; minC: number; w: number; h: number } {
@@ -304,52 +312,6 @@ export function TutorialBattle({ fleet, onExitHome }: TutorialBattleProps) {
     [judgeElement],
   )
 
-  /**
-   * 回收一个放错的幽灵（v0.3.17-beta3 item 7 配套）：
-   * 判定改为“必须松手后才算”后，放错朝向的幽灵会占住目标足迹，导致下一次正确落点被空网格的
-   * 「不能重叠」规则拒绝 —— 玩家按提示“换个朝向”却永远落不下去。
-   * 这里在失败分支后把该幽灵用合成指针事件拖回样式参考区（GameScreen 既有回收路径），
-   * 使重试可以真正落下；不改 GameScreen，也不改文案。
-   */
-  const recycleGhost = useCallback((id: string) => {
-    const el = document.querySelector(
-      `.game__opp .paper-grid__plane[data-plane-id="${id}"]`,
-    ) as HTMLElement | null
-    const hit = el?.querySelector('.paper-grid__plane-hit') as HTMLElement | null
-    const ref = document.querySelector('.game__ref') as HTMLElement | null
-    if (!hit || !ref) return
-    const hr = hit.getBoundingClientRect()
-    const rr = ref.getBoundingClientRect()
-    const base = {
-      bubbles: true,
-      cancelable: true,
-      composed: true,
-      pointerId: 1,
-      pointerType: 'mouse',
-      isPrimary: true,
-    } as const
-    const at = (x: number, y: number, buttons: number) =>
-      new PointerEvent('pointermove', { ...base, clientX: x, clientY: y, buttons })
-    const sx = hr.left + hr.width / 2
-    const sy = hr.top + hr.height / 2
-    const tx = rr.left + rr.width / 2
-    const ty = rr.top + rr.height / 2
-    hit.dispatchEvent(
-      new PointerEvent('pointerdown', { ...base, clientX: sx, clientY: sy, button: 0, buttons: 1 }),
-    )
-    window.dispatchEvent(at(sx + 20, sy - 20, 1))
-    window.dispatchEvent(at(tx, ty, 1))
-    window.dispatchEvent(
-      new PointerEvent('pointerup', {
-        ...base,
-        clientX: tx,
-        clientY: ty,
-        button: 0,
-        buttons: 0,
-      }),
-    )
-  }, [])
-
   /** 事件分发：开场链按节点推进；两条教学支线条件【并行监听】 */
   const dispatchEvent = useCallback(
     (e: TutorialGameEvent) => {
@@ -372,36 +334,10 @@ export function TutorialBattle({ fleet, onExitHome }: TutorialBattleProps) {
       const node = currentNode()
       if (!node || node.kind !== 'wait' || !node.wait || !node.wait(e)) return
 
-      // k2：幽灵落点判定（机头一致/朝向不一致 → 失败提示并留在本节点）
-      if (node.id === 'k2' && e.type === 'ghostCreated') {
-        const ghostId = e.id
-        // ghostCreated 由引擎在状态更新时同步抛出，此刻 React 尚未把新幽灵渲染进 DOM；
-        // 因此判定需等到元素出现（最多重试 6×60ms），否则会误判为“位置不符”而不给提示。
-        const attempt = (n: number) => {
-          if (ptrRef.current?.nodeId !== 'k2') return
-          const verdict = judgeGhostById(ghostId)
-          if (verdict === 'exact') {
-            k2FailedFlag = false
-            flash('success')
-            goNode('k3')
-            return
-          }
-          if (verdict === 'headOnly') {
-            k2FailedFlag = true
-            flash('failure')
-            // 回收放错的幽灵，保证玩家换朝向后能真正落下（drop-only 判定配套）
-            recycleGhost(ghostId)
-            goNode('k2')
-            return
-          }
-          if (n < 6) window.setTimeout(() => attempt(n + 1), 60)
-        }
-        attempt(0)
-        return
-      }
+      // k2 不在这里推进（wait 恒 false）：幽灵落点判定由「每步重复检测」watcher 负责
       goNode(node.next ?? null)
     },
-    [anyModalOpen, currentNode, flash, goNode, judgeGhostById, recycleGhost, rerender, startTask],
+    [anyModalOpen, currentNode, goNode, rerender, startTask],
   )
 
   /** 气泡点击：翻段；click 节点读毕 → after（null = 本链结束） */
@@ -511,6 +447,107 @@ export function TutorialBattle({ fleet, onExitHome }: TutorialBattleProps) {
   const showBubble = !!node && segsNow.length > 0
   pauseAiRef.current = showBubble && !anyModalOpen
   const segText = showBubble ? (segsNow[Math.min(seg, segsNow.length - 1)] ?? '') : ''
+
+  /* ---------- k2 幽灵判定：每步重复检测（v0.3.17-beta5） ----------
+   * 只要幽灵的位置或朝向发生变化（拖动落定 / 点击旋转 / 移出再放回），就重新评估三态：
+   *   ① 机头格一致且朝向一致 → 成功（k3）；
+   *   ② 机头格一致但朝向不同 → 失败提示（留在 k2，不回收幽灵）；
+   *   ③ 其他位置 → 不提示，继续等待。
+   * 判定时机：pointerdown 期间（拖动中）一律不评估，松手落定后评估（保留 beta3「必须松手才算」语义）；
+   * 幂等：同一架飞机同一结果只提示一次，结果变化后才再次提示。 */
+  const judgeGhostRef = useRef(judgeGhostById)
+  judgeGhostRef.current = judgeGhostById
+  const goNodeRef = useRef(goNode)
+  goNodeRef.current = goNode
+  const flashRef = useRef(flash)
+  flashRef.current = flash
+  const modalOpenRef = useRef(anyModalOpen)
+  modalOpenRef.current = anyModalOpen
+  /** 每架幽灵最近一次判定结果（“同一架 + 同一结果”只提示一次） */
+  const k2VerdictsRef = useRef<Map<string, K2Verdict>>(new Map())
+  /** 成功分支是否已处理（幂等：轮询/松手多次评估不得重复播成功反馈或重复推进节点） */
+  const k2DoneRef = useRef(false)
+  const k2Active = !!node && node.id === 'k2'
+
+  useEffect(() => {
+    if (!k2Active) return
+    k2VerdictsRef.current = new Map()
+    k2DoneRef.current = false
+    k2FailedFlag = false
+    let pointerDown = false
+    const timers: number[] = []
+
+    const evaluate = () => {
+      const p = ptrRef.current
+      if (!p || p.nodeId !== 'k2') return
+      if (modalOpenRef.current) return
+      // 空网格上的全部幽灵（排除参考体拖拽预览 id=-1；隐藏/拖离棋盘的实例跳过）
+      const ghosts = Array.from(
+        document.querySelectorAll<HTMLElement>('.game__opp .paper-grid__plane[data-plane-id]'),
+      ).filter((el) => el.getAttribute('data-plane-id') !== '-1' && el.offsetWidth > 0)
+      if (ghosts.length === 0) return
+      const verdicts = k2VerdictsRef.current
+      const seen = new Set<string>()
+      let exact = false
+      let headOnly = false
+      let changedToHeadOnly = false
+      for (const el of ghosts) {
+        const id = el.getAttribute('data-plane-id')!
+        seen.add(id)
+        const v = judgeGhostRef.current(id)
+        if (v === 'exact') exact = true
+        else if (v === 'headOnly') {
+          headOnly = true
+          if (verdicts.get(id) !== 'headOnly') changedToHeadOnly = true
+        }
+        verdicts.set(id, v)
+      }
+      for (const id of Array.from(verdicts.keys())) if (!seen.has(id)) verdicts.delete(id)
+
+      if (exact) {
+        if (k2DoneRef.current) return
+        k2DoneRef.current = true
+        k2FailedFlag = false
+        flashRef.current('success')
+        goNodeRef.current('k3')
+        return
+      }
+      if (changedToHeadOnly) {
+        k2FailedFlag = true
+        flashRef.current('failure')
+        goNodeRef.current('k2')
+        return
+      }
+      // 已不再是「机头对/朝向错」→ 收回失败文案，回到常规两段引导（状态变化才允许再提示）
+      if (!headOnly && k2FailedFlag) {
+        k2FailedFlag = false
+        goNodeRef.current('k2')
+      }
+    }
+
+    const onDown = () => {
+      pointerDown = true
+    }
+    const onUp = () => {
+      pointerDown = false
+      // 落定需等 React 提交 + DOM 更新：稍后评估，并留一次兜底重试
+      timers.push(window.setTimeout(evaluate, 80), window.setTimeout(evaluate, 260))
+    }
+    window.addEventListener('pointerdown', onDown, true)
+    window.addEventListener('pointerup', onUp, true)
+    window.addEventListener('pointercancel', onUp, true)
+    // 静默兜底轮询（仅在没有按下指针时评估 → 拖动中不会误判）
+    const poll = window.setInterval(() => {
+      if (!pointerDown) evaluate()
+    }, 150)
+    return () => {
+      window.clearInterval(poll)
+      for (const t of timers) window.clearTimeout(t)
+      window.removeEventListener('pointerdown', onDown, true)
+      window.removeEventListener('pointerup', onUp, true)
+      window.removeEventListener('pointercancel', onUp, true)
+    }
+  }, [k2Active])
 
   const resolveTarget = (t: string): string => {
     if (t.includes('.coloring-btn')) {

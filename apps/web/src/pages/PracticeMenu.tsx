@@ -49,7 +49,7 @@ const MODE_CARDS: ReadonlyArray<{
     key: 'custom',
     label: '自定义模式',
     badgeClass: 'practice__badge--custom',
-    sub: '自定棋盘尺寸与飞机形状，全部校验通过才可开战。',
+    sub: '自定义棋盘尺寸，飞机形状、数量，限时与特殊规则。',
   },
 ]
 

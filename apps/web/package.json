@@ -1,6 +1,6 @@
 {
   "name": "@aero/web",
-  "version": "0.3.17-beta4",
+  "version": "0.3.17-beta5",
   "private": true,
   "type": "module",
   "scripts": {

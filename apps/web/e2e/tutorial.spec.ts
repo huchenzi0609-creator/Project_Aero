@@ -8,7 +8,12 @@
  *   4) 空洞融合去重叠分解：k2→k3 融合逐帧并集面积连续（无融合瞬间向上跳变，单帧 ≤ 最大洞 12%）；
  *   5) 单元2 跳过文本两条路径（已有飞机 → 跳过拖拽引导；一把摆完 → 跳过续拖引导）；
  *   6) 阵型合法时 thanks 阶段即突显「确认布阵」；
- *   7) 放错位置的幽灵被自动回收 → 换朝向重试可真正落下。
+ *   7) 放错位置的幽灵【不被回收】→ 复用同一架（旋转/拖动）即可换朝向重试成功。
+ *
+ * v0.3.17-beta5 增补：
+ *   1) k2 幽灵判定改为「每步重复检测」：松手才判定（按住 ≥0.9s 既不成也不败）、失败不回收
+ *      （data-plane-id 不变）、复用同一架旋转/拖动到完全正确即成功（不新建副本）；
+ *   2) 幂等：静置 ≥1.4s 不重复提示；k2 段内成功提示恰好 1 次。
  *
  * v0.3.17-beta4 增补：
  *   1) 聚焦静止期：整页洞 → 目标前先静止 380–900ms 再收缩（判「仍整页」用洞并集面积 ≥0.98·W·H）；
@@ -36,7 +41,9 @@
  * 3) 单元3：
  *    - 开场 i1 为纯整屏压暗（无挖洞、覆盖全屏、气泡与 `.tutorial-escape` 可点）；i4 不可点击推进；
  *    - 混合模式 k1/k3/p1（整屏压暗 + 空网格开洞 + 气泡豁免）几何/命中断言；
- *    - 幽灵标记三态：位置不符=无提示、机头对朝向错=失败提示、完全正确=成功（拖动中持续检测）；
+ *    - 幽灵标记三态【每步重复检测】：位置不符=无提示、机头对朝向错=失败提示、完全正确=成功；
+ *      按住指针期间一律不判定（必须松手落定）；失败不回收幽灵，复用同一架（旋转/拖动）即可成功；
+ *      同一架同一结果只提示一次（静置不重复提示，k2 段成功/失败反馈各 1 次）；
  *    - k4 进入着色教学时空网格已取消突显（该处点击命中阻断带）；
  *    - 首杀支线与预报点支线【并行且顺序无关】：kill-first（用例2）与 prefire-first（用例3）；
  *    - 对局自然结束 → **常规结算画面**（.result，无「再来一局」hideRematch）→「返回主页」→ 主页；
@@ -641,6 +648,138 @@ async function placeGhostAt(
   }
 }
 
+/* ---------- v0.3.17-beta5：k2 复用同一架幽灵（不新建副本）工具 ---------- */
+
+/** 已放置幽灵元素（排除参考拖拽预览 id=-1） */
+function ghostPlanes(page: Page) {
+  return page.locator('.game__opp .paper-grid__plane[data-plane-id]:not([data-plane-id="-1"])')
+}
+/** 幽灵包围盒长宽类别（90° 旋转必然互换） */
+async function ghostAspect(page: Page): Promise<'wide' | 'tall' | null> {
+  const b = await ghostPlanes(page).first().boundingBox()
+  if (!b) return null
+  return b.width >= b.height ? 'wide' : 'tall'
+}
+/** 旋转后各本体格相对「可视左上角」的偏移（点击本体格用） */
+function visBodyOffsets(rot: number) {
+  const b = shapeBBox(rot)
+  return rotCells(rot).map((c) => ({ r: c.r - b.minR, c: c.c - b.minC }))
+}
+/**
+ * 点击【已放置的同一架幽灵】本体格 → 原地旋转 90°（同一 data-plane-id，不新建副本）。
+ * 先用真实点击（挑未被气泡/阻断带覆盖的本体格）；若长宽类别未互换则退回合成指针事件。
+ * 返回是否确实发生旋转。
+ */
+async function clickGhostRotate(page: Page, rotNow: number): Promise<boolean> {
+  const before = await ghostAspect(page)
+  if (!before) return false
+  const b = shapeBBox(rotNow)
+  for (const mode of ['real', 'synth'] as const) {
+    for (const off of visBodyOffsets(rotNow)) {
+      const gb = await ghostPlanes(page).first().boundingBox()
+      if (!gb) return false
+      const x = gb.x + (off.c + 0.5) * (gb.width / b.w)
+      const y = gb.y + (off.r + 0.5) * (gb.height / b.h)
+      if (mode === 'real') {
+        const hittable = await page.evaluate(
+          ([px, py]) => {
+            const t = document.elementFromPoint(px as number, py as number)
+            return !!(t && t.closest('.game__opp .paper-grid__plane-hit'))
+          },
+          [x, y] as [number, number],
+        )
+        if (!hittable) continue
+        await page.mouse.click(x, y)
+      } else {
+        await page.evaluate(
+          ([px, py]) => {
+            const top = document.elementFromPoint(px as number, py as number)
+            const hit = (top?.closest('.game__opp .paper-grid__plane-hit') ??
+              document.querySelector('.game__opp .paper-grid__plane-hit')) as HTMLElement | null
+            if (!hit) return
+            const base = {
+              bubbles: true,
+              cancelable: true,
+              composed: true,
+              pointerId: 7,
+              pointerType: 'mouse',
+              isPrimary: true,
+            }
+            hit.dispatchEvent(
+              new PointerEvent('pointerdown', {
+                ...base,
+                clientX: px as number,
+                clientY: py as number,
+                button: 0,
+                buttons: 1,
+              }),
+            )
+            window.dispatchEvent(
+              new PointerEvent('pointerup', {
+                ...base,
+                clientX: px as number,
+                clientY: py as number,
+                button: 0,
+                buttons: 0,
+              }),
+            )
+          },
+          [x, y] as [number, number],
+        )
+      }
+      await page.waitForTimeout(200)
+      if ((await ghostAspect(page)) !== before) return true
+    }
+  }
+  return false
+}
+/** 拖动【已放置的同一架幽灵】到「可视左上角 = vis」（不新建副本）；读回纠偏 ≤3 次 */
+async function dragGhostTo(page: Page, vis: { r: number; c: number }, rot: number): Promise<void> {
+  const board = page.locator('.game__opp .paper-grid__board')
+  let drop = dropCell(vis, rot)
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const cur = await lastGhostVis(page)
+    if (cur && cur.r === vis.r && cur.c === vis.c) break
+    const bb = await board.boundingBox()
+    const gb = await ghostPlanes(page).first().boundingBox()
+    if (!bb || !gb) throw new Error('幽灵/对手棋盘不可见')
+    const cell = bb.width / 10
+    if (cur) drop = { r: drop.r + (vis.r - cur.r), c: drop.c + (vis.c - cur.c) }
+    await drag(
+      page,
+      { x: gb.x + gb.width / 2, y: gb.y + gb.height / 2 },
+      { x: bb.x + (drop.c + 0.5) * cell, y: bb.y + (drop.r + 0.5) * cell },
+    )
+    await page.waitForTimeout(260)
+  }
+  const act = await lastGhostVis(page)
+  expect(
+    act && act.r === vis.r && act.c === vis.c,
+    `幽灵应被拖到可视左上角 (${vis.r},${vis.c})（实测 ${JSON.stringify(act)}）`,
+  ).toBe(true)
+  await page.waitForTimeout(340) // 等落定后评估（松手后 80/260ms 两次）
+}
+/** rAF 采样某 fx 边带的「点亮」次数（flash 触发 700ms 的 --on），用于幂等判据 */
+async function countFxFlashes(page: Page, kind: 'success' | 'failure', ms: number): Promise<number> {
+  return page.evaluate(
+    async ([k, dur]) => {
+      const sel = `.tutorial-fx--${k}`
+      let wasOn = false
+      let count = 0
+      const t0 = performance.now()
+      while (performance.now() - t0 < (dur as number)) {
+        const el = document.querySelector(sel as string)
+        const on = !!el && (el.getAttribute('class') ?? '').includes('--on')
+        if (on && !wasOn) count += 1
+        wasOn = on
+        await new Promise((r) => requestAnimationFrame(() => r(null)))
+      }
+      return count
+    },
+    [kind, ms] as [string, number],
+  )
+}
+
 /* ================= 单元1 ================= */
 
 /** 练习网格当前所有报点标记：coord → miss(✗) / hit(◯) / kill(★) */
@@ -1124,43 +1263,60 @@ async function runUnit3KillBranch(
   await releaseOverRef(page)
   expect((await bubbleTextSafe(page)).includes('好像不太对'), '松手于参考区不应落子提示').toBe(false)
 
-  // ② 机头正确、朝向错（headOnly）→ 失败提示（按住期间持续检测不通过 → 松手给提示）
+  // ② 机头正确、朝向错（headOnly）→ 松手后失败提示
+  //    v0.3.17-beta5：每步重复检测；失败【不再自动回收】幽灵（同一架留在场、data-plane-id 不变）
   await setRefRotation(page, wrongRot)
   await placeGhostAt(page, headMatchVis(head, wrongRot), wrongRot, { release: false })
-  await page.waitForTimeout(320)
-  const advancedByWrong = (await bubbleTextSafe(page)).includes('飞机就在这里')
-  // 对角扫描保证被毁飞机在机头前有无歧义机身命中；快照已知真朝向时首猜（错朝向）必不通过
-  if (knownRotation != null && wrongRealizable != null) {
-    expect(advancedByWrong, '已知真朝向且错朝向界内可实现时，首猜不应直接成功').toBe(false)
-  } else if (knownRotation == null && candidates.length < 4) {
-    expect(advancedByWrong, '候选集已知时首猜（错朝向）不应直接成功').toBe(false)
-  }
-  if (!advancedByWrong) {
-    await page.mouse.up()
-    await page.waitForTimeout(350)
-    await expect(bubble(page)).toContainText('好像不太对，试试换个朝向吧。', { timeout: 8000 })
-    await expect(page.locator('.tutorial-fx--failure')).toHaveCount(1)
-    // v0.3.17-beta3 item 7 配套：放错位置的幽灵被教程自动回收（拖回参考区）→ 不再占住目标足迹，
-    // 因此「换个朝向」的重试可以真正落下（下方 ③ 完全正确分支必须成功）
-    await expect(
-      page.locator('.game__opp .paper-grid__plane[data-plane-id]'),
-      '放错位置的幽灵应被自动回收',
-    ).toHaveCount(0, { timeout: 5000 })
+  // (a) 按住未松手 ≥0.9s：拖动中一律不判定（既不成功也不失败）
+  await page.waitForTimeout(950)
+  const holding = await bubbleTextSafe(page)
+  expect(holding.includes('飞机就在这里'), '按住未松手不得判定成功').toBe(false)
+  expect(holding.includes('好像不太对'), '按住未松手不得判定失败').toBe(false)
+  await page.mouse.up()
+
+  const ghostLoc = ghostPlanes(page)
+  await expect(ghostLoc, '幽灵应已落定').toHaveCount(1, { timeout: 5000 })
+  const ghostIdBefore = await ghostLoc.first().getAttribute('data-plane-id')
+  await expect(bubble(page)).toContainText('好像不太对，试试换个朝向吧。', { timeout: 8000 })
+  await expect(page.locator('.tutorial-fx--failure')).toHaveCount(1)
+  // beta5：失败不回收 —— 同一架幽灵仍在场且 id 不变（不回收、不新建 id）
+  await expect(ghostLoc, '失败后幽灵应仍在场（不回收）').toHaveCount(1)
+  expect(await ghostLoc.first().getAttribute('data-plane-id'), '幽灵 data-plane-id 不应变化').toBe(
+    ghostIdBefore,
+  )
+  if (knownRotation != null) {
+    expect(wrongRot, '失败分支所用朝向应≠真朝向').not.toBe(knownRotation)
   }
 
-  // ③ 完全正确（exact）：依次尝试候选朝向 → 拖动中持续检测通过 → k3
-  let exact = advancedByWrong
+  // (b) 幂等：静置 ≥1.4s 不重复提示（同一架 + 同一结果只提示一次）
+  await page.waitForTimeout(800) // 等本次失败闪烁的 --on 结束，避免把残留计成新提示
+  const idleText = await bubbleTextSafe(page)
+  const idleFlashes = countFxFlashes(page, 'failure', 1600)
+  await page.waitForTimeout(1400)
+  expect(await idleFlashes, '静置期间不应重复播失败提示').toBe(0)
+  expect(await bubbleTextSafe(page), '静置期间气泡文案不应变化').toBe(idleText)
+  expect(await ghostLoc.first().getAttribute('data-plane-id'), '静置期间幽灵 id 不变').toBe(ghostIdBefore)
+
+  // ③ 完全正确（exact）：**复用同一架幽灵**（点击原地旋转到真朝向 + 拖动该元素到正确位置）→ k3
+  //    beta5 起旧幽灵占位会挡掉参考网格新建副本（overlapAt 拒绝），故不再新建
+  const successFlashes = countFxFlashes(page, 'success', 3200)
+  let exact = false
+  let rotNow = wrongRot // ② 落子时的参考朝向 = 该幽灵朝向
   for (const rot of [...candidates, 0, 1, 2, 3].filter((v, i, a) => a.indexOf(v) === i)) {
     if (exact) break
     if ((await bubbleTextSafe(page)).includes('飞机就在这里')) {
       exact = true
       break
     }
-    await setRefRotation(page, rot)
-    const blurFrames = observeFrames(page, 1300) // 覆盖落子判定（≤6×60ms 重试）到 k3 过渡
+    if (!rotRealizableAtHead(head, rot)) continue
+    for (let i = 0; i < 4 && rotNow !== rot; i++) {
+      expect(await clickGhostRotate(page, rotNow), '点击幽灵本体应原地旋转 90°（同一架）').toBe(true)
+      rotNow = (rotNow + 1) % 4
+    }
+    if (rotNow !== rot) continue
+    const blurFrames = observeFrames(page, 1300) // 覆盖落定判定到 k3 过渡
     const areaFrames = observeHoleAreas(page, 1200) // v0.3.17-beta3 item 4：融合面积连续性
-    await placeGhostAt(page, headMatchVis(head, rot), rot, { release: true })
-    await page.waitForTimeout(320)
+    await dragGhostTo(page, headMatchVis(head, rot), rot)
     const frames = await areaFrames
     const blf = await blurFrames
     if ((await bubbleTextSafe(page)).includes('飞机就在这里')) {
@@ -1171,7 +1327,11 @@ async function runUnit3KillBranch(
       expectHoleAreaContinuity(frames, 'k2→k3 融合')
     }
   }
-  expect(exact, '幽灵应最终判定为完全正确').toBe(true)
+  expect(exact, '复用同一架幽灵应最终判定为完全正确').toBe(true)
+  // (c) k2 段内成功提示恰好 1 次（幂等：不重复播成功反馈）
+  expect(await successFlashes, 'k2 段内成功提示应恰好 1 次').toBe(1)
+  await expect(ghostLoc, '成功复用同一架（幽灵仍在场）').toHaveCount(1)
+  expect(await ghostLoc.first().getAttribute('data-plane-id'), '成功后幽灵 id 仍不变').toBe(ghostIdBefore)
   await expect(bubble(page)).toContainText('飞机就在这里！', { timeout: 8000 })
   await expect(page.locator('.tutorial-fx--success')).toHaveCount(1)
   // v0.3.17-beta2 item 8：k3 = 仅空网格洞（1 洞），参考网格突显无残留
