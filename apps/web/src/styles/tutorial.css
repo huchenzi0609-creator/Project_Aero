@@ -13,13 +13,8 @@
   top: 0;
   z-index: 130;
   pointer-events: none;
-  /* v0.3.16：淡出过渡（淡入由组件侧 WAAPI ease-out 160ms 播放，换目标/取消突显均柔和） */
+  /* v0.3.17-beta1：空洞几何由组件 rAF 动画引擎逐帧插值；此过渡仅用于 dim 层 ↔ SVG 遮罩的整层切换 */
   transition: opacity 160ms ease-out;
-  will-change: opacity;
-}
-/* 淡出滞留：视觉层过渡到透明；滞留期间组件不渲染阻断带，因此已在语义上“取消突显” */
-.tutorial-spotlight--leaving {
-  opacity: 0;
 }
 
 

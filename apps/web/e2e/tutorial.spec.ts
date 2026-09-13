@@ -74,11 +74,40 @@ async function expectPureDim(page: Page): Promise<void> {
     expect(Math.abs(dim.height - vp.height)).toBeLessThanOrEqual(1)
   }
 }
-/** 混合模式（整屏压暗 + 目标开洞） */
+/** 混合模式（整屏压暗 + 目标开洞）；断言引擎属性 data-spotlight-block=1 */
 async function expectHybrid(page: Page): Promise<void> {
   await expect(page.locator('.tutorial-spotlight[data-spotlight-mode="hybrid"]')).toHaveCount(1)
   expect(await spotlightHoles(page)).toBeGreaterThanOrEqual(1)
   await expect(page.locator('.tutorial-block')).not.toHaveCount(0)
+  await expect(page.locator('.tutorial-spotlight[data-spotlight-block="1"]')).toHaveCount(1)
+}
+
+/* ---------- v0.3.17-beta1：空洞动画引擎（遮罩常驻）断言工具 ---------- */
+
+/** 遮罩属性读取（基础态常驻同一 svg） */
+async function spotlightAttr(page: Page, name: string): Promise<string | null> {
+  return page.locator('.tutorial-spotlight').first().getAttribute(name).catch(() => null)
+}
+/** rAF 轮询捕捉 ~300ms 过渡的 data-spotlight-anim 取值集合（dest 变化前开始观测） */
+async function observeAnim(page: Page, ms = 700): Promise<string[]> {
+  return page.evaluate(async (dur: number) => {
+    const seen = new Set<string>()
+    const t0 = performance.now()
+    while (performance.now() - t0 < dur) {
+      const el = document.querySelector('.tutorial-spotlight')
+      const v = el?.getAttribute('data-spotlight-anim')
+      if (v) seen.add(v)
+      await new Promise((r) => requestAnimationFrame(() => r(null)))
+    }
+    return [...seen]
+  }, ms)
+}
+/** 基础态（无突显）：遮罩仍常驻，但洞=整页（视觉无压暗）且阻断带=0 */
+async function expectNoHighlight(page: Page): Promise<void> {
+  await expect(page.locator('.tutorial-spotlight')).toHaveCount(1)
+  await expect(page.locator('.tutorial-block')).toHaveCount(0)
+  await expect.poll(() => spotlightAttr(page, 'data-spotlight-mode'), { timeout: 5000 }).toBe('holes')
+  expect(Number(await spotlightAttr(page, 'data-spotlight-holes'))).toBeGreaterThanOrEqual(1)
 }
 /** 目标中心点“命中信息”：topmost 元素是否落在阻断带 / 气泡 / 退出豁免里 */
 async function hitInfo(page: Page, selector: string) {
@@ -608,8 +637,10 @@ async function runUnit3Intro(
   await clickBubble(page) // → i2（突显我方网格）
   await expect(bubble(page)).toContainText('这是你刚才摆的阵型')
   await expectHit(page, '.game__mine', 'blocked', false)
+  const animTR = observeAnim(page, 800) // 先开始观测，再触发 i2→i3
   await clickBubble(page) // → i3（突显参考网格）
   await expect(bubble(page)).toContainText('这是参考网格')
+  expect(await animTR, 'i2→i3 过渡应为 transfer（洞连续转移）').toContain('transfer')
   await expectHit(page, '.game__ref', 'blocked', false)
   await clickBubble(page) // → i4（等真实报点，不可点击推进）
   await expect(bubble(page)).toContainText('这是空网格，你需要通过双击报点来获得对方飞机的信息。试试看！')
@@ -646,7 +677,9 @@ async function runUnit3KillBranch(
   // k1（混合模式）
   await expect(bubble(page)).toContainText('你成功摧毁了对方的飞机！', { timeout: 20_000 })
   await expectMixedModeInteractive(page)
+  const animAdd = observeAnim(page, 800) // 先开始观测，再触发 k1→k2
   await clickBubble(page)
+  expect(await animAdd, 'k1→k2 新增参考网格洞应为 add（自中心生长）').toContain('add')
   // k2（等在空网格拖入幽灵；两段教学、不可点击推进）
   await expect(bubble(page)).toContainText('被击毁的飞机')
   await expect(page.locator('.tutorial-bubble__hint')).toHaveCount(0)
@@ -729,9 +762,13 @@ async function runUnit3KillBranch(
       break
     }
     await setRefRotation(page, rot)
+    const animBlur = observeAnim(page, 1200) // 覆盖落子判定（≤6×60ms 重试）到 k3 过渡
     await placeGhostAt(page, headMatchVis(head, rot), rot, { release: true })
     await page.waitForTimeout(320)
-    if ((await bubbleTextSafe(page)).includes('飞机就在这里')) exact = true
+    if ((await bubbleTextSafe(page)).includes('飞机就在这里')) {
+      exact = true
+      expect(await animBlur, 'k2→k3 部分移除应为 blur（被移除洞收拢消失）').toContain('blur')
+    }
   }
   expect(exact, '幽灵应最终判定为完全正确').toBe(true)
   await expect(bubble(page)).toContainText('飞机就在这里！', { timeout: 8000 })
@@ -758,6 +795,7 @@ async function runUnit3KillBranch(
   })
   await expect(colorBtn).toHaveAttribute('aria-pressed', 'false')
   await clickBubble(page) // k6 读毕 → 本支线结束
+  await expectNoHighlight(page) // v0.3.17-beta1：基础态遮罩常驻但洞=整页
 }
 
 /* ================= 用例 ================= */
@@ -858,7 +896,12 @@ test.describe('新手教程', () => {
     await runUnit3Intro(page, { log })
     await clickBubble(page) // i6 → 自由对局
 
+    // v0.3.17-beta1：开场链结束 → 基础态（遮罩常驻、洞=整页、无阻断带）；首杀未发生时可观测 rest→focus
+    const preKill = (await readBattleSnapshot(page))?.destroyedPlaneIds.length ?? 0
+    if (preKill === 0) await expectNoHighlight(page)
+
     // 对手回合内创建预报点（`--theirs` 回合色边框为回合信号）→ p1 先播
+    const animFocus = observeAnim(page, 3000) // 覆盖创建重试窗口，捕捉 rest→focus
     const input = page.getByLabel('报点坐标，如 A5')
     const prefire = page.locator('.game__opp .paper-grid__stamp .prefire-mark')
     const n16Text = '你刚才看见的红色'
@@ -880,6 +923,9 @@ test.describe('新手教程', () => {
     // p1：混合模式（整屏压暗 + 空网格开洞 + 气泡豁免）+ 5 段
     await expect(bubble(page)).toContainText('你刚才看见的红色“？”是预报点标记。', { timeout: 10_000 })
     await expectMixedModeInteractive(page)
+    if (preKill === 0) {
+      expect(await animFocus, '基础态→p1 应为 focus（洞由整页收缩到目标）').toContain('focus')
+    }
     for (let k = 0; k < 6; k++) {
       if ((await bubbleTextSafe(page)).includes('预报点标记最多可以同时存在10个。')) break
       await clickBubble(page)
