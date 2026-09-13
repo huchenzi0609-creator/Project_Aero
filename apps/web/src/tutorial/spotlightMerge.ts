@@ -56,3 +56,39 @@ export function mergeHoleRects(rects: BoxRect[]): BoxRect[] {
   }
   return out
 }
+
+/**
+ * 洞矩形去重叠分解（v0.3.17-beta3）：返回**互不重叠**且并集与原矩形集合完全一致的矩形列表。
+ *
+ * 与 mergeHoleRects 的区别：合并会把两矩形"一步吞掉"成包围盒（边界突变、且中间空隙被点亮），
+ * 本函数按 x 边界切片、逐片合并 y 区间，得到无重叠、无缝隙膨胀的等价并集——
+ * 洞的可见边界 = 原始矩形的并集边界，随动画连续变化（不会出现融合瞬间的跳变）。
+ * 数量少（≤4 目标）时 O(n²) 足够，输出矩形数 ≤ 约 (2n-1)·n。
+ */
+export function disjointHoleRects(rects: BoxRect[]): BoxRect[] {
+  const rs = rects.filter((r) => r.width > 0.01 && r.height > 0.01)
+  if (rs.length <= 1) return rs.map((r) => ({ ...r }))
+  const xs = Array.from(new Set(rs.flatMap((r) => [r.left, r.left + r.width]))).sort((a, b) => a - b)
+  const out: BoxRect[] = []
+  for (let i = 0; i < xs.length - 1; i++) {
+    const x0 = xs[i]!
+    const x1 = xs[i + 1]!
+    const w = x1 - x0
+    if (w <= 0.01) continue
+    const spans = rs
+      .filter((r) => r.left < x1 && r.left + r.width > x0)
+      .map((r) => [r.top, r.top + r.height] as [number, number])
+      .sort((a, b) => a[0] - b[0])
+    let cur: [number, number] | null = null
+    for (const s of spans) {
+      if (!cur) cur = [s[0], s[1]]
+      else if (s[0] <= cur[1] + 0.01) cur = [cur[0], Math.max(cur[1], s[1])]
+      else {
+        out.push({ left: x0, top: cur[0], width: w, height: cur[1] - cur[0] })
+        cur = [s[0], s[1]]
+      }
+    }
+    if (cur) out.push({ left: x0, top: cur[0], width: w, height: cur[1] - cur[0] })
+  }
+  return out
+}

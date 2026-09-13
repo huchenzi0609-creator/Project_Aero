@@ -1,6 +1,15 @@
 /**
  * tutorial.spec —— 新手教程 e2e（v0.3.14 十四项修复验收；v0.3.17-beta2 遮罩常驻/缓动引擎增补）。
  *
+ * v0.3.17-beta3 增补（单层遮罩 / 首帧豁免 / 融合平滑 / 跳过文本）：
+ *   1) 遮罩恒为单层：元素数与 mode 数 =1，总暗度 ≤0.52（暗底 `--sheet` 与 path 填充不再叠加）；
+ *   2) thanks/detect（重叠/非法）与 p1（预报点）等混合模式同为单层、暗度不超基础值；
+ *   3) 「← 退出教程」首帧即真实可点（纯 dim 阻断带 =「气泡+豁免」补集；整屏容器型 escape 被过滤）；
+ *   4) 空洞融合去重叠分解：k2→k3 融合逐帧并集面积连续（无融合瞬间向上跳变，单帧 ≤ 最大洞 12%）；
+ *   5) 单元2 跳过文本两条路径（已有飞机 → 跳过拖拽引导；一把摆完 → 跳过续拖引导）；
+ *   6) 阵型合法时 thanks 阶段即突显「确认布阵」；
+ *   7) 放错位置的幽灵被自动回收 → 换朝向重试可真正落下。
+ *
  * v0.3.17-beta2 增补（洞动画引擎 + 跨阶段续接）：
  *   1) 教程页首帧即渲染遮罩（恒渲染）；弹窗期同样渲染基础态且阻断带为 0；
  *   3) 压暗→目标切换期间无零洞帧（不闪整页洞）；
@@ -69,11 +78,47 @@ async function spotlightHoles(page: Page): Promise<number> {
 function blockCount(page: Page) {
   return page.locator('.tutorial-block').count()
 }
-/** 纯气泡突显（pure dim）：mode=dim、无 svg/path、阻断带存在、暗层覆盖全屏 */
+/** v0.3.17-beta3 item 1/2：遮罩层度量（元素数 / mode 数 / 总暗度 / 暗底层与 path 层数） */
+async function maskLayers(page: Page) {
+  return page.evaluate(() => {
+    const alpha = (c: string): number => {
+      const m = /rgba?\(([^)]+)\)/.exec(c)
+      if (!m) return 0
+      const parts = m[1]!.split(',').map((x) => parseFloat(x.trim()))
+      return parts.length >= 4 ? parts[3]! : 1
+    }
+    const spots = Array.from(document.querySelectorAll('.tutorial-spotlight'))
+    let combined = 1
+    for (const el of spots) {
+      const bg = alpha(getComputedStyle(el).backgroundColor)
+      const path = el.querySelector('path')
+      const pf = path ? alpha(getComputedStyle(path).fill) : 0
+      // 同一元素内「暗底 + path 填充」会叠加（v0.3.17-beta3 修复点）→ 逐元素先合再全局合
+      combined *= 1 - (1 - (1 - bg) * (1 - pf))
+    }
+    return {
+      count: spots.length,
+      modeCount: document.querySelectorAll('[data-spotlight-mode]').length,
+      sheet: document.querySelectorAll('.tutorial-spotlight--sheet').length,
+      paths: document.querySelectorAll('.tutorial-spotlight path').length,
+      darkness: 1 - combined,
+    }
+  })
+}
+/** v0.3.17-beta3 item 1/2：任何时刻遮罩恒为单层（元素数/mode 数 =1）且总暗度 ≤ 基础值 0.52 */
+async function expectSingleLayer(page: Page): Promise<void> {
+  const m = await maskLayers(page)
+  expect(m.count, '遮罩元素数应为 1（不再叠加）').toBe(1)
+  expect(m.modeCount, 'mode 元素数应为 1').toBe(1)
+  expect(m.sheet + m.paths, '暗底层与 path 填充不应同时出现').toBeLessThanOrEqual(1)
+  expect(m.darkness, `总暗度应 ≤ 0.53（实测 ${m.darkness.toFixed(3)}）`).toBeLessThanOrEqual(0.53)
+}
+/** 纯气泡突显（pure dim）：mode=dim、无 svg/path、阻断带存在、暗层覆盖全屏、单层 */
 async function expectPureDim(page: Page): Promise<void> {
   await expect(page.locator('.tutorial-spotlight[data-spotlight-mode="dim"]')).toHaveCount(1)
   await expect(page.locator('.tutorial-spotlight path')).toHaveCount(0)
   await expect(page.locator('.tutorial-block')).not.toHaveCount(0)
+  await expectSingleLayer(page)
   const dim = await page.locator('.tutorial-spotlight--dim').boundingBox()
   const vp = page.viewportSize()
   if (dim && vp) {
@@ -89,6 +134,86 @@ async function expectHybrid(page: Page): Promise<void> {
   expect(await spotlightHoles(page)).toBeGreaterThanOrEqual(1)
   await expect(page.locator('.tutorial-block')).not.toHaveCount(0)
   await expect(page.locator('.tutorial-spotlight[data-spotlight-block="1"]')).toHaveCount(1)
+  // v0.3.17-beta3 item 1/2：混合模式（dim + 目标开洞）恒为单层、总暗度不叠加
+  await expectSingleLayer(page)
+}
+/** v0.3.17-beta3 item 5：rAF 逐帧采样气泡文本（用于断言某段文案在本阶段从未出现） */
+async function observeBubbleTexts(page: Page, ms = 1200): Promise<string[]> {
+  return page.evaluate(async (dur: number) => {
+    const out = new Set<string>()
+    const t0 = performance.now()
+    while (performance.now() - t0 < dur) {
+      const el = document.querySelector('.tutorial-bubble__text')
+      out.add(el ? (el.textContent ?? '') : '')
+      await new Promise((r) => requestAnimationFrame(() => r(null)))
+    }
+    return [...out]
+  }, ms)
+}
+/** v0.3.17-beta3 item 4：逐帧采样空洞并集面积（含气泡尺寸，用于过滤气泡换文案造成的布局跳变） */
+interface HoleAreaFrame {
+  dt: number
+  union: number
+  maxHole: number
+  holes: number
+  bubble: string
+}
+async function observeHoleAreas(page: Page, ms = 1200): Promise<HoleAreaFrame[]> {
+  return page.evaluate(async (dur: number) => {
+    const parse = (d: string) => {
+      const re = /M(-?[\d.]+) (-?[\d.]+) H(-?[\d.]+) V(-?[\d.]+) H(-?[\d.]+) Z/g
+      const out: Array<{ l: number; t: number; r: number; b: number }> = []
+      let m: RegExpExecArray | null
+      while ((m = re.exec(d))) out.push({ l: +m[1]!, t: +m[2]!, r: +m[3]!, b: +m[4]! })
+      return out
+    }
+    const frames: Array<{ dt: number; union: number; maxHole: number; holes: number; bubble: string }> = []
+    let prev = 0
+    const t0 = performance.now()
+    while (performance.now() - t0 < dur) {
+      const now = performance.now()
+      const path = document.querySelector('.tutorial-spotlight path')
+      if (path) {
+        const W = window.innerWidth
+        const H = window.innerHeight
+        const rects = parse(path.getAttribute('d') ?? '').filter(
+          (r) => (r.r - r.l) * (r.b - r.t) < W * H * 0.999,
+        )
+        const areas = rects.map((r) => Math.max(0, r.r - r.l) * Math.max(0, r.b - r.t))
+        const bb = document.querySelector('.tutorial-bubble')?.getBoundingClientRect()
+        frames.push({
+          dt: prev ? now - prev : 999,
+          union: areas.reduce((a, b) => a + b, 0),
+          maxHole: areas.length > 0 ? Math.max(...areas) : 0,
+          holes: areas.length,
+          bubble: bb ? `${Math.round(bb.width)}x${Math.round(bb.height)}` : '',
+        })
+      }
+      prev = now
+      await new Promise((r) => requestAnimationFrame(() => r(null)))
+    }
+    return frames
+  }, ms)
+}
+/** item 4 断言：空洞融合逐帧面积连续（不出现融合瞬间向上跳变；单帧变化 ≤ 最大洞面积 12%） */
+function expectHoleAreaContinuity(frames: HoleAreaFrame[], label: string): void {
+  expect(frames.length, `${label} 应采到空洞帧`).toBeGreaterThan(3)
+  for (let i = 1; i < frames.length; i++) {
+    const a = frames[i - 1]!
+    const b = frames[i]!
+    // 跳过掉帧与「气泡换文案导致自身尺寸跳变」的采样对
+    if (b.dt > 20 || a.bubble !== b.bubble || b.bubble === '') continue
+    const maxHole = Math.max(a.maxHole, b.maxHole, 1)
+    const delta = b.union - a.union
+    expect(
+      delta,
+      `${label} 空洞并集不应单帧向上跳变（Δ=${delta.toFixed(1)}px² / 最大洞 ${maxHole.toFixed(0)}px²）`,
+    ).toBeLessThanOrEqual(Math.max(0.02 * maxHole, 1))
+    expect(
+      Math.abs(delta),
+      `${label} 单帧面积变化应 ≤ 最大洞面积 12%（实测 ${((Math.abs(delta) / maxHole) * 100).toFixed(1)}%）`,
+    ).toBeLessThanOrEqual(Math.max(0.12 * maxHole, 1))
+  }
 }
 
 /* ---------- v0.3.17-beta1：空洞动画引擎（遮罩常驻）断言工具 ---------- */
@@ -158,6 +283,16 @@ async function expectTutorialBanner(page: Page): Promise<void> {
   const bg = await banner.evaluate((el) => getComputedStyle(el).backgroundColor)
   expect(bg, '教程内横幅无自带暗底').toBe('rgba(0, 0, 0, 0)')
   expect(await hitInside(page, '.game-banner'), '横幅中心应可命中（不被遮罩/阻断带覆盖）').toBe(true)
+  // v0.3.17-beta3 item 3：整屏容器型 `.tutorial-escape`（横幅本身）被过滤 —— 否则纯 dim 阻断带会被
+  // 整个视口豁免吞掉。断言「横幅显示期间」阻断带 >0（横幅挂载早于 i1 突显就位，故需同时成立的轮询）
+  await expect
+    .poll(
+      async () =>
+        (await page.locator('.game-banner').isVisible().catch(() => false)) &&
+        (await blockCount(page)) > 0,
+      { timeout: 8000, message: '横幅显示期间阻断带应 >0（整屏 escape 被过滤）' },
+    )
+    .toBe(true)
 }
 /** 基础态（无突显）：遮罩仍常驻，但洞=整页（视觉无压暗）且阻断带=0 */
 async function expectNoHighlight(page: Page): Promise<void> {
@@ -562,7 +697,33 @@ async function advanceUnit2ToThanks(page: Page): Promise<void> {
   })
   await expect(page.locator('.tutorial-spotlight--dim')).toHaveCount(1)
   expect(await blockCount(page), 'thanks 应压暗但不阻断').toBe(0)
+  // v0.3.17-beta2 item 5 + beta3 item 6：thanks 为「压暗 + 我方网格洞」；阵型【合法】时目标
+  // 同时含「确认布阵」（合法 = 网格 + 确认 双洞；非法 = 仅网格单洞）
+  const thanksLegal =
+    ((await page.locator('.placement__status').textContent().catch(() => '')) ?? '').includes('校验通过')
+  await expect.poll(() => rawHoles(page), { timeout: 5000 }).toBe(thanksLegal ? 2 : 1)
+  expect(await engineSel(page), 'thanks 应含我方网格洞').toContain('.placement__board-wrap')
+  if (thanksLegal) {
+    expect(await engineSel(page), 'thanks 合法应已突显确认布阵').toContain('.tutorial-confirm')
+    await expectHit(page, '.tutorial-confirm', 'blocked', false)
+  } else {
+    expect(await engineSel(page), 'thanks 非法不应突显确认布阵').not.toContain('.tutorial-confirm')
+  }
   await expectHit(page, '.placement__board', 'blocked', false)
+}
+
+/** 单元2：开场 4 段逐段读毕 → 停在「待选栏」气泡（v0.3.17-beta3 item 5 跳过路径构造用） */
+async function advanceUnit2ToTray(page: Page): Promise<void> {
+  await expect(page.getByRole('heading', { name: '新手教程 · 摆阵' })).toBeVisible({ timeout: 10_000 })
+  await expect(bubble(page)).toContainText('很好！接下来我们即将进入实战！', { timeout: 10_000 })
+  await clickBubble(page)
+  await expect(bubble(page)).toContainText('首先要做的一件事是')
+  await clickBubble(page)
+  await expect(bubble(page)).toContainText('对手将尝试破解我方阵型')
+  await clickBubble(page)
+  await expect(bubble(page)).toContainText('在真实对局中，一个好的阵型可以充分地迷惑对手，为我方取得优势！')
+  await clickBubble(page)
+  await expect(bubble(page)).toContainText('这是飞机待选栏，可以从这里把飞机拖到网格中。')
 }
 
 /** 单元2 完整摆阵 → 确认布阵进入单元3 */
@@ -689,6 +850,8 @@ function inferRotations(head: { r: number; c: number }, hits: Array<{ r: number;
 /** 混合模式断言：空网格可交互、参考网格/顶部面板被阻断、气泡与退出按钮可点 */
 async function expectMixedModeInteractive(page: Page): Promise<void> {
   await expectHybrid(page)
+  // v0.3.17-beta3 item 2：k1/k3/p1 等混合模式（含预报点 p1）恒单层、总暗度不超基础值
+  await expectSingleLayer(page)
   await expectHit(page, '.game__opp .paper-grid__board', 'blocked', false)
   await expectHit(page, '.game__ref', 'blocked', true)
   await expectHit(page, '.game__statusbar', 'blocked', true)
@@ -837,6 +1000,12 @@ async function runUnit3KillBranch(
     await page.waitForTimeout(350)
     await expect(bubble(page)).toContainText('好像不太对，试试换个朝向吧。', { timeout: 8000 })
     await expect(page.locator('.tutorial-fx--failure')).toHaveCount(1)
+    // v0.3.17-beta3 item 7 配套：放错位置的幽灵被教程自动回收（拖回参考区）→ 不再占住目标足迹，
+    // 因此「换个朝向」的重试可以真正落下（下方 ③ 完全正确分支必须成功）
+    await expect(
+      page.locator('.game__opp .paper-grid__plane[data-plane-id]'),
+      '放错位置的幽灵应被自动回收',
+    ).toHaveCount(0, { timeout: 5000 })
   }
 
   // ③ 完全正确（exact）：依次尝试候选朝向 → 拖动中持续检测通过 → k3
@@ -849,11 +1018,15 @@ async function runUnit3KillBranch(
     }
     await setRefRotation(page, rot)
     const animBlur = observeAnim(page, 1200) // 覆盖落子判定（≤6×60ms 重试）到 k3 过渡
+    const areaFrames = observeHoleAreas(page, 1200) // v0.3.17-beta3 item 4：融合面积连续性
     await placeGhostAt(page, headMatchVis(head, rot), rot, { release: true })
     await page.waitForTimeout(320)
+    const frames = await areaFrames
     if ((await bubbleTextSafe(page)).includes('飞机就在这里')) {
       exact = true
       expect(await animBlur, 'k2→k3 部分移除应为 blur（被移除洞收拢消失）').toContain('blur')
+      // item 4：被移除洞「收拢并入」保留洞，去重叠分解下并集面积应逐帧连续（无融合跳变）
+      expectHoleAreaContinuity(frames, 'k2→k3 融合')
     }
   }
   expect(exact, '幽灵应最终判定为完全正确').toBe(true)
@@ -913,6 +1086,7 @@ test.describe('新手教程', () => {
         await expect(spotlight(page), '弹窗期遮罩应仍存在（基础态）').toHaveCount(1)
         expect(await spotlightAttr(page, 'data-spotlight-block'), '弹窗期阻断属性应为 0').toBe('0')
         await expect(page.locator('.tutorial-spotlight path'), '基础态应含整页洞路径').not.toHaveCount(0)
+        await expectSingleLayer(page)
         await modal(page).getByRole('button', { name: '继续对局' }).click()
         await expect(modal(page)).toHaveCount(0)
         await expect(page.locator('.tutorial-block')).not.toHaveCount(0)
@@ -1048,18 +1222,22 @@ test.describe('新手教程', () => {
     test.setTimeout(180_000)
     const errs = watchErrors(page)
 
-    // 单元1：纯压暗 → 阻断带拦截非突显区；气泡可点；「← 退出教程」直达主页
+    // 单元1：纯压暗 → 阻断带拦截非突显区；气泡可点；「← 退出教程」首帧即真实可点
     await openTutorial(page)
     await modal(page).getByRole('button', { name: '还不了解' }).click()
     await expect(spotlight(page), '教程页应首帧渲染遮罩（恒渲染）').toHaveCount(1, { timeout: 2000 })
     await expect(page.getByRole('heading', { name: '新手教程 · 辨认飞机' })).toBeVisible({ timeout: 10_000 })
     await expect(bubble(page)).toContainText('欢迎来到《飞机杀》！', { timeout: 10_000 })
-    expect(await blockCount(page)).toBeGreaterThan(0)
+    // v0.3.17-beta3 item 3：纯 dim 阻断带 =「气泡 + 豁免」补集 → 阻断带仍 >0（expectPureDim 内断言）
+    await expectPureDim(page)
+    // item 3：首帧起退出按钮所在豁免区就不被阻断（阻断带按目标几何即刻生效，不依赖 z-index 比较）
+    const firstFrameHit = await hitInfo(page, '.tutorial-escape')
+    expect(firstFrameHit?.inEscape ?? false, '教程首帧 .tutorial-escape 即未被阻断').toBe(true)
+    await expectHit(page, '.tutorial-escape', 'inEscape', true)
     const before = await bubbleTextSafe(page)
     await clickBlockedArea(page)
     await expect(bubble(page)).toHaveText(before)
-    await clickBubble(page)
-    await expect(bubble(page)).toContainText('在正式开始游戏之前，我们先来做几个练习吧！')
+    // 首帧直接点击「← 退出教程」→ 直达主页（无需先读毕气泡）
     await page.getByRole('button', { name: '← 退出教程' }).click()
     await expect(page.getByRole('heading', { name: '飞机杀' })).toBeVisible({ timeout: 10_000 })
 
@@ -1080,9 +1258,100 @@ test.describe('新手教程', () => {
     // v0.3.17-beta2 item 1：弹窗期遮罩仍渲染基础态（恒渲染）且无阻断带
     await expect(spotlight(page), '弹窗期遮罩应仍存在（基础态）').toHaveCount(1)
     expect(await spotlightAttr(page, 'data-spotlight-block'), '弹窗期阻断属性应为 0').toBe('0')
+    await expectSingleLayer(page)
     await modal(page).getByRole('button', { name: '继续摆阵' }).click()
     await expect(modal(page)).toHaveCount(0)
     await expect(page.locator('.tutorial-block')).not.toHaveCount(0)
+    await page.getByRole('button', { name: '← 退出教程' }).click()
+    await expect(modal(page)).toContainText('退出教程？')
+    await modal(page).getByRole('button', { name: '确认退出' }).click()
+    await expect(page.getByRole('heading', { name: '飞机杀' })).toBeVisible({ timeout: 10_000 })
+
+    expect(errs()).toEqual([])
+  })
+
+  test('单元2 跳过路径①：待选栏内先摆一架 → 跳过「拖到网格里」直接续拖；合法/重叠单层遮罩', async ({
+    page,
+  }) => {
+    test.setTimeout(180_000)
+    const errs = watchErrors(page)
+
+    await openTutorial(page)
+    await modal(page).getByRole('button', { name: '我已了解' }).click()
+    await advanceUnit2ToTray(page)
+    // 待选栏阶段阻挡网格交互，但拖拽经 window 指针事件仍可落子 → 构造「已有飞机」前置态
+    await dragDeckCardTo(page, 2, 0)
+    await expect(page.locator('.placement__plane')).toHaveCount(1, { timeout: 8000 })
+    await expect(bubble(page)).toContainText('这是飞机待选栏')
+    const trayTexts = observeBubbleTexts(page, 1400)
+    await clickBubble(page) // 待选栏读毕 → 已有飞机 → 跳过「现在就试试看吧…」
+    expect((await trayTexts).join('|'), '「现在就试试看吧」应被跳过').not.toContain('现在就试试看吧')
+    await expect(bubble(page)).toContainText('好极了！现在尝试把剩余的飞机全部拖到网格里！', {
+      timeout: 8000,
+    })
+    await dragDeckCardTo(page, 2, 5)
+    await dragDeckCardTo(page, 6, 5)
+    await expect(page.locator('.placement__plane')).toHaveCount(3, { timeout: 8000 })
+    await expect(bubble(page)).toContainText('单击飞机可以使飞机旋转90度，试试看！', { timeout: 8000 })
+    await clickPlaneCenter(page) // 旋转 → thanks
+    await expect(bubble(page)).toContainText('太棒了！确保你的飞机不重叠不越界之后，就可以开始游戏了！', {
+      timeout: 8000,
+    })
+    // item 2：thanks（混合模式）恒为单层遮罩、总暗度不超基础值 0.52
+    await expectSingleLayer(page)
+    expect(await blockCount(page), 'thanks 压暗不阻断').toBe(0)
+    await expectHit(page, '.placement__board', 'blocked', false)
+    // item 6：阵型合法时「太棒了…」阶段已突显确认按钮
+    expect(
+      (((await page.locator('.placement__status').textContent().catch(() => '')) ?? '').includes('校验通过')),
+      '本用例构造的阵型在 thanks 阶段应合法',
+    ).toBe(true)
+    await expect.poll(() => engineSel(page), { timeout: 5000 }).toContain('.tutorial-confirm')
+    expect(await engineSel(page)).toContain('.placement__board-wrap')
+    await expectHit(page, '.tutorial-confirm', 'blocked', false)
+
+    // 重叠 → 非法阵型（detect 混合模式）：单层遮罩、不阻断、网格洞仍在
+    const b1 = await page.locator('.placement__plane').nth(0).boundingBox()
+    const b2 = await page.locator('.placement__plane').nth(1).boundingBox()
+    if (!b1 || !b2) throw new Error('已摆飞机不可见')
+    const c1 = { x: b1.x + b1.width / 2, y: b1.y + b1.height / 2 }
+    const c2 = { x: b2.x + b2.width / 2, y: b2.y + b2.height / 2 }
+    await drag(page, c1, c2) // 把 1 号飞机拖到 2 号上 → 重叠
+    await expect(bubble(page)).toContainText('飞机不能重叠、不能越界哦！', { timeout: 8000 })
+    await expectSingleLayer(page)
+    await expect(page.locator('.tutorial-spotlight--dim')).toHaveCount(1)
+    expect(await blockCount(page), '非法阵型压暗不阻断').toBe(0)
+    await expectHit(page, '.placement__board', 'blocked', false)
+    // 移开 → 恢复合法 → 确认按钮重新突显且可点
+    await drag(page, c2, c1)
+    await expect(bubble(page)).toContainText('点击“确认布阵”开始游戏', { timeout: 8000 })
+    await expectSingleLayer(page)
+    await expectHit(page, '.tutorial-confirm', 'blocked', false)
+
+    expect(errs()).toEqual([])
+  })
+
+  test('单元2 跳过路径②：待选栏内一把摆完 → 跳过两段引导直达旋转', async ({ page }) => {
+    test.setTimeout(180_000)
+    const errs = watchErrors(page)
+
+    await openTutorial(page)
+    await modal(page).getByRole('button', { name: '我已了解' }).click()
+    await advanceUnit2ToTray(page)
+    await dragDeckCardTo(page, 2, 0)
+    await dragDeckCardTo(page, 2, 5)
+    await dragDeckCardTo(page, 6, 5)
+    await expect(page.locator('.placement__plane')).toHaveCount(3, { timeout: 8000 })
+    await expect(bubble(page)).toContainText('这是飞机待选栏')
+    const texts = observeBubbleTexts(page, 1600)
+    await clickBubble(page) // 已全部入格 → 跳过 drag + more，直达旋转引导（成功提示）
+    const seen = (await texts).join('|')
+    expect(seen, '「现在就试试看吧」应被跳过').not.toContain('现在就试试看吧')
+    expect(seen, '「剩余的飞机全部拖到网格里」应被跳过').not.toContain('剩余的飞机全部拖到网格里')
+    await expect(page.locator('.tutorial-fx--success')).toHaveCount(1, { timeout: 8000 })
+    await expect(bubble(page)).toContainText('单击飞机可以使飞机旋转90度，试试看！', { timeout: 8000 })
+    await expectSingleLayer(page)
+
     await page.getByRole('button', { name: '← 退出教程' }).click()
     await expect(modal(page)).toContainText('退出教程？')
     await modal(page).getByRole('button', { name: '确认退出' }).click()

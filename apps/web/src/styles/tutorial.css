@@ -106,15 +106,17 @@
   align-items: center;
 }
 
-/* ============ v0.3.9 / v0.3.14 ============
-   「突显对话气泡」= 整屏压暗、无洞（气泡 z 210 > 遮罩 130，气泡天然豁免压暗；
-   背景整体压暗使气泡轮廓被精确突显）。
-   v0.3.14 修复：原实现漏写尺寸，`.tutorial-spotlight` 只给了 left/top → 暗层为 0×0，
-   等于完全没压暗（用户反馈“未生效/只 dim 了一部分”）。现显式铺满视口。 */
+/* ============ v0.3.9 / v0.3.14 / v0.3.17-beta3 ============
+   `.tutorial-spotlight--dim` 仅作**语义标记**（竖版/横版布局与 QA 断言用），**不携带任何背景**——
+   v0.3.17-beta3 前它同时带 0.52 暗底，而混合模式（dim + 目标开洞）的 SVG 也会拿到该类
+   → 暗底 + path 填充叠加成双层暗度（用户反馈“又被压暗一次”）。
+   整屏暗底改由 `.tutorial-spotlight--sheet` 承担，只用于「纯 dim 静止层」（无 path 的那一层）。 */
 .tutorial-spotlight--dim {
   inset: 0;
   width: 100vw;
   height: 100vh;
+}
+.tutorial-spotlight--sheet {
   background: rgba(58, 46, 28, 0.52);
 }
 

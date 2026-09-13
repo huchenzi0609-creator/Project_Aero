@@ -92,6 +92,8 @@ export function TutorialPlacement({
   const check = fleetCheckState(grid, config)
 
   /* ---------- 事件桥（与 Placement 一致的增量语义） ---------- */
+  const gridRef = useRef<PlacedPlane[]>(grid)
+  gridRef.current = grid
   const prevGridRef = useRef<PlacedPlane[]>(grid)
   const handlePlanesChange = (next: PlacedPlane[]) => {
     versionRef.current += 1
@@ -125,12 +127,28 @@ export function TutorialPlacement({
     }
   }, [grid])
 
+  /**
+   * 阶段进入器（v0.3.17-beta3 item 5）：
+   * - 进入「拖拽引导」时若网格已有飞机 → 跳过该文本；
+   * - 进入「把剩余的飞机全部拖进网格」时若已全部入格 → 跳过该文本，直接旋转引导（成功提示）。
+   */
+  const enterDrag = () => {
+    if (gridRef.current.length > 0) enterMore()
+    else setPh('drag')
+  }
+  const enterMore = () => {
+    if (gridRef.current.length >= planeCount) {
+      flash('success')
+      setPh('rotateWait')
+    } else setPh('more')
+  }
+
   /** 事件 → 阶段推进（wait 节点：事件到达才离开；期间气泡常驻） */
   const dispatchEvent = (e: TutorialGameEvent) => {
     const cur = phaseRef.current
     if (cur === 'drag' && e.type === 'planePlaced') {
       flash('success')
-      setPh('more')
+      enterMore()
     } else if (cur === 'more' && e.type === 'allPlanesPlaced') {
       // v0.3.14：气泡「单击飞机可以使飞机旋转90度」触发的同时即 <取消当前突显><突显空网格>
       flash('success')
@@ -145,7 +163,7 @@ export function TutorialPlacement({
   const clickBubble = () => {
     const cur = phaseRef.current
     if (cur === 'welcome') setPh('tray')
-    else if (cur === 'tray') setPh('drag')
+    else if (cur === 'tray') enterDrag()
     // 其余（drag/more/rotateWait/thanks/detect）：点击仅翻段，不消失
     else force((x) => x + 1)
   }
@@ -198,7 +216,13 @@ export function TutorialPlacement({
     if (p === 'tray') return { dim: false, block: true, target: '.placement__tray' }
     if (p === 'drag' || p === 'more' || p === 'rotateWait')
       return { dim: false, block: true, target: DRAG_HL }
-    if (p === 'thanks') return { dim: true, block: false, target: GRID_HL }
+    // thanks：压暗突出气泡、网格持续突显；若阵型【已合法】则同时突显「确认布阵」（item 6）
+    if (p === 'thanks')
+      return {
+        dim: true,
+        block: false,
+        target: check.ok ? [GRID_HL, '.tutorial-confirm'] : GRID_HL,
+      }
     if (p === 'detect')
       return check.ok
         ? { dim: false, block: true, target: [GRID_HL, '.tutorial-confirm'] }

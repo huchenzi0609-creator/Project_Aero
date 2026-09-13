@@ -18,7 +18,7 @@
  * 保证过渡期间遮罩始终存在、不闪白。
  */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { mergeHoleRects } from './spotlightMerge'
+import { disjointHoleRects, mergeHoleRects } from './spotlightMerge'
 import { useAnyModalOpen } from './useAnyModalOpen'
 import { clearSpotlightCarry, peekSpotlightCarry, rememberSpotlightRects } from './spotlightCarry'
 
@@ -96,14 +96,22 @@ function measureRects(list: string[]): TargetRect[] {
   return out
 }
 
-/** 豁免元素（.tutorial-escape）矩形：任何模式下都不参与阻断 */
+/**
+ * 豁免元素（.tutorial-escape）矩形：任何模式下都不参与阻断。
+ * v0.3.17-beta3：跳过**整屏容器型**豁免元素（如 GameScreen 横幅的外层 backdrop 包裹层，
+ * 它本身带 `.tutorial-escape` 但覆盖整个视口）——否则整屏都成洞、阻断带归零；
+ * 真正需要豁免的是它内部的按钮/卡片（它们各自也带 `.tutorial-escape`）。
+ */
 function measureEscapeRects(): TargetRect[] {
+  const vw = typeof window !== 'undefined' ? window.innerWidth : 0
+  const vh = typeof window !== 'undefined' ? window.innerHeight : 0
   const out: TargetRect[] = []
   for (const el of Array.from(document.querySelectorAll('.tutorial-escape'))) {
     const b = el.getBoundingClientRect()
-    if (b.width > 0 && b.height > 0) {
-      out.push({ left: b.left, top: b.top, width: b.width, height: b.height })
-    }
+    if (b.width <= 0 || b.height <= 0) continue
+    const fullScreen = b.width >= vw - 2 && b.height >= vh - 2
+    if (fullScreen) continue
+    out.push({ left: b.left, top: b.top, width: b.width, height: b.height })
   }
   return out
 }
@@ -465,8 +473,15 @@ export function TutorialSpotlight({
       .map((r) => ({ left: r.left, top: r.top, width: r.right - r.left, height: r.bottom - r.top }))
     return mergeHoleRects(outer)
   }
-  // 视觉洞 = 当前动画几何 ∪ 豁免元素（气泡/横幅/退出按钮等既不被压暗也不被阻断）
-  const visualHoles = padMerge([...rects, ...mergedEscapes])
+  // 视觉洞 = 当前动画几何 ∪ 豁免元素（气泡/横幅/退出按钮等既不被压暗也不被阻断）。
+  // 用「去重叠分解」而非包围盒合并：并集边界随动画连续变化，融合瞬间不再跳变（item 4）。
+  const paddedAll = [...rects, ...mergedEscapes].map((r) => ({
+    left: Math.max(0, r.left - PAD),
+    top: Math.max(0, r.top - PAD),
+    width: Math.min(W, r.left + r.width + PAD) - Math.max(0, r.left - PAD),
+    height: Math.min(H, r.top + r.height + PAD) - Math.max(0, r.top - PAD),
+  }))
+  const visualHoles = disjointHoleRects(paddedAll)
   // 交互洞 = 视觉洞 ∪ 目标（动画途中目标绝不被阻断）
   const interactiveHoles = padMerge([...rects, ...destRects, ...mergedEscapes])
 
@@ -479,7 +494,7 @@ export function TutorialSpotlight({
     return (
       <>
         <div
-          className="tutorial-spotlight tutorial-spotlight--dim"
+          className="tutorial-spotlight tutorial-spotlight--dim tutorial-spotlight--sheet"
           data-spotlight-mode="dim"
           data-spotlight-anim="none"
           data-spotlight-holes={1}
@@ -487,9 +502,13 @@ export function TutorialSpotlight({
           data-spotlight-block={block ? '1' : '0'}
           aria-hidden="true"
         />
-        {/* 整屏暗层语义：除气泡（z 210）与豁免元素（.tutorial-escape z 160）外全部阻断；
-            这里用整幅阻断带而非补集切片，保证首帧（几何尚未测量）就有阻断 */}
-        {block ? <div className="tutorial-block" aria-hidden="true" /> : null}
+        {/* 阻断带 = 「气泡目标洞 + 豁免元素」的补集（用**目标几何**而非当前动画几何：
+            首帧 rects 还是整页洞时也能立即得到正确阻断，避免“首帧无阻断”）。
+            豁免元素（.tutorial-escape 退出按钮等）所在区域根本不被阻断——不依赖 z-index 比较，
+            规避父级 stacking context 把按钮压在阻断带之下 */}
+        {block ? (
+          <BlockBands holes={padMerge([...destRects, ...mergedEscapes])} W={W} H={H} />
+        ) : null}
       </>
     )
   }

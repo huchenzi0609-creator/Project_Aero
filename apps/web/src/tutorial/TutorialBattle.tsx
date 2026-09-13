@@ -306,6 +306,52 @@ export function TutorialBattle({ fleet, onExitHome }: TutorialBattleProps) {
     [judgeElement],
   )
 
+  /**
+   * 回收一个放错的幽灵（v0.3.17-beta3 item 7 配套）：
+   * 判定改为“必须松手后才算”后，放错朝向的幽灵会占住目标足迹，导致下一次正确落点被空网格的
+   * 「不能重叠」规则拒绝 —— 玩家按提示“换个朝向”却永远落不下去。
+   * 这里在失败分支后把该幽灵用合成指针事件拖回样式参考区（GameScreen 既有回收路径），
+   * 使重试可以真正落下；不改 GameScreen，也不改文案。
+   */
+  const recycleGhost = useCallback((id: string) => {
+    const el = document.querySelector(
+      `.game__opp .paper-grid__plane[data-plane-id="${id}"]`,
+    ) as HTMLElement | null
+    const hit = el?.querySelector('.paper-grid__plane-hit') as HTMLElement | null
+    const ref = document.querySelector('.game__ref') as HTMLElement | null
+    if (!hit || !ref) return
+    const hr = hit.getBoundingClientRect()
+    const rr = ref.getBoundingClientRect()
+    const base = {
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+      pointerId: 1,
+      pointerType: 'mouse',
+      isPrimary: true,
+    } as const
+    const at = (x: number, y: number, buttons: number) =>
+      new PointerEvent('pointermove', { ...base, clientX: x, clientY: y, buttons })
+    const sx = hr.left + hr.width / 2
+    const sy = hr.top + hr.height / 2
+    const tx = rr.left + rr.width / 2
+    const ty = rr.top + rr.height / 2
+    hit.dispatchEvent(
+      new PointerEvent('pointerdown', { ...base, clientX: sx, clientY: sy, button: 0, buttons: 1 }),
+    )
+    window.dispatchEvent(at(sx + 20, sy - 20, 1))
+    window.dispatchEvent(at(tx, ty, 1))
+    window.dispatchEvent(
+      new PointerEvent('pointerup', {
+        ...base,
+        clientX: tx,
+        clientY: ty,
+        button: 0,
+        buttons: 0,
+      }),
+    )
+  }, [])
+
   /** 事件分发：开场链按节点推进；两条教学支线条件【并行监听】 */
   const dispatchEvent = useCallback(
     (e: TutorialGameEvent) => {
@@ -345,9 +391,9 @@ export function TutorialBattle({ fleet, onExitHome }: TutorialBattleProps) {
           if (verdict === 'headOnly') {
             k2FailedFlag = true
             flash('failure')
-            const cur = ptrRef.current
-            if (cur) cur.seg = 0
-            rerender()
+            // 回收放错的幽灵，保证玩家换朝向后能真正落下（drop-only 判定配套）
+            recycleGhost(ghostId)
+            goNode('k2')
             return
           }
           if (n < 6) window.setTimeout(() => attempt(n + 1), 60)
@@ -357,7 +403,7 @@ export function TutorialBattle({ fleet, onExitHome }: TutorialBattleProps) {
       }
       goNode(node.next ?? null)
     },
-    [anyModalOpen, currentNode, flash, goNode, judgeGhostById, rerender, startTask],
+    [anyModalOpen, currentNode, flash, goNode, judgeGhostById, recycleGhost, rerender, startTask],
   )
 
   /** 气泡点击：翻段；click 节点读毕 → after（null = 本链结束） */
@@ -430,24 +476,9 @@ export function TutorialBattle({ fleet, onExitHome }: TutorialBattleProps) {
     }
   }, [sessionNonce, sessionLive])
 
-  /* ---------- 幽灵拖动中持续判定（v0.3.14 item 10） ---------- */
-  const activeNodeId = ptrRef.current?.nodeId ?? null
-  useEffect(() => {
-    if (activeNodeId !== 'k2') return
-    const timer = window.setInterval(() => {
-      if (ptrRef.current?.nodeId !== 'k2') return
-      const els = document.querySelectorAll<HTMLElement>('.game__opp .paper-grid__plane[data-plane-id]')
-      for (const el of els) {
-        if (judgeElement(el) === 'exact') {
-          k2FailedFlag = false
-          flash('success')
-          goNode('k3')
-          return
-        }
-      }
-    }, 120)
-    return () => window.clearInterval(timer)
-  }, [activeNodeId, flash, goNode, judgeElement])
+  /* ---------- 幽灵判定（v0.3.17-beta3 item 7） ----------
+     beta2 曾在拖动中（未松手）判定通过；现按要求改回：**必须在 ghostCreated（彻底放下）后**才判定，
+     拖动/移动过程中不推进节点。 */
 
   /* ---------- AI 门控：避开我方全部机头 + 行动间隔 1s + 教学气泡期间暂停 ---------- */
   const gateRef = useRef({ pausedUntil: 0, lastShots: -1 })
