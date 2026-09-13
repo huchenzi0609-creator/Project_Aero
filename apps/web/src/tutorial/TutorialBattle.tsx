@@ -522,11 +522,17 @@ export function TutorialBattle({ fleet, onExitHome }: TutorialBattleProps) {
 
   return (
     <>
-      <GameScreen onGameEvent={dispatchEvent} aiShotSelector={aiShotSelector} hideSettlement />
+      {/* hideBannerBackdrop：教程内不显示“您先手/后手”横幅自带暗底（M4 契约）；
+          横幅本身带 .tutorial-escape → 遮罩既不开洞遮挡它也不阻断它 */}
+      <GameScreen
+        onGameEvent={dispatchEvent}
+        aiShotSelector={aiShotSelector}
+        hideSettlement
+        hideBannerBackdrop
+      />
 
-      {!anyModalOpen ? (
-        <TutorialSpotlight active={overlayActive} target={highlight} dim={bubbleDim} />
-      ) : null}
+      {/* 弹窗期间由组件内部处理（渲染基础态遮罩、不渲染阻断带），避免“界面已显示但遮罩未就位”的帧 */}
+      <TutorialSpotlight active={overlayActive} target={highlight} dim={bubbleDim} />
       {showBubble && !anyModalOpen ? (
         <TutorialBubble
           key={`${ptrRef.current?.table ?? ''}-${node!.id}`}

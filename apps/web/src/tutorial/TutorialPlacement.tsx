@@ -51,6 +51,8 @@ const T2 = {
 
 /** 需要同时可交互的拖拽区（模态突显下非突显区域不可点） */
 const DRAG_HL = ['.placement__tray', '.placement__board-wrap']
+/** 我方网格（从待选栏步骤起直到进入单元3 始终保持突显） */
+const GRID_HL = '.placement__board-wrap'
 
 type Phase = 'welcome' | 'tray' | 'drag' | 'more' | 'rotateWait' | 'thanks' | 'detect'
 
@@ -183,21 +185,29 @@ export function TutorialPlacement({
 
   // 突显目标：'bubble'=整屏压暗突出气泡（开场 / 旋转引导）；
   // 待选栏；拖拽/旋转步骤 = 待选栏 + 网格；detect 合法 → 确认按钮，非法 → 无突显
-  const highlightFor = (p: Phase): string | string[] | null => {
-    // 'bubble' = <突显对话气泡>：整屏压暗无洞 + 阻断；'bubble-soft' 同款压暗但不阻断
-    // （thanks / 阵形非法：气泡期间玩家仍需挪动或旋转飞机）
-    if (p === 'welcome') return 'bubble'
-    if (p === 'thanks') return 'bubble-soft'
-    if (p === 'tray') return '.placement__tray'
-    if (p === 'drag' || p === 'more' || p === 'rotateWait') return DRAG_HL
-    if (p === 'detect') return check.ok ? '.tutorial-confirm' : 'bubble-soft'
-    return null
+  /**
+   * 突显规划（v0.3.17-beta2 item 4/5）：
+   * - welcome：<突显对话气泡>（整屏压暗）；
+   * - tray / drag / more / rotateWait：**待选栏 + 我方网格同时突显**（叠加，不取消待选栏）；
+   * - thanks / 非法阵形：压暗突出气泡但**我方网格持续保持突显**（block=false：玩家仍需操作）；
+   * - detect 合法：**我方网格 + 确认布阵**同时突显。
+   * 即：从待选栏步骤起直到进入单元3，我方网格始终在突显目标里。
+   */
+  const highlightFor = (p: Phase): { dim: boolean; block: boolean; target: string | string[] | null } => {
+    if (p === 'welcome') return { dim: true, block: true, target: null }
+    if (p === 'tray') return { dim: false, block: true, target: '.placement__tray' }
+    if (p === 'drag' || p === 'more' || p === 'rotateWait')
+      return { dim: false, block: true, target: DRAG_HL }
+    if (p === 'thanks') return { dim: true, block: false, target: GRID_HL }
+    if (p === 'detect')
+      return check.ok
+        ? { dim: false, block: true, target: [GRID_HL, '.tutorial-confirm'] }
+        : { dim: true, block: false, target: GRID_HL }
+    return { dim: false, block: true, target: null }
   }
-  const rawHl = highlightFor(phase)
-  const bubbleDim = rawHl === 'bubble' || rawHl === 'bubble-soft'
-  const highlight = bubbleDim ? null : rawHl
-  /** 遮罩激活态（v0.3.16：淡出滞留由 TutorialSpotlight 内部处理） */
-  const overlayActive = bubbleDim || highlight !== null
+  const hl = highlightFor(phase)
+  /** 遮罩激活态（有 dim 或有突显目标即为激活） */
+  const overlayActive = hl.dim || hl.target !== null
   // 气泡默认底部；突显确认按钮（页头）时同样保持底部
   const exit = () => setExitOpen(true)
   const confirmExit = () => {
@@ -247,14 +257,12 @@ export function TutorialPlacement({
 
       {/* 教程层（detect 非法 → highlight null → 无遮罩全亮）；「点击继续」仅 click 节点显示。
           弹窗打开期间（自身退出确认 exitOpen，或任何外部弹窗）不渲染阻断带/暗层/气泡 */}
-      {!modalOpen ? (
-        <TutorialSpotlight
-          active={overlayActive}
-          target={highlight}
-          dim={bubbleDim}
-          block={rawHl !== 'bubble-soft'}
-        />
-      ) : null}
+      <TutorialSpotlight
+        active={overlayActive}
+        target={hl.target}
+        dim={hl.dim}
+        block={hl.block}
+      />
       {!modalOpen && segments.length > 0 ? (
         <TutorialBubble key={phase} text={segText} showHint={isClickNode} onClick={clickSeg} />
       ) : null}

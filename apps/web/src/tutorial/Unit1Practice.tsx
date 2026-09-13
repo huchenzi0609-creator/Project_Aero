@@ -261,7 +261,9 @@ export function Unit1Practice({ onExitHome, onDone }: { onExitHome: () => void; 
 
       <div className="page__body tutorial-unit1__body">
         <div className="u1-grid-wrap">
-          <div className="u1-grid">
+          {/* key/data-scene：不同场景网格尺寸不同且同类名 → 强制换新节点，配合遮罩布局期测量，
+              避免沿用上一场景（5×5）的旧几何（v0.3.17-beta2 item 2） */}
+          <div key={scene} className="u1-grid" data-scene={scene}>
             <PaperGrid
               width={gridSize}
               height={gridSize}
@@ -279,14 +281,12 @@ export function Unit1Practice({ onExitHome, onDone }: { onExitHome: () => void; 
       </div>
 
       {/* measureKey：同一选择器在不同场景尺寸变化（5×5 ↔ 10×10）时强制重新测量 */}
-      {!modalOpen ? (
-        <TutorialSpotlight
-          active={modal}
-          target={target}
-          dim={bubbleDim}
-          measureKey={`${scene}-${phase}`}
-        />
-      ) : null}
+      <TutorialSpotlight
+        active={modal}
+        target={target}
+        dim={bubbleDim}
+        measureKey={`${scene}-${phase}`}
+      />
       {showBubble && !modalOpen ? (
         <TutorialBubble
           key={`${scene}-${phase}`}

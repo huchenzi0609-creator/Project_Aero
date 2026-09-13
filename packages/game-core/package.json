@@ -1,6 +1,6 @@
 {
   "name": "@aero/game-core",
-  "version": "0.3.17-beta1",
+  "version": "0.3.17-beta2",
   "private": true,
   "type": "module",
   "exports": {

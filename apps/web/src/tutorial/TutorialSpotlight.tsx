@@ -17,9 +17,10 @@
  * 与目标节点的相互切换会走引擎动画（进入目标节点时从“气泡矩形”morph 过去、进入 dim 时收拢到气泡矩形），
  * 保证过渡期间遮罩始终存在、不闪白。
  */
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { mergeHoleRects } from './spotlightMerge'
 import { useAnyModalOpen } from './useAnyModalOpen'
+import { clearSpotlightCarry, peekSpotlightCarry, rememberSpotlightRects } from './spotlightCarry'
 
 export interface TargetRect {
   left: number
@@ -30,10 +31,13 @@ export interface TargetRect {
 
 const PAD = 6 // 开洞外扩（目标呼吸空间）
 const DARK = 'rgba(58, 46, 28, 0.52)'
-/** 空洞几何动画时长（ms，260–360 可调） */
-const HOLE_ANIM_MS = 300
-/** 空洞几何缓动：cubic-bezier(0.22, 0.61, 0.36, 1)（ease-in-out 类柔和加减速） */
-const HOLE_EASE = cubicBezier(0.22, 0.61, 0.36, 1)
+/** 空洞几何动画时长（ms，300–400 可调） */
+const HOLE_ANIM_MS = 340
+/**
+ * 空洞几何缓动：smootherstep 6t⁵−15t⁴+10t³ —— 起点速度与终点速度**都为 0**，
+ * 中段最快，避免“起手一顿/收尾一顿”的机械感（逐帧速度采样见验证脚本）。
+ */
+const HOLE_EASE = (t: number) => t * t * t * (t * (t * 6 - 15) + 10)
 
 type AnimLabel = 'focus' | 'add' | 'transfer' | 'blur' | 'none'
 
@@ -48,40 +52,6 @@ interface AnimHole {
 }
 
 /* ============ 工具 ============ */
-
-/** cubic-bezier 求值（牛顿迭代 + 二分兜底） */
-function cubicBezier(x1: number, y1: number, x2: number, y2: number): (x: number) => number {
-  const cx = 3 * x1
-  const bx = 3 * (x2 - x1) - cx
-  const ax = 1 - cx - bx
-  const cy = 3 * y1
-  const by = 3 * (y2 - y1) - cy
-  const ay = 1 - cy - by
-  const sx = (t: number) => ((ax * t + bx) * t + cx) * t
-  const sy = (t: number) => ((ay * t + by) * t + cy) * t
-  const dx = (t: number) => (3 * ax * t + 2 * bx) * t + cx
-  return (x: number) => {
-    let t = x
-    for (let i = 0; i < 6; i++) {
-      const xe = sx(t) - x
-      if (Math.abs(xe) < 1e-4) return sy(t)
-      const d = dx(t)
-      if (Math.abs(d) < 1e-6) break
-      t -= xe / d
-    }
-    let lo = 0
-    let hi = 1
-    t = x
-    for (let i = 0; i < 24; i++) {
-      const xe = sx(t)
-      if (Math.abs(xe - x) < 1e-5) break
-      if (xe < x) lo = t
-      else hi = t
-      t = (lo + hi) / 2
-    }
-    return sy(t)
-  }
-}
 
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t
 const lerpRect = (a: TargetRect, b: TargetRect, t: number): TargetRect => ({
@@ -138,15 +108,6 @@ function measureEscapeRects(): TargetRect[] {
   return out
 }
 
-/** 气泡矩形（dim ↔ 目标节点过渡的桥梁；无气泡返回 null） */
-function measureBubbleRect(): TargetRect | null {
-  const el = document.querySelector('.tutorial-bubble')
-  if (!el) return null
-  const b = el.getBoundingClientRect()
-  if (b.width === 0 || b.height === 0) return null
-  return { left: b.left, top: b.top, width: b.width, height: b.height }
-}
-
 /* ============ 组件 ============ */
 
 export function TutorialSpotlight({
@@ -172,8 +133,13 @@ export function TutorialSpotlight({
   )
   /** 纵深防护（v0.3.13 加固）：任何弹窗打开期间都不渲染遮罩 */
   const modalOpen = useAnyModalOpen()
-  /** <突显对话气泡> 且无目标 = 纯 dim 节点 */
+  /** <突显对话气泡> 且无目标 = 纯 dim 节点（气泡即“被突显对象”，走同一空洞引擎） */
   const dimOnly = dim && targets.length === 0
+  /** 引擎内的实际目标：纯 dim 节点以对话气泡矩形为洞，与 dim 桥接路径统一（v0.3.17-beta2 item 3） */
+  const engineTargets = useMemo(
+    () => (dimOnly ? ['.tutorial-bubble'] : targets),
+    [dimOnly, targets],
+  )
 
   /* ---------- 渲染期即时测量（切换同帧即有几何） ---------- */
   const W = typeof window !== 'undefined' ? window.innerWidth : 0
@@ -181,21 +147,36 @@ export function TutorialSpotlight({
   const pageRect = useMemo<TargetRect>(() => ({ left: 0, top: 0, width: W, height: H }), [W, H])
   const [measured, setMeasured] = useState<TargetRect[]>([])
   const [escapes, setEscapes] = useState<TargetRect[]>([])
-  const liveTargets = active && !dimOnly ? measureRects(targets) : []
-  const destRects = liveTargets.length > 0 ? liveTargets : measured
+  const liveTargets = active ? measureRects(engineTargets) : []
+  /**
+   * 目标几何：一律用**渲染期即时测量**。
+   * - 选择器列表为空（基础态 / dim 目的地已并入 engineTargets）→ 真取消；
+   * - 选择器非空但此刻测不到（元素尚未渲染）→ **不规划**（沿用当前几何），
+   *   而不是退化成“取消突显”把洞扩到整页（那正是切换时闪一下的根因）。
+   */
+  const wantTargets = active && engineTargets.length > 0
+  // 渲染期测不到时回退到 effect 测量结果（含延迟重试）；两者都空则“暂不规划”，
+  // 等 effect 测量落地后 sig 变化再规划（避免把“尚未渲染”误判为“取消突显”）
+  const destRects = wantTargets ? (liveTargets.length > 0 ? liveTargets : measured) : []
   const liveEscapes = active ? measureEscapeRects() : escapes
   const mergedEscapes = liveEscapes.length > 0 ? liveEscapes : escapes
 
+  /** 首帧几何：优先续接上一阶段的洞（跨单元 transfer 起点），否则基础态（洞=整页）——
+   *  同步用 window.innerWidth/Height，确保“界面首帧即遮罩就位”，不出现空窗（item 1）。 */
+  const initialRects = useMemo<TargetRect[]>(() => {
+    const carry = peekSpotlightCarry()
+    if (carry && carry.length > 0) return carry
+    return [{ left: 0, top: 0, width: W, height: H }]
+  }, [W, H])
   /* ---------- 动画引擎状态 ---------- */
-  /** dim ↔ 目标节点的桥梁矩形：离开/进入 dim 时以气泡矩形作为 morph 起点/终点 */
-  const dimBridgeRef = useRef<TargetRect | null>(null)
   const holeIdRef = useRef(0)
   const animsRef = useRef<AnimHole[]>([])
-  const curRef = useRef<TargetRect[]>([])
+  const curRef = useRef<TargetRect[]>(initialRects)
   const rafRef = useRef(0)
   const labelRef = useRef<AnimLabel>('none')
+  const loopGenRef = useRef(0)
   const [frame, setFrame] = useState<{ rects: TargetRect[]; anim: AnimLabel }>({
-    rects: [],
+    rects: initialRects,
     anim: 'none',
   })
   const frameRef = useRef(frame)
@@ -216,8 +197,11 @@ export function TutorialSpotlight({
 
   /** rAF 逐帧插值 */
   const runLoop = () => {
-    if (rafRef.current) return
+    // 代次保护：新计划立即取代旧循环；已被取消的陈旧句柄不再堵住后续动画
+    const gen = ++loopGenRef.current
+    cancelAnimationFrame(rafRef.current)
     const step = () => {
+      if (gen !== loopGenRef.current) return
       const now = performance.now()
       const anims = animsRef.current
       let done = true
@@ -226,12 +210,22 @@ export function TutorialSpotlight({
         if (t < 1) done = false
         return lerpRect(a.from, a.to, HOLE_EASE(t))
       })
-      curRef.current = rects
-      commit(rects, done ? 'none' : labelRef.current)
+      let finalRects = rects
+      if (done) {
+        // 收尾去重：并入同一目标后的重合洞只保留一个（几何 <1px 视为重合）
+        finalRects = rects.filter(
+          (r, i) => rects.findIndex((o) => sameRect(o, r, 1)) === i,
+        )
+        curRef.current = finalRects
+      } else {
+        curRef.current = rects
+      }
+      commit(finalRects, done ? 'none' : labelRef.current)
       if (done) {
         rafRef.current = 0
         return
       }
+      void finalRects
       rafRef.current = requestAnimationFrame(step)
     }
     rafRef.current = requestAnimationFrame(step)
@@ -250,13 +244,8 @@ export function TutorialSpotlight({
    */
   const plan = (dest: TargetRect[]) => {
     const cur = curRef.current
-    const bubble = measureBubbleRect()
     const now = performance.now()
-    // 纯 dim 节点初次进入（无当前洞）：洞直接落在气泡矩形（气泡即“被突显对象”）→ 阻断带非空
-    if (cur.length === 0 && dest.length === 0 && dimOnly) {
-      settleAt([bubble ?? pageRect])
-      return
-    }
+
     const mk = (from: TargetRect, to: TargetRect, label: AnimLabel): AnimHole => ({
       id: holeIdRef.current++,
       from,
@@ -275,19 +264,17 @@ export function TutorialSpotlight({
         settleAt([pageRect])
         return
       }
-      // dim → 目标：从气泡矩形 morph（保持“暗→暗”连续）；rest → 目标：从整页收缩
-      const seed = dimBridgeRef.current ?? pageRect
-      dimBridgeRef.current = null
+      // rest → 目标：从整页收缩（dim 节点的目标即气泡矩形，天然是“暗→暗”连续）
+      const seed = pageRect
       label0('focus')
       animsRef.current = dest.map((t) => mk(seed, t, 'focus'))
       runLoop()
       return
     }
 
-    // ② 取消（基础态 / dim 收拢）
+    // ② 取消：空洞扩大到整页（基础态）；dim 目的地即气泡矩形（已由目标给出）
     if (dest.length === 0) {
-      // dim：收拢到气泡矩形（随后由 dim 层接管）；基础态：扩大到整页
-      const to = dimOnly ? (bubble ?? pageRect) : pageRect
+      const to = pageRect
       const moving = cur.filter((r) => !sameRect(r, to))
       if (moving.length === 0) {
         settleAt(cur)
@@ -337,9 +324,10 @@ export function TutorialSpotlight({
       if (ci >= 0) {
         const from = cur[ci]!
         const to = dest[ti]!
-        if (sameRect(from, to)) continue
+        // 注意：即使几何已一致也必须保留为洞（from==to 的静态动画），
+        // 否则该洞会从 anims 列表里消失 → 表现为“只有最后一个目标被突显”。
         newAnims.push(mk(from, to, 'transfer'))
-        hasTransfer = true
+        if (!sameRect(from, to)) hasTransfer = true
       } else {
         // 新目标：从中心向外生长
         newAnims.push(mk(centerRect(dest[ti]!), dest[ti]!, 'add'))
@@ -351,9 +339,24 @@ export function TutorialSpotlight({
       if (!matchedCur.has(ci)) removed.push(ci)
     }
     for (const ci of removed) {
-      // 仅剩下被移除的洞（其余都被取消）→ 扩大到整页（blur-all）；仍有保留目标 → 收拢到中心消失
-      const keepAlive = matchedCur.size > 0
-      newAnims.push(mk(cur[ci]!, keepAlive ? centerRect(cur[ci]!) : pageRect, 'blur'))
+      if (planPairs.some((p) => p.ci >= 0)) {
+        // 部分移除（仍有保留目标）：被移除的洞**并入最近的保留目标**（视觉上“高光汇聚过去”），
+        // 避免原地缩小/扩大造成“洞落在旧位置”的错觉（item 8）；动画结束后去重裁剪。
+        let best = -1
+        let bestD = Infinity
+        for (const p of planPairs) {
+          if (p.ci < 0) continue
+          const d = dist(cur[ci]!, dest[p.ti]!)
+          if (d < bestD) {
+            bestD = d
+            best = p.ti
+          }
+        }
+        newAnims.push(mk(cur[ci]!, dest[best]!, 'blur'))
+      } else {
+        // 全部取消 → 扩大到整页（blur-all）
+        newAnims.push(mk(cur[ci]!, pageRect, 'blur'))
+      }
       hasBlur = true
     }
     if (newAnims.length === 0) {
@@ -371,27 +374,23 @@ export function TutorialSpotlight({
     .map((r) => `${Math.round(r.left)},${Math.round(r.top)},${Math.round(r.width)},${Math.round(r.height)}`)
     .join(';')}`
   const prevSigRef = useRef('')
-  useEffect(() => {
+  // 布局期规划：场景/目标切换在浏览器绘制前完成规划（首帧即用新几何，避免“旧洞闪一下”）
+  useLayoutEffect(() => {
     if (sig === prevSigRef.current) return
-    const wasDim = prevSigRef.current.includes('|1|')
-    const isDim = dimOnly
-    if (isDim && !wasDim) {
-      // 进入 dim：先记录气泡矩形作为过渡终点/下次起点
-      dimBridgeRef.current = measureBubbleRect()
-    } else if (!isDim && wasDim) {
-      // 离开 dim：以气泡矩形为 morph 起点（保持暗→暗连续）
-      dimBridgeRef.current = measureBubbleRect()
-    }
+    // 目标选择器非空但尚未测到 → 不规划（等测量到位后 sig 变化再规划），避免误判为取消
+    if (wantTargets && destRects.length === 0) return
     prevSigRef.current = sig
     plan(destRects)
-    // eslint 无 react-hooks 插件：依赖 sig 即可
-  }, [sig])
+    // eslint 无 react-hooks 插件：依赖 sig / wantTargets 即可
+  }, [sig, wantTargets])
 
   /* ---------- 测量（ResizeObserver / 延迟重测）；更新时动画到新矩形而非瞬跳 ---------- */
   const targetKey = targets.join('|')
-  const effTargetsRef = useRef<string[]>(targets)
-  effTargetsRef.current = active && !dimOnly ? targets : []
-  useEffect(() => {
+  // 注意：dim 节点的目标由引擎内部指定为气泡（engineTargets），这里必须一致，
+  // 否则 effect 侧永远测不到气泡 → 首帧后无重试触发 → 规划器死等
+  const effTargetsRef = useRef<string[]>(engineTargets)
+  effTargetsRef.current = active ? engineTargets : []
+  useLayoutEffect(() => {
     const measure = () => {
       setMeasured(measureRects(effTargetsRef.current))
       setEscapes(measureEscapeRects())
@@ -416,17 +415,44 @@ export function TutorialSpotlight({
     // eslint 无 react-hooks 插件：deps 用 targetKey（字符串）而非数组字面量，避免每次渲染重跑
   }, [targetKey, measureKey, active, dimOnly, sig])
 
-  // 卸载时停掉 rAF
-  useEffect(() => () => cancelAnimationFrame(rafRef.current), [])
+  // 首帧提交后清空 carry（不重复消费）；卸载时停 rAF 并把当前洞几何留给下一阶段
+  useEffect(() => {
+    clearSpotlightCarry()
+  }, [])
+  useEffect(
+    () => () => {
+      loopGenRef.current++
+      cancelAnimationFrame(rafRef.current)
+      rafRef.current = 0
+      rememberSpotlightRects(curRef.current)
+    },
+    [],
+  )
 
   /* ---------- 渲染 ---------- */
-  if (modalOpen) return null
+  if (modalOpen) {
+    return (
+      <svg
+        className="tutorial-spotlight"
+        data-spotlight-mode="holes"
+        data-spotlight-anim="none"
+        data-spotlight-holes={1}
+        data-spotlight-holes-raw={1}
+        data-spotlight-block="0"
+        width={W}
+        height={H}
+        aria-hidden="true"
+      >
+        <path d={`M0 0 H${W} V${H} H0 Z M0 0 H${W} V${H} H0 Z`} fillRule="evenodd" fill={DARK} />
+      </svg>
+    )
+  }
 
   const rects = frame.rects
   const animating = frame.anim !== 'none'
-  // 纯 dim 且动画已收拢 → 用整屏暗层（div，无 path）；过渡期间仍走 SVG 引擎
+  const mode: 'dim' | 'holes' | 'hybrid' = dim ? (dimOnly ? 'dim' : 'hybrid') : 'holes'
+  /** 纯 dim 且动画静止：渲染整屏暗层（气泡 z 豁免）；过渡期（含切到气泡）由空洞引擎承担 */
   const renderDimLayer = dimOnly && !animating
-  const mode: 'dim' | 'holes' | 'hybrid' = renderDimLayer ? 'dim' : dim ? 'hybrid' : 'holes'
 
   const padMerge = (list: TargetRect[]) => {
     const outer = list
@@ -439,8 +465,9 @@ export function TutorialSpotlight({
       .map((r) => ({ left: r.left, top: r.top, width: r.right - r.left, height: r.bottom - r.top }))
     return mergeHoleRects(outer)
   }
-  // 视觉洞 = 当前动画几何（含外扩合并）；交互洞 = 视觉洞 ∪ 目标 ∪ 豁免（目标在动画中也绝不被阻断）
-  const visualHoles = padMerge(rects)
+  // 视觉洞 = 当前动画几何 ∪ 豁免元素（气泡/横幅/退出按钮等既不被压暗也不被阻断）
+  const visualHoles = padMerge([...rects, ...mergedEscapes])
+  // 交互洞 = 视觉洞 ∪ 目标（动画途中目标绝不被阻断）
   const interactiveHoles = padMerge([...rects, ...destRects, ...mergedEscapes])
 
   const framePath = `M0 0 H${W} V${H} H0 Z`
@@ -454,11 +481,15 @@ export function TutorialSpotlight({
         <div
           className="tutorial-spotlight tutorial-spotlight--dim"
           data-spotlight-mode="dim"
-          data-spotlight-anim={animating ? frame.anim : 'none'}
+          data-spotlight-anim="none"
+          data-spotlight-holes={1}
+          data-spotlight-holes-raw={0}
           data-spotlight-block={block ? '1' : '0'}
           aria-hidden="true"
         />
-        {block ? <BlockBands holes={interactiveHoles} W={W} H={H} /> : null}
+        {/* 整屏暗层语义：除气泡（z 210）与豁免元素（.tutorial-escape z 160）外全部阻断；
+            这里用整幅阻断带而非补集切片，保证首帧（几何尚未测量）就有阻断 */}
+        {block ? <div className="tutorial-block" aria-hidden="true" /> : null}
       </>
     )
   }
@@ -466,11 +497,18 @@ export function TutorialSpotlight({
   return (
     <>
       <svg
-        className="tutorial-spotlight"
+        className={['tutorial-spotlight', dim ? 'tutorial-spotlight--dim' : '']
+          .filter(Boolean)
+          .join(' ')}
+
         data-spotlight-mode={mode}
         data-spotlight-anim={frame.anim}
         data-spotlight-holes={visualHoles.length}
         data-spotlight-holes-raw={rects.length}
+        data-spotlight-dest={destRects
+          .map((r) => `${Math.round(r.left)},${Math.round(r.top)},${Math.round(r.width)},${Math.round(r.height)}`)
+          .join(';')}
+        data-spotlight-sel={engineTargets.join('|')}
         data-spotlight-block={block ? '1' : '0'}
         width={W}
         height={H}

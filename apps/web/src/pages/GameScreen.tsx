@@ -77,9 +77,17 @@ interface GameScreenProps {
   aiShotSelector?: (knowledge: ShotKnowledge, rng: Rng) => Cell | null
   /** 教程（v0.3.1）：终局不弹出胜负结算 overlay（只发 playerWin/playerLose 事件，由教程气泡/弹窗接管） */
   hideSettlement?: boolean
+  /** 教程（v0.3.17）：先后手横幅不渲染自带半透明暗底（避免与教程遮罩双重压暗）；默认 false 不影响普通对局 */
+  hideBannerBackdrop?: boolean
 }
 
-export function GameScreen({ mode = 'single', onGameEvent, aiShotSelector, hideSettlement }: GameScreenProps) {
+export function GameScreen({
+  mode = 'single',
+  onGameEvent,
+  aiShotSelector,
+  hideSettlement,
+  hideBannerBackdrop = false,
+}: GameScreenProps) {
   const session = useGameStore((s) => s.session)
   const applyShotAt = useGameStore((s) => s.applyShotAt)
   const advanceBlitz = useGameStore((s) => s.advanceBlitz)
@@ -1027,8 +1035,19 @@ export function GameScreen({ mode = 'single', onGameEvent, aiShotSelector, hideS
 
       {/* 先后手横幅 */}
       {screen === 'banner' ? (
-        <div className="game-banner" role="status" aria-live="assertive">
-          <div className="game-banner__card">
+        <div
+          className={[
+            'game-banner',
+            // v0.3.17：教程豁免（遮罩 z130 之上，固定定位由 m4.css .game-banner.tutorial-escape 覆盖保障）
+            'tutorial-escape',
+            hideBannerBackdrop ? 'game-banner--no-backdrop' : '',
+          ]
+            .filter(Boolean)
+            .join(' ')}
+          role="status"
+          aria-live="assertive"
+        >
+          <div className="game-banner__card tutorial-escape">
             <span className="game-banner__label">本局先后手</span>
             <span className="game-banner__text">{bannerText}</span>
             <span className="game-banner__sub">

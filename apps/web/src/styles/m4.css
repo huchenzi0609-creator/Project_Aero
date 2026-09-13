@@ -201,6 +201,19 @@
   /* v0.3.6：独占命名，规避 m6.css 同名 @keyframes fadeIn（translate(-50%,…)）抢占导致左移闪烁 */
   animation: gameBannerFadeIn 220ms ease-out;
 }
+/* v0.3.17：教程豁免——横幅位于突显遮罩（z130）之上；卡片同豁免 */
+.game-banner.tutorial-escape {
+  position: fixed; /* .tutorial-escape 默认 position:relative，会破坏 fixed 铺满，此处显式恢复 */
+  z-index: 170;
+}
+.game-banner.tutorial-escape .game-banner__card {
+  position: relative;
+  z-index: 171;
+}
+/* v0.3.17：教程流程中隐去横幅自带暗底（仅保留卡片本体），避免与教程遮罩双重压暗 */
+.game-banner.game-banner--no-backdrop {
+  background: transparent;
+}
 .game-banner__card {
   display: flex;
   flex-direction: column;
