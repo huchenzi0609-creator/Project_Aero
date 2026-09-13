@@ -25,32 +25,11 @@ const MODE_CARDS: ReadonlyArray<{
   key: PracticeMode | 'custom'
   label: string
   badgeClass: string
-  sub: string
 }> = [
-  {
-    key: 'classic',
-    label: '经典模式',
-    badgeClass: 'practice__badge--classic',
-    sub: '常规对局：先摆阵，再随机先后手轮流报点。',
-  },
-  {
-    key: 'blitz',
-    label: '超快棋模式',
-    badgeClass: 'practice__badge--blitz',
-    sub: '开局倒计时 10×n 秒（3/5/7 架为 30/50/70 秒），超时判负。',
-  },
-  {
-    key: 'blind',
-    label: '盲棋模式',
-    badgeClass: 'practice__badge--blind',
-    sub: '不记旧报点，禁用参考飞机与着色。',
-  },
-  {
-    key: 'custom',
-    label: '自定义模式',
-    badgeClass: 'practice__badge--custom',
-    sub: '自定棋盘尺寸与飞机形状，全部校验通过才可开战。',
-  },
+  { key: 'classic', label: '经典模式', badgeClass: 'practice__badge--classic' },
+  { key: 'blitz', label: '超快棋模式', badgeClass: 'practice__badge--blitz' },
+  { key: 'blind', label: '盲棋模式', badgeClass: 'practice__badge--blind' },
+  { key: 'custom', label: '自定义模式', badgeClass: 'practice__badge--custom' },
 ]
 
 const SIZE_CARDS: ReadonlyArray<{ key: SizeKey; label: string; sub: string }> = [
@@ -275,7 +254,6 @@ export function PracticeMenu({ onExit }: { onExit?: () => void }) {
             </span>
             <span className="practice__mode-text">
               <span className="practice__mode-label">{m.label}</span>
-              <span className="practice__mode-sub">{m.sub}</span>
             </span>
           </PaperButton>
         ))}
