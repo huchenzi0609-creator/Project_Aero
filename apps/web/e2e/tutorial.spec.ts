@@ -10,16 +10,6 @@
  *   6) 阵型合法时 thanks 阶段即突显「确认布阵」；
  *   7) 放错位置的幽灵【不被回收】→ 复用同一架（旋转/拖动）即可换朝向重试成功。
  *
- * v0.3.18-beta4 适配/护栏：
- *   - 取消跨目标 transfer（跨目标 = 被移除洞原地缩小 + 新增洞原地放大）→ i2→i3 / 交接改为
- *     **几何连续性**断言（原地漂移 ≤2px、逐洞单帧位移 ≤10px），不再断言 transfer 标签；
- *   - 气泡洞 = box ∪ 尾巴 ∪ 投影 → 贴合断言改为四边余量 ∈[1,20]px 且尾巴侧 ≥10px；
- *   - 位移钳制使大形变过渡变长 → 聚焦观测窗改用「采到落定即停」（observeFrames untilSettled）；
- *   - 新增护栏：交接窗口无整页洞（≥90% 页面积）/无「既无 svg 也无 sheet」帧；
- *     单元1 场景2→场景3、单元2 待选栏→待选栏+网格、单元3 交接的逐洞单帧位移 ≤10px；
- *     跨目标替换的原地进出（同阶段 ≤2px / 交接处新挂载气泡 ≤6px）；
- *     切片数 A→B→A 只在**静置态**判失败（过渡期并集拓扑变化属分解实现量，改由位移钳制守护）。
- *
  * v0.3.18-beta3 适配/护栏：
  *   - 空洞按**目标身份配对**（-hole-keys / -dest-keys）：同 key 的洞只做自身几何插值（原地保持）；
  *     `staticMs` 由「只看首洞」改为**多洞口径**（身份配对后首个洞可能正确地原地不动）；
@@ -300,12 +290,8 @@ function pickHole(f: SpotlightFrame, key: string): HoleRect | null {
   return f.animRects[0] ?? null
 }
 /** rAF 轮询逐帧采样遮罩属性（dest 变化前开始观测；覆盖 ~340ms smootherstep 过渡 + v0.3.17-beta4 聚焦静止期） */
-async function observeFrames(
-  page: Page,
-  ms = 700,
-  opts: { untilSettled?: boolean } = {},
-): Promise<SpotlightFrame[]> {
-  return page.evaluate(async ([dur, untilSettled]) => {
+async function observeFrames(page: Page, ms = 700): Promise<SpotlightFrame[]> {
+  return page.evaluate(async (dur: number) => {
     // v0.3.18-beta1：洞几何改读 data-spotlight-rects（分号分隔 l,t,w,h 的去重叠切片列表）——
     // 圆角后 path 由弧线构成，M…H…V…H…Z 解析会得到 0 个洞。切片互不重叠 → 面积和 = 并集面积。
     const parseHoles = (raw: string | null) => {
@@ -332,25 +318,9 @@ async function observeFrames(
       holeKeys: string[]
     }> = []
     const t0 = performance.now()
-    let seenAnim = false
-    let quiet = 0
-    while (performance.now() - t0 < (dur as number)) {
+    while (performance.now() - t0 < dur) {
       const el = document.querySelector('.tutorial-spotlight')
       if (el) {
-        const animNow = el.getAttribute('data-spotlight-anim')
-        if (animNow && animNow !== 'none') {
-          seenAnim = true
-          quiet = 0
-        } else if (seenAnim) {
-          // v0.3.18-beta4：位移钳制后大形变过渡变长 → 允许「首个过渡帧之后连续 6 帧 none」即提前收工
-          quiet += 1
-          if (untilSettled && quiet >= 6) {
-            // 先记下本帧再退出
-            const pushQuiet = () => undefined
-            pushQuiet()
-            break
-          }
-        }
         const holes = parseHoles(el.getAttribute('data-spotlight-rects'))
         const area = holes.reduce(
           (a, [l, t, r, b]) => a + Math.max(0, r - l) * Math.max(0, b - t),
@@ -394,7 +364,7 @@ async function observeFrames(
       await new Promise((r) => requestAnimationFrame(() => r(null)))
     }
     return out
-  }, [ms, Boolean(opts.untilSettled)] as [number, boolean])
+  }, ms)
 }
 /** 过渡期间出现过的 data-spotlight-anim 取值集合 */
 function animSet(frames: SpotlightFrame[]): string[] {
@@ -551,7 +521,7 @@ function expectHoleTracked(samples: HoleTrackSample[], label: string, ratio = 0.
  * v0.3.18-beta3 item4：某 key 的洞先原地保持（漂移 ≤6px），随后**面积单调递减并最终消失**。
  * 注意实现：未配对旧洞会原地缩小，但其身份键会被抹为 '-' → 需 follow 模式延续跟踪几何。
  */
-function expectHoleShrinksAway(samples: HoleTrackSample[], label: string, maxDriftPx = 6): void {
+function expectHoleShrinksAway(samples: HoleTrackSample[], label: string): void {
   expect(samples[0]?.keyed, `${label} 起始帧应带身份键`).toBe(true)
   const base = samples[0]!
   const tracked = samples.filter((s) => s.tracked)
@@ -562,25 +532,14 @@ function expectHoleShrinksAway(samples: HoleTrackSample[], label: string, maxDri
     if (s.area <= base.area * 0.05) continue
     maxDrift = Math.max(maxDrift, Math.hypot(s.cx - base.cx, s.cy - base.cy))
   }
-  expect(
-    maxDrift,
-    `${label} 消失前中心漂移应 ≤${maxDriftPx}px（实测 ${maxDrift.toFixed(1)}px）`,
-  ).toBeLessThanOrEqual(maxDriftPx)
-  // 面积：**收缩开始后**单调不增（容差 = 首帧 1%，吸收目标自身 1–3px 的布局 settle 与亚像素重测）
-  // —— 收缩前的静置帧允许目标微动（守卫「不得飞走」的是上面的漂移检查与逐洞单帧位移 ≤10px）
-  let prev: number | null = null
+  expect(maxDrift, `${label} 消失前中心漂移应 ≤6px（实测 ${maxDrift.toFixed(1)}px）`).toBeLessThanOrEqual(6)
+  // 面积：单调不增（容差 1px²）
+  let prev = base.area
   let shrinkRatio = 1
-  const areaTol = Math.max(1, base.area * 0.01)
   for (const s of tracked) {
+    expect(s.area, `${label} 面积不应增长（${s.area.toFixed(0)} > 前一帧 ${prev.toFixed(0)}）`).toBeLessThanOrEqual(prev + 1)
+    prev = s.area
     shrinkRatio = Math.min(shrinkRatio, s.area / base.area)
-    if (prev === null && s.area <= base.area * 0.9) prev = s.area
-    if (prev !== null) {
-      expect(
-        s.area,
-        `${label} 收缩开始后面积不应回升（${s.area.toFixed(0)} > 前一帧 ${prev.toFixed(0)} + 容差 ${areaTol.toFixed(0)}）`,
-      ).toBeLessThanOrEqual(prev + areaTol)
-      prev = s.area
-    }
   }
   // 确实观察到「缩小」（≤25%）而不是被瞬间移除
   expect(shrinkRatio, `${label} 应观察到面积递减（最小 ${(shrinkRatio * 100).toFixed(0)}% ≤25%）`).toBeLessThanOrEqual(0.25)
@@ -598,12 +557,9 @@ async function sampleHandover(page: Page, ms: number) {
     let frames = 0
     let emptyPlanFullHole = 0
     let holeNotFullNoBlock = 0
-    let noMaskFrames = 0 // 既无 svg 也无 sheet（遮罩整体缺席）
-    let fullPageHole90 = 0 // 洞面积 ≥0.9×页面积（「整页洞」帧）
     const t0 = performance.now()
     while (performance.now() - t0 < (dur as number)) {
       const el = document.querySelector('.tutorial-spotlight')
-      if (!el) noMaskFrames += 1
       if (el) {
         frames += 1
         const area = (el.getAttribute('data-spotlight-rects') ?? '')
@@ -613,153 +569,15 @@ async function sampleHandover(page: Page, ms: number) {
           .reduce((a, [, , w, h]) => a + Math.max(0, w!) * Math.max(0, h!), 0)
         const vp = window.innerWidth * window.innerHeight
         const full = vp > 0 && area >= 0.98 * vp
-        const full90 = vp > 0 && area >= 0.9 * vp
         const sel = el.getAttribute('data-spotlight-sel') ?? ''
         const blocks = document.querySelectorAll('.tutorial-block').length
-        if (full90) fullPageHole90 += 1
         if (sel === '' && full) emptyPlanFullHole += 1
         if (!full && blocks === 0) holeNotFullNoBlock += 1
       }
       await new Promise((r) => requestAnimationFrame(() => r(null)))
     }
-    return { frames, emptyPlanFullHole, holeNotFullNoBlock, noMaskFrames, fullPageHole90 }
+    return { frames, emptyPlanFullHole, holeNotFullNoBlock }
   }, ms)
-}
-/**
- * v0.3.18-beta4 缺陷 1 护栏：气泡洞应覆盖 **box ∪ 尾巴 ∪ 投影** ——
- * 四边余量 ∈[1,tol]px，且尾巴所在侧（`--top` 变体尾巴在上）余量 ≥10px。
- */
-async function expectBubbleHoleCoversTail(page: Page, key = '.tutorial-bubble', tol = 20): Promise<void> {
-  const m = await page.evaluate((k) => {
-    const el = document.querySelector(k) as HTMLElement | null
-    const spot = document.querySelector('.tutorial-spotlight')
-    if (!el || !spot) return null
-    const keys = (spot.getAttribute('data-spotlight-hole-keys') ?? '').split('|')
-    const rects = (spot.getAttribute('data-spotlight-anim-rects') ?? '').split(';').filter(Boolean)
-    const i = keys.indexOf(k)
-    if (i < 0 || !rects[i]) return null
-    const [l, t, w, h] = rects[i]!.split(',').map(Number)
-    const b = el.getBoundingClientRect()
-    return {
-      tailTop: el.classList.contains('tutorial-bubble--top'),
-      left: b.left - l!,
-      top: b.top - t!,
-      right: l! + w! - (b.left + b.width),
-      bottom: t! + h! - (b.top + b.height),
-    }
-  }, key)
-  expect(m, '应能读到气泡 box 与气泡洞（-hole-keys × -anim-rects）').not.toBeNull()
-  const sides: Array<[string, number]> = [
-    ['左', m!.left],
-    ['上', m!.top],
-    ['右', m!.right],
-    ['下', m!.bottom],
-  ]
-  for (const [name, v] of sides) {
-    expect(v, `气泡洞 ${name} 侧余量应 ≥1px（实测 ${v.toFixed(1)}）`).toBeGreaterThanOrEqual(1)
-    expect(v, `气泡洞 ${name} 侧余量应 ≤${tol}px（实测 ${v.toFixed(1)}）`).toBeLessThanOrEqual(tol)
-  }
-  const tailSide = m!.tailTop ? '上' : '下'
-  const tail = m!.tailTop ? m!.top : m!.bottom
-  expect(
-    tail,
-    `气泡洞应覆盖尾巴与投影（${tailSide}侧应 ≥10px，实测 ${tail.toFixed(1)}）`,
-  ).toBeGreaterThanOrEqual(10)
-}
-interface HoleStepFrame {
-  t: number
-  holes: Array<{ key: string; l: number; t: number; w: number; h: number; cx: number; cy: number }>
-}
-/** v0.3.18-beta4 护栏2：逐帧采集每洞几何（-hole-keys × -anim-rects 同序），用于单帧位移钳制断言 */
-async function sampleHoleSteps(page: Page, ms: number): Promise<HoleStepFrame[]> {
-  return page.evaluate(async (dur: number) => {
-    const out: Array<{
-      t: number
-      holes: Array<{ key: string; l: number; t: number; w: number; h: number; cx: number; cy: number }>
-    }> = []
-    const t0 = performance.now()
-    while (performance.now() - t0 < (dur as number)) {
-      const el = document.querySelector('.tutorial-spotlight')
-      if (el) {
-        const keys = (el.getAttribute('data-spotlight-hole-keys') ?? '').split('|')
-        const rects = (el.getAttribute('data-spotlight-anim-rects') ?? '').split(';').filter(Boolean)
-        out.push({
-          t: performance.now() - t0,
-          holes: rects.map((seg, i) => {
-            const [l, t, w, h] = seg.split(',').map(Number)
-            return {
-              key: keys[i] ?? '-',
-              l: l!,
-              t: t!,
-              w: w!,
-              h: h!,
-              cx: l! + w! / 2,
-              cy: t! + h! / 2,
-            }
-          }),
-        })
-      }
-      await new Promise((r) => requestAnimationFrame(() => r(null)))
-    }
-    return out
-  }, ms)
-}
-/** v0.3.18-beta4 护栏2：逐洞单帧边界位移最大值（同 key 配对；无 key 时按中心 ≤8px 就近配对） */
-function maxHoleStepPx(frames: HoleStepFrame[]): number {
-  let max = 0
-  for (let i = 1; i < frames.length; i++) {
-    const prev = frames[i - 1]!.holes
-    const cur = frames[i]!.holes
-    const used = new Set<number>()
-    for (const p of prev) {
-      let j = p.key !== '-' ? cur.findIndex((c, k) => !used.has(k) && c.key === p.key) : -1
-      if (j < 0) {
-        let best = -1
-        let bestD = Infinity
-        cur.forEach((c, k) => {
-          if (used.has(k)) return
-          const d = Math.hypot(c.cx - p.cx, c.cy - p.cy)
-          if (d < bestD) {
-            bestD = d
-            best = k
-          }
-        })
-        if (best >= 0 && bestD <= 8) j = best
-      }
-      if (j < 0) continue
-      used.add(j)
-      const c = cur[j]!
-      max = Math.max(
-        max,
-        Math.abs(c.l - p.l),
-        Math.abs(c.t - p.t),
-        Math.abs(c.l + c.w - (p.l + p.w)),
-        Math.abs(c.t + c.h - (p.t + p.h)),
-      )
-    }
-  }
-  return max
-}
-/** v0.3.18-beta4 护栏2：单帧边界位移应 ≤10px（引擎钳制 HOLE_MAX_STEP_PX=8） */
-function expectMaxHoleStep(frames: HoleStepFrame[], label: string, maxPx = 10): void {
-  expect(frames.length, `${label} 应采到帧`).toBeGreaterThan(10)
-  const step = maxHoleStepPx(frames)
-  expect(step, `${label} 逐洞单帧边界位移应 ≤${maxPx}px（实测 ${step.toFixed(1)}px）`).toBeLessThanOrEqual(maxPx)
-}
-/** v0.3.18-beta4 护栏3：新增洞应**在其目标处原地放大出现**（首帧中心≈落定中心，且面积由小到大） */
-function expectHoleGrowsInPlace(samples: HoleTrackSample[], label: string, maxDrift = 2): void {
-  const tracked = samples.filter((s) => s.tracked)
-  expect(tracked.length, `${label} 应采到新增洞帧`).toBeGreaterThan(3)
-  const first = tracked[0]!
-  const last = tracked[tracked.length - 1]!
-  const drift = Math.hypot(first.cx - last.cx, first.cy - last.cy)
-  expect(drift, `${label} 首帧中心应≈落定中心（原地放大，漂移 ${drift.toFixed(1)}px ≤${maxDrift}px）`).toBeLessThanOrEqual(
-    maxDrift,
-  )
-  expect(
-    first.area,
-    `${label} 应从中心放大（首帧面积 ${first.area.toFixed(0)} 应 ≤25% 落定面积 ${last.area.toFixed(0)}）`,
-  ).toBeLessThanOrEqual(last.area * 0.25 + 1)
 }
 /** 等待遮罩过渡落定（data-spotlight-anim 回到 none）：让观测窗只覆盖目标过渡，不混入入场 focus */
 async function expectSpotlightSettled(page: Page): Promise<void> {
@@ -949,27 +767,13 @@ function expectHoleCountStable(frames: SpotlightFrame[], label: string): void {
   const zero = seq.filter((f) => f.holes === 0)
   expect(zero.length, `${label} 不得出现零洞帧（遮罩恒有洞）`).toBe(0)
   const osc: string[] = []
-  const softNotes: string[] = []
   for (let i = 2; i < seq.length; i++) {
     const a = seq[i - 2]!.holes
     const b = seq[i - 1]!.holes
     const c = seq[i]!.holes
-    if (a === c && b !== a) {
-      // 切片数只是 evenodd **分解实现量**：新增洞原地放大/旧洞缩小时，并集拓扑会合法地跨过切片边界
-      // （本轮实测 5→4→5，同期并集面积按位移钳制单调增长 ~2637px²/帧 = 8px/帧的正常生长）。
-      // 故只有**静置态**（三帧 anim 均为 none）出现 A→B→A 才判「可见闪烁」；
-      // 过渡中的翻转记为 soft note —— 同期可见性由 expectMaxHoleStep（逐洞单帧位移 ≤10px）守护。
-      const settled = seq[i - 2]!.anim === 'none' && seq[i - 1]!.anim === 'none' && seq[i]!.anim === 'none'
-      const note = `${a}→${b}→${c}@${Math.round(seq[i]!.t)}ms(area ${seq[i - 2]!.area.toFixed(0)}→${seq[i - 1]!.area.toFixed(0)}→${seq[i]!.area.toFixed(0)}, anim ${seq[i - 2]!.anim}/${seq[i - 1]!.anim}/${seq[i]!.anim})`
-      if (settled) osc.push(note)
-      else softNotes.push(note)
-    }
+    if (a === c && b !== a) osc.push(`${a}→${b}→${c}@${Math.round(seq[i]!.t)}ms`)
   }
-  expect(
-    osc,
-    `${label} 静置态切片数不得出现 A→B→A 跳变（可见闪烁）；` +
-      `另有 ${softNotes.length} 次亚像素拓扑翻转（并集连续，不计失败）：${softNotes.slice(0, 3).join(' / ')}`,
-  ).toEqual([])
+  expect(osc, `${label} 切片数不得出现 A→B→A 跳变（闪烁）`).toEqual([])
 }
 /** v0.3.18-beta2 bug3 护栏：气泡洞连续（单帧位移 ≤ 全程 15%，掉帧对跳过；v0.3.18-beta3 按键取洞） */
 function expectBubbleHoleContinuity(frames: SpotlightFrame[], label: string, key = '.tutorial-bubble'): void {
@@ -1014,6 +818,22 @@ async function expectBaseSettled(page: Page): Promise<void> {
       { timeout: 6000, message: '基础态应落定（anim=none 且洞=整页）' },
     )
     .toEqual({ anim: 'none', full: true })
+}
+/** 按身份键读某目标的洞矩形（读 -hole-keys × -anim-rects 同序配对；找不到返回 null） */
+async function holeRectByKey(
+  page: Page,
+  key: string,
+): Promise<{ left: number; top: number; width: number; height: number } | null> {
+  const [keysRaw, rectsRaw] = await Promise.all([
+    spotlightAttr(page, 'data-spotlight-hole-keys'),
+    spotlightAttr(page, 'data-spotlight-anim-rects'),
+  ])
+  const keys = (keysRaw ?? '').split('|')
+  const rects = (rectsRaw ?? '').split(';').filter(Boolean)
+  const i = keys.indexOf(key)
+  if (i < 0 || !rects[i]) return null
+  const [left, top, width, height] = rects[i]!.split(',').map(Number)
+  return { left: left!, top: top!, width: width!, height: height! }
 }
 /** 目标中心点“命中信息”：topmost 元素是否落在阻断带 / 气泡 / 退出豁免里 */
 async function hitInfo(page: Page, selector: string) {
@@ -1461,18 +1281,10 @@ async function runUnit1(page: Page): Promise<void> {
   await expect(page.locator('.tutorial-fx--success')).toHaveCount(1)
   expect((await u1Marks(page, 10))['E5'], '机头命中应为 ★').toBe('kill')
   await expect(page.locator('.u1-grid .paper-grid__plane--ghost')).toHaveCount(1)
-  // v0.3.18-beta4 护栏2/3：场景2→场景3（网格洞 → 仅气泡）——逐洞单帧位移 ≤10px；
-  // 被移除的 `.u1-grid` 洞原地缩到 0（漂移 ≤2px）、新增气泡洞在其目标处原地放大（首帧中心≈落定中心）
-  const sceneSteps = sampleHoleSteps(page, 2200)
-  const gridTrack = trackHole(page, '.u1-grid', 2200, true)
-  const bubbleTrackScene = trackHole(page, '.tutorial-bubble', 2200, true)
   await clickBubble(page) // → 场景3 s3a（纯压暗）
   // 场景3 歧义讲解 → J7 试错 → F7 命中
   await expect(bubble(page)).toContainText('在这种情况下，我们不能完全确定机头位置呢。')
   await expectPureDim(page)
-  expectMaxHoleStep(await sceneSteps, '单元1 场景2→场景3')
-  expectHoleShrinksAway(await gridTrack, '场景2→场景3 被移除的 .u1-grid 洞', 2)
-  expectHoleGrowsInPlace(await bubbleTrackScene, '场景2→场景3 新增的 .tutorial-bubble 洞', 2)
   await clickBubble(page)
   await expect(bubble(page)).toContainText('机头可能在F7，也可能在J7。')
   await clickBubble(page) // → s3j7（突显 J7 格）
@@ -1530,12 +1342,9 @@ async function advanceUnit2ToThanks(page: Page): Promise<void> {
   await expect(spotlight(page)).toHaveCount(1)
   // v0.3.18-beta2 bug6 护栏：单目标 → 双目标（待选栏+网格）过渡逐帧采样：零洞帧 0、切片数无 A→B→A 跳变
   const trayFrames = observeFrames(page, 1500)
-  const traySteps = sampleHoleSteps(page, 1500)
   await clickBubble(page) // → drag
   await expect(bubble(page)).toContainText('现在就试试看吧！把飞机拖到网格里！')
   expectHoleCountStable(await trayFrames, '待选栏→待选栏+网格')
-  // 可见性判据（v0.3.18-beta4）：新增/移除洞的生长与收缩逐洞单帧位移 ≤10px（引擎钳制 8px）
-  expectMaxHoleStep(await traySteps, '待选栏→待选栏+网格')
   // v0.3.17-beta2 item 4：待选栏 + 我方网格【双目标同时生效】（引擎洞数 = 2）
   await expect.poll(() => rawHoles(page), { timeout: 5000 }).toBe(2)
   expect(await engineSel(page), '双目标应同时包含待选栏与网格').toContain('.placement__tray')
@@ -1606,10 +1415,23 @@ async function runUnit2(page: Page): Promise<void> {
   await clickBubble(page)
   await expect(bubble(page)).toContainText('首先要做的一件事是')
   const bf = await bubbleFrames
-  // (1) v0.3.18-beta4 缺陷 1：气泡洞 = box ∪ 尾巴 ∪ 投影（不再等于 border box）——
-  //     落定后四边余量 ∈[1,20]px 且尾巴所在侧 ≥10px（覆盖 ~10px 尾巴 + ~4px 投影）
-  await expectSpotlightSettled(page)
-  await expectBubbleHoleCoversTail(page, '.tutorial-bubble')
+  // (1) 到位后洞（未加 PAD 的动画矩形）应贴合气泡实测矩形 ≤1.2px
+  await expect
+    .poll(
+      async () => {
+        const d = await holeRectByKey(page, '.tutorial-bubble')
+        const b = await page.locator('.tutorial-bubble').boundingBox()
+        if (!d || !b) return null
+        return Math.max(
+          Math.abs(d.left - b.x),
+          Math.abs(d.top - b.y),
+          Math.abs(d.width - b.width),
+          Math.abs(d.height - b.height),
+        )
+      },
+      { timeout: 5000, message: '换段后气泡洞应贴合气泡 rect（≤1.2px）' },
+    )
+    .toBeLessThanOrEqual(1.2)
   // (2) 过渡连续：不得单帧吃掉 >15% 行程（anim 不再要求 none）
   expectBubbleHoleContinuity(bf, '气泡换段')
   await clickBubble(page)
@@ -1625,12 +1447,8 @@ async function runUnit2(page: Page): Promise<void> {
   // v0.3.17-beta2 item 5：detect 合法态 = 我方网格洞 + 确认按钮洞（双目标）
   await expect.poll(() => rawHoles(page), { timeout: 5000 }).toBe(2)
   expect(await engineSel(page)).toContain('.placement__board-wrap')
-  // v0.3.18-beta4 缺陷 2/3：跨阶段交接不再 transfer —— 新阶段沿用上一阶段几何后交叉淡入：
-  // 被移除洞（确认/网格）原地缩到 0、气泡洞在其目标处原地放大；全程无「整页洞」帧、无「既无 svg 也无 sheet」帧
+  // item 6：跨阶段交接——确认布阵后单元3 首个遮罩过渡应为 transfer（洞从确认按钮续接）
   const carryFrames = observeFrames(page, 3000)
-  const carrySteps = sampleHoleSteps(page, 3000)
-  const confirmTrackCarry = trackHole(page, '.tutorial-confirm', 3000, true)
-  const bubbleTrackCarry = trackHole(page, '.tutorial-bubble', 3000, true)
   // v0.3.18-beta3 item2 护栏：交接窗口（≥3s）内不得出现「空计划帧（sel 空且洞≈整页）」，
   // 也不得出现「洞已非整页但阻断带为 0」的帧
   const handover = sampleHandover(page, 3000)
@@ -1638,20 +1456,14 @@ async function runUnit2(page: Page): Promise<void> {
   const bannerCheck = expectNoTutorialBanner(page)
   await page.getByRole('button', { name: '确认布阵' }).click()
   const cf = await carryFrames
-  // v0.3.18-beta4 item 7（改写）：跨阶段续接回归 = **几何连续**（沿用上一阶段洞几何，无整页洞、无 transfer 搬运）
-  expect(cf[0]?.full ?? true, '交接首帧不应是整页洞（应沿用上一阶段几何）').toBe(false)
-  expect(animSet(cf), '跨目标交接不应再产生 transfer 标签').not.toContain('transfer')
+  // v0.3.17-beta4 item 7：跨阶段续接回归——首个过渡必须是 transfer，且起点非整页（续接确认按钮洞）
+  expect(animSet(cf), 'unit2→unit3 应为 transfer（spotlightCarry 跨阶段续接）').toContain('transfer')
+  const firstCarry = cf.find((f) => f.anim === 'transfer')
+  expect(firstCarry?.full, '交接首帧不应是整页洞（应从确认按钮洞续接）').toBe(false)
   const ho = await handover
   expect(ho.frames, '交接窗口应采到帧').toBeGreaterThan(20)
   expect(ho.emptyPlanFullHole, '交接窗口不得出现「空计划帧（sel 空 + 洞≈整页）」').toBe(0)
   expect(ho.holeNotFullNoBlock, '交接窗口不得出现「洞非整页但阻断带=0」的帧').toBe(0)
-  expect(ho.fullPageHole90, '交接窗口不得出现「整页洞（≥90% 页面积）」帧').toBe(0)
-  expect(ho.noMaskFrames, '交接窗口不得出现「既无 svg 也无 sheet」的帧').toBe(0)
-  expectMaxHoleStep(await carrySteps, '确认布阵→单元3 交接')
-  expectHoleShrinksAway(await confirmTrackCarry, '交接：被移除的 .tutorial-confirm 洞', 2)
-  // 交接处气泡洞是**新挂载的 portal 元素**（box 在首帧后仍会 settle ~2px），故阈值放宽到 6px；
-  // 跨目标「搬运」会相差数百 px，6px 仍能抓住 fly-in（同阶段内的 i2→i3 / 场景2→场景3 仍用 ≤2px）
-  expectHoleGrowsInPlace(await bubbleTrackCarry, '交接：新增的 .tutorial-bubble 洞', 6)
   await bannerCheck
 }
 
@@ -1794,20 +1606,12 @@ async function runUnit3Intro(
     }
   }
   await expectHit(page, '.game__mine', 'blocked', false)
-  // v0.3.18-beta4 缺陷 2：跨目标不再 transfer → 改判几何连续性：
-  // 被移除的 `.game__mine` 洞原地缩到 0（漂移 ≤2px）、新增 `.game__ref` 洞在其目标处原地放大；
-  // 逐洞单帧位移 ≤10px（位移钳制）
-  const trFrames = observeFrames(page, 1400) // 先开始观测，再触发 i2→i3
-  const trSteps = sampleHoleSteps(page, 1400)
-  const mineTrack = trackHole(page, '.game__mine', 1400, true)
-  const refTrack = trackHole(page, '.game__ref', 1400, true)
+  const trFrames = observeFrames(page, 900) // 先开始观测，再触发 i2→i3
   await clickBubble(page) // → i3（突显参考网格）
   await expect(bubble(page)).toContainText('这是参考网格')
   const trf = await trFrames
-  expectTransitionContracts(trf, 'i2→i3') // 无静止期（跨目标为 add/blur）
-  expectMaxHoleStep(await trSteps, 'i2→i3')
-  expectHoleShrinksAway(await mineTrack, 'i2→i3 被移除的 .game__mine 洞', 2)
-  expectHoleGrowsInPlace(await refTrack, 'i2→i3 新增的 .game__ref 洞', 2)
+  expect(animSet(trf), 'i2→i3 过渡应为 transfer（洞连续转移）').toContain('transfer')
+  expectNoStartDelay(trf, 'transfer') // item 1：transfer 不加静止期
   await expectHit(page, '.game__ref', 'blocked', false)
   await clickBubble(page) // → i4（等真实报点，不可点击推进）
   await expect(bubble(page)).toContainText('这是空网格，你需要通过双击报点来获得对方飞机的信息。试试看！')
@@ -2034,8 +1838,7 @@ test.describe('新手教程', () => {
 
     await openTutorial(page)
     // v0.3.17-beta4 item 1：观测教程首帧「整页 → 气泡」聚焦（先启动观测，再进入教程）
-    // v0.3.18-beta4：位移钳制后大形变过渡显著变长 → 采到落定（连续 6 帧 anim=none）即停
-    const enterFrames = observeFrames(page, 6000, { untilSettled: true })
+    const enterFrames = observeFrames(page, 2200)
     await modal(page).getByRole('button', { name: '还不了解' }).click()
     expectFocusHold(await enterFrames, '教程首帧聚焦')
     // v0.3.18-beta2 bug1/4/5 护栏：单元1 纯压暗首帧起逐帧采样「阻断恒在」+ 豁免不开洞/置顶
@@ -2107,14 +1910,8 @@ test.describe('新手教程', () => {
       ? [firstTarget.coord, ...allHeads.filter((h) => h.id !== firstTarget.id).map((h) => h.coord)]
       : []
 
-    // v0.3.18-beta4：多目标 focus 静止期契约的**确定性**观测点 —— k1 入场（基础态 → 气泡+空网格）。
-    // 先等基础态 blur 落定（自由对局期等待不会消耗任何回合窗口），再启动采样（该期无遮罩过渡），
-    // 采到落定即停；随后断言 focus 静止期 380–900ms。
-    await expectBaseSettled(page)
-    const k1FocusFrames = observeFrames(page, 30_000, { untilSettled: true })
     // 首杀 → k1..k6
     await shootUntil(page, log, 1, { heads })
-    expectFocusHold(await k1FocusFrames, 'k1 入场 focus（基础态→气泡+空网格）')
     const snapAfter = await readBattleSnapshot(page)
     const destroyedId = snapAfter?.destroyedPlaneIds[0]
     const target = snapAfter?.oppHeads.find((h) => h.id === destroyedId) ?? null
@@ -2155,13 +1952,14 @@ test.describe('新手教程', () => {
 
     // v0.3.17-beta1：开场链结束 → 基础态（遮罩常驻、洞=整页、无阻断带）；首杀未发生时可观测 rest→focus
     const preKill = (await readBattleSnapshot(page))?.destroyedPlaneIds.length ?? 0
-    if (preKill === 0) await expectNoHighlight(page)
-    // 注意（v0.3.18-beta4）：**不能**在这里先等基础态 blur 落定 —— 位移钳制后基础 blur 需 ~2.1s，
-    // 会把 AI 唯一的回合窗口耗尽，预报点就无法创建。p1 的 focus 静止期契约改由 k1 入场（确定性路径）守护。
+    if (preKill === 0) {
+      await expectNoHighlight(page)
+      // 先等基础态 blur 落定，保证 p1 走「整页 → 目标」的 focus 路径（否则落在 blur 中途 = transfer/add）
+      await expectBaseSettled(page)
+    }
 
     // 对手回合内创建预报点（`--theirs` 回合色边框为回合信号）→ p1 先播
-    // v0.3.18-beta4：采样窗改为**在创建成功后**才启动（避免 6s rAF 采样与创建重试互相扰动；
-    // focus 静止期 500ms 覆盖「检测延迟 ≤250ms」，首帧仍为整页）
+    const animFocus = observeFrames(page, 3000) // 覆盖创建重试窗口，捕捉 rest→focus（含聚焦静止期）
     const input = page.getByLabel('报点坐标，如 A5')
     const prefire = page.locator('.game__opp .paper-grid__stamp .prefire-mark')
     const n16Text = '你刚才看见的红色'
@@ -2180,16 +1978,14 @@ test.describe('新手教程', () => {
       created = (await prefire.count()) > 0 || (await bubbleTextSafe(page)).includes(n16Text)
     }
     expect(created, '应能在对手回合创建预报点').toBe(true)
-    const animFocus = observeFrames(page, 6000, { untilSettled: true }) // p1 触发点起采样（含钳制后的长过渡）
     // p1：混合模式（整屏压暗 + 空网格开洞 + 气泡豁免）+ 5 段
     await expect(bubble(page)).toContainText('你刚才看见的红色“？”是预报点标记。', { timeout: 10_000 })
     await expectMixedModeInteractive(page)
     if (preKill === 0) {
       const pff = await animFocus
-      // p1 触发点若仍在基础态 blur 中途（位移钳制后基础 blur ~2.1s），该次过渡并非 focus；
-      // 仅当采样窗确实覆盖到「从整页开始的 focus」时才按契约判定（否则由 k1 入场路径守护）
-      const i0 = pff.findIndex((f) => f.anim === 'focus')
-      if (i0 >= 0 && pff[i0]!.full) expectFocusHold(pff, '基础态→p1')
+      expect(animSet(pff), '基础态→p1 应为 focus（洞由整页收缩到目标）').toContain('focus')
+      // v0.3.17-beta4 item 1：focus 前应先静止 380–900ms 再开始收缩（整页静止期判据用洞并集面积）
+      expectFocusHold(pff, '基础态→p1')
     }
     for (let k = 0; k < 6; k++) {
       if ((await bubbleTextSafe(page)).includes('预报点标记最多可以同时存在10个。')) break

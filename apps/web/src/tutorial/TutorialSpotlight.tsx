@@ -39,14 +39,6 @@ const DARK = 'rgba(58, 46, 28, 0.52)'
 const HOLE_ANIM_MS = 560
 /** 空洞四角圆角半径（px，用户指定 3px） */
 const HOLE_RADIUS = 3
-/**
- * v0.3.18-beta4 缺陷 2：**逐帧几何位移上限（px/帧）**。
- * 弹簧起步极快，大范围形变（如单元1 场景2→3 的 315px 高网格洞 → 气泡洞）会出现
- * 单帧位移 26px、面积单帧变化 ~5000px² 的尖峰（用户读作“下一帧突变”）。
- * 这里按**像素**钳制每帧进度增量：步长 = max(1, 8 / travel)，即单帧位移 ≤ 8px；
- * 小形变不受影响（曲线原样），大形变自动变缓（总时长相应略增，换取无尖峰）。
- */
-const HOLE_MAX_STEP_PX = 8
 /** 聚焦前静止期（ms）：基础态/整页洞 → 突显目标 时，先等待再开始收缩（v0.3.17-beta4 item 1） */
 const FOCUS_DELAY_MS = 500
 /**
@@ -86,8 +78,6 @@ interface AnimHole {
   dur: number
   /** 本次过渡类型（用于 data-spotlight-anim） */
   label: AnimLabel
-  /** 逐帧位移钳制用的“已应用进度”（v0.3.18-beta4） */
-  lastP?: number
 }
 
 /* ============ 工具 ============ */
@@ -110,6 +100,12 @@ const centerRect = (r: TargetRect): TargetRect => ({
   width: 0,
   height: 0,
 })
+const center = (r: TargetRect) => ({ x: r.left + r.width / 2, y: r.top + r.height / 2 })
+const dist = (a: TargetRect, b: TargetRect) => {
+  const ca = center(a)
+  const cb = center(b)
+  return Math.hypot(ca.x - cb.x, ca.y - cb.y)
+}
 
 /** 求目标矩形；隐藏目标返回 null */
 function targetRectOf(selector: string): TargetRect | null {
@@ -117,28 +113,7 @@ function targetRectOf(selector: string): TargetRect | null {
   if (!el) return null
   const b = el.getBoundingClientRect()
   if (b.width === 0 || b.height === 0) return null
-  const rect: TargetRect = { left: b.left, top: b.top, width: b.width, height: b.height }
-  /**
-   * v0.3.18-beta4 缺陷 1：对话气泡的**实际可见轮廓**不止 border box ——
-   * `::after` 小尾巴（14×14、rotate(45deg)、bottom:-7px/left:24px → 下探约 10px）
-   * 与投影（`0 8px 18px -4px` → 下方约 13px、左右约 5px）都在 box 之外，
-   * 若按 border box 开洞会把尾巴与下缘切掉（用户录屏可见）。
-   * 这里按 CSS 常量外扩（尾巴在下/在上两种朝向分别处理）。::after 无法直接测量，故用常量换算。
-   */
-  if (el.classList.contains('tutorial-bubble')) {
-    const tailTop = el.classList.contains('tutorial-bubble--top')
-    const TAIL = 10 // 尾巴旋转后下探/上探的可见量
-    const SHADOW = 4 // 投影有效外扩（blur 18 / spread -4 / offset 8 折算后的保守余量）
-    const side = 6
-    const out = {
-      left: b.left - side,
-      top: b.top - (tailTop ? TAIL + SHADOW : side),
-      width: b.width + side * 2,
-      height: b.height + (tailTop ? TAIL + SHADOW : 0) + (tailTop ? 0 : TAIL + SHADOW) + side,
-    }
-    return out
-  }
-  return rect
+  return { left: b.left, top: b.top, width: b.width, height: b.height }
 }
 
 /** 目标洞 + 其**身份键**（= 目标选择器，v0.3.18-beta3 根因 A）：配对按身份而不是按最近几何。 */
@@ -307,24 +282,7 @@ export function TutorialSpotlight({
       const rects = anims.map((a) => {
         const t = Math.min(1, Math.max(0, (now - a.start) / a.dur))
         if (t < 1) done = false
-        let p = HOLE_EASE(t)
-        // 逐帧位移钳制：以该动画的**最大边变化量**为行程，限制单帧进度增量（t 已含时间比例）
-        const travel = Math.max(
-          Math.abs(a.to.left - a.from.left),
-          Math.abs(a.to.top - a.from.top),
-          Math.abs(a.to.width - a.from.width),
-          Math.abs(a.to.height - a.from.height),
-        )
-        if (travel > HOLE_MAX_STEP_PX) {
-          // t 的推进量 → 进度上限：Δp ≤ HOLE_MAX_STEP_PX / travel
-          const keep = (a.lastP ?? 0) + HOLE_MAX_STEP_PX / travel
-          if (p > keep) p = keep
-          a.lastP = p
-          if (p < 1) done = false
-        } else {
-          a.lastP = p
-        }
-        return lerpRect(a.from, a.to, p)
+        return lerpRect(a.from, a.to, HOLE_EASE(t))
       })
       let finalRects = rects
       if (done) {
@@ -387,11 +345,10 @@ export function TutorialSpotlight({
         const carried = peekSpotlightCarry()
         if (carried && carried.length > 0) {
           clearSpotlightCarry()
-          // v0.3.18-beta4 缺陷 2/3：沿用上一阶段**全部**洞几何（key=null 无身份），
-          // 再由本轮计划把它们“原地交叉淡出”、新目标“原地放大出现”——不把洞搬到新目标处。
-          curRef.current = carried.map((r) => ({ ...r }))
-          curKeysRef.current = carried.map(() => null)
-          cur = curRef.current
+          const anchor = dest[0]!
+          const nearest = carried.reduce((a, b) => (dist(a, anchor) <= dist(b, anchor) ? a : b))
+          curRef.current = [nearest]
+          cur = [nearest]
         }
       }
     }
@@ -500,12 +457,29 @@ export function TutorialSpotlight({
       }
     }
     /**
-     * (2) v0.3.18-beta4 缺陷 2：**取消跨目标 transfer**。
-     * 目标集合发生“无身份交集”的替换时（单元1 场景2→场景3 网格→气泡、单元3 i2→i3、
-     * spotlightCarry 续接的旧洞……），不再用最近几何把洞搬过去；而是一律
-     * 「被移除的洞原地缩小消失 + 新增的洞原地放大出现」（交叉淡入）。
-     * 只有**同一目标自身矩形变化**时才做几何插值（上面的身份配对）。
+     * (2) 无任何身份交集（整组替换：单元3 i2→i3 我方网格→参考网格、spotlightCarry 跨阶段续接、
+     * carry 洞 key=null 等）→ 回退到既有「最近中心匹配 + transfer」语义（e2e 的 transfer/首帧非整页断言依赖）。
      */
+    const useNearest = planPairs.length === 0 && cur.length > 0 && dest.length > 0
+    if (useNearest) {
+      for (let ti = 0; ti < dest.length; ti++) {
+        let best = -1
+        let bestD = Infinity
+        for (let ci = 0; ci < cur.length; ci++) {
+          if (usedCur.has(ci)) continue
+          const d = dist(cur[ci]!, dest[ti]!)
+          if (d < bestD) {
+            bestD = d
+            best = ci
+          }
+        }
+        if (best >= 0) {
+          usedCur.add(best)
+          matchedDest.add(ti)
+          planPairs.push({ ci: best, ti })
+        }
+      }
+    }
     const newAnims: AnimHole[] = []
     const newKeys: (string | null)[] = []
     let hasAdd = false
@@ -525,12 +499,27 @@ export function TutorialSpotlight({
       newKeys.push(destKeysIn[ti] ?? null)
       hasAdd = true
     }
-    // (4) 未配对的旧洞：**一律原地**缩小至消失（被移除的目标 → 洞不得飞向另一个对象）
+    // (4) 未配对的旧洞：
+    //   · 身份模式 → **原地**缩小至消失（不得移动去补新增目标）；
+    //   · 完全替换（无身份交集）→ 保留既有「并入最近保留目标」的 transfer 语义。
     for (let ci = 0; ci < cur.length; ci++) {
       if (usedCur.has(ci)) continue
-      newAnims.push(mk(cur[ci]!, centerRect(cur[ci]!), 'blur'))
-      // 保留其原身份键直到消失（便于 e2e 追踪「原地缩小」；落定时随零尺寸洞一起裁掉）
-      newKeys.push(curKeys[ci] ?? null)
+      if (useNearest && planPairs.some((p) => p.ci >= 0)) {
+        let best = -1
+        let bestD = Infinity
+        for (const p of planPairs) {
+          const d = dist(cur[ci]!, dest[p.ti]!)
+          if (d < bestD) {
+            bestD = d
+            best = p.ti
+          }
+        }
+        newAnims.push(mk(cur[ci]!, dest[best]!, 'blur'))
+        newKeys.push(destKeysIn[best] ?? null)
+      } else {
+        newAnims.push(mk(cur[ci]!, centerRect(cur[ci]!), 'blur'))
+        newKeys.push(null)
+      }
       hasBlur = true
     }
     if (newAnims.length === 0) {
@@ -614,18 +603,6 @@ export function TutorialSpotlight({
     // eslint 无 react-hooks 插件：deps 用 targetKey（字符串）而非数组字面量，避免每次渲染重跑
   }, [targetKey, measureKey, active, dimOnly, sig])
 
-  /**
-   * v0.3.18-beta4 缺陷 3：**每次提交都暂存当前洞几何**。
-   * 阶段切换时新实例的 render（peek carry）早于旧实例的卸载 cleanup（写 carry），
-   * 只靠卸载暂存会让新阶段首帧拿不到上一几何 → 出现「整页洞 + sheet」的无压暗帧（用户录屏 8 帧）。
-   * 改为连续暂存后，新实例 render 期即可沿用上一几何，交接首帧起就有正确压暗。
-   */
-  const lastCommittedRef = useRef<TargetRect[]>([])
-  if (!sameRectList(lastCommittedRef.current, frame.rects)) {
-    lastCommittedRef.current = frame.rects
-    rememberSpotlightRects(frame.rects, { dimOnly })
-  }
-
   // 说明（v0.3.17-beta4）：这里原先在挂载时 clearSpotlightCarry()。
   // 但组件替换发生在同一次 commit：新实例的 render（读 carry）早于旧实例的卸载 cleanup（写 carry），
   // 挂载期清空会把刚写好的几何立刻抹掉 → 跨阶段续接（item 6）永不生效。
@@ -649,16 +626,7 @@ export function TutorialSpotlight({
   const blockActive = active && block && !modalOpen
   const mode: 'dim' | 'holes' | 'hybrid' = dim ? (dimOnly ? 'dim' : 'hybrid') : 'holes'
   /** 纯 dim 且动画静止：渲染整屏暗层（气泡 z 豁免）；过渡期（含切到气泡）由空洞引擎承担 */
-  /**
-   * dim 整屏暗层（无 path）仅在「静止且洞已落到目标（气泡）」时渲染：
-   * 否则（交接/动画期）一律走 SVG 引擎，避免出现「整页洞 + sheet」的**无压暗**帧（缺陷 3），
-   * 也避免交接期整屏压暗把上一阶段遗留的洞盖掉。
-   */
-  const atDest =
-    rects.length > 0 &&
-    destRects.length > 0 &&
-    rects.every((r) => destRects.some((d) => sameRect(r, d, 24)))
-  const renderDimLayer = dimOnly && !animating && idle && atDest
+  const renderDimLayer = dimOnly && !animating && idle
 
   /** 统一加 PAD（外扩 6px 呼吸空间） */
   const padRect = (r: TargetRect): TargetRect => ({
