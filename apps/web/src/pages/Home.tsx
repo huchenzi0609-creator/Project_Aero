@@ -95,7 +95,7 @@ export function Home() {
         >
           浙ICP备2026073891号
         </a>
-        <span className="home__version">v0.3.18-beta3</span>
+        <span className="home__version">v0.3.18-beta5</span>
       </footer>
 
     </div>
