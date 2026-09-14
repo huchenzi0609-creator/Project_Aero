@@ -23,6 +23,7 @@ import { PaperButton } from '../components/ui/PaperButton'
 import { PaperGrid } from '../components/grid/PaperGrid'
 import { TutorialBubble } from './TutorialBubble'
 import { TutorialSpotlight } from './TutorialSpotlight'
+import { TutorialEscape } from './TutorialTopLayer'
 import { TutorialFxBand, useTutorialFx } from './TutorialFx'
 import { useAnyModalOpen } from './useAnyModalOpen'
 import '../styles/tutorial.css'
@@ -253,9 +254,12 @@ export function Unit1Practice({ onExitHome, onDone }: { onExitHome: () => void; 
   return (
     <div className={`page tutorial-unit1 tutorial-unit1--${orientation}`}>
       <header className="page__head">
-        <PaperButton size="sm" variant="ghost" className="tutorial-escape" onClick={onExitHome}>
-          ← 退出教程
-        </PaperButton>
+        {/* v0.3.18-beta2 item 4：豁免按钮结构化置顶（portal 到遮罩之上，规避祖先堆叠上下文） */}
+        <TutorialEscape>
+          <PaperButton size="sm" variant="ghost" className="tutorial-escape" onClick={onExitHome}>
+            ← 退出教程
+          </PaperButton>
+        </TutorialEscape>
         <h1 className="page__title">新手教程 · 辨认飞机</h1>
       </header>
 

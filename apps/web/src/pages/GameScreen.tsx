@@ -31,6 +31,7 @@ import { chooseShot } from '@aero/game-core/ai'
 import type { Rng, ShotKnowledge } from '@aero/game-core/ai'
 import { useAppStore } from '../store/appStore'
 import { useGameStore } from '../store/gameStore'
+import { TutorialEscape } from '../tutorial/TutorialTopLayer'
 import { useGuestStore } from '../store/guestStore'
 import { useSettingsStore } from '../store/settingsStore'
 import { useToastStore } from '../store/toastStore'
@@ -81,6 +82,8 @@ interface GameScreenProps {
   hideBannerBackdrop?: boolean
   /** 教程（v0.3.17-beta4）：结算画面隐藏「再来一局」按钮（其余结算内容不变）；默认 false */
   hideRematch?: boolean
+  /** 教程（v0.3.18-beta2 item 7）：不显示「您先手/您后手」先后手横幅，直接进入对局；默认 false（其它模式不变） */
+  hideFirstTurnBanner?: boolean
 }
 
 export function GameScreen({
@@ -90,6 +93,7 @@ export function GameScreen({
   hideSettlement,
   hideBannerBackdrop = false,
   hideRematch = false,
+  hideFirstTurnBanner = false,
 }: GameScreenProps) {
   const session = useGameStore((s) => s.session)
   const applyShotAt = useGameStore((s) => s.applyShotAt)
@@ -115,7 +119,10 @@ export function GameScreen({
   const orientation = useEffectiveOrientation()
   const viewport = useViewport()
 
-  const [screen, setScreen] = useState<'banner' | 'battle' | 'result'>('banner')
+  const [screen, setScreen] = useState<'banner' | 'battle' | 'result'>(
+    // v0.3.18-beta2 item 7：教程模式跳过先后手横幅（首帧即对局，避免空屏）
+    hideFirstTurnBanner ? 'battle' : 'banner',
+  )
   const [highlight, setHighlight] = useState<Cell | null>(null)
   const [input, setInput] = useState('')
   const [aiFlash, setAiFlash] = useState<Cell | null>(null)
@@ -187,7 +194,7 @@ export function GameScreen({
 
   /* ---------- 横幅 → 对战（切页音 + 状态重置） ---------- */
   useEffect(() => {
-    setScreen('banner')
+    setScreen(hideFirstTurnBanner ? 'battle' : 'banner')
     setHighlight(null)
     setInput('')
     setAiFlash(null)
@@ -202,9 +209,10 @@ export function GameScreen({
     coloring.reset()
     refPlanes.reset()
     audioService.playSfx('page-flip')
-    const t = window.setTimeout(() => setScreen('battle'), 1500)
+    // v0.3.18-beta2 item 7：教程跳过横幅等待（不渲染 + 不延时）
+    const t = hideFirstTurnBanner ? 0 : window.setTimeout(() => setScreen('battle'), 1500)
     return () => window.clearTimeout(t)
-  }, [session?.nonce])
+  }, [session?.nonce, hideFirstTurnBanner])
 
   /* ---------- 终局 → 结算（胜负提示音 + 结算翻页 + 教程胜负事件） ---------- */
   useEffect(() => {
@@ -856,14 +864,19 @@ export function GameScreen({
       <header className="game__statusbar">
         {/* 教程豁免（v0.3.13）：与 TutorialSpotlight 阻断带约定的 .tutorial-escape 同标识，
             模态突显期间左上角退出按钮仍可点；非教程/非突显时该类仅 z-index 声明，无副作用 */}
-        <PaperButton
-          size="sm"
-          variant="ghost"
-          className="tutorial-escape"
-          onClick={() => setExitOpen(true)}
-        >
-          ← 退出
-        </PaperButton>
+        {/* v0.3.18-beta2 item 4：退出按钮结构化置顶（portal 到遮罩之上）：
+            它原本位于 .game__statusbar 内，一旦祖先形成堆叠上下文就会被遮罩盖住
+            （教程突显仅气泡时用户可见）。占位保持布局，真实按钮在顶层（z200）。 */}
+        <TutorialEscape>
+          <PaperButton
+            size="sm"
+            variant="ghost"
+            className="tutorial-escape"
+            onClick={() => setExitOpen(true)}
+          >
+            ← 退出
+          </PaperButton>
+        </TutorialEscape>
         <div className={`game__statusbtn ${shake ? 'shake' : ''}`} role="status" aria-live="polite">
           <span className={`game__dot${statusThem ? ' game__dot--them' : ''}`} aria-hidden="true" />
           <span className="game__status-text">{statusText}</span>
@@ -1037,7 +1050,7 @@ export function GameScreen({
       </footer>
 
       {/* 先后手横幅 */}
-      {screen === 'banner' ? (
+      {screen === 'banner' && !hideFirstTurnBanner ? (
         <div
           className={[
             'game-banner',

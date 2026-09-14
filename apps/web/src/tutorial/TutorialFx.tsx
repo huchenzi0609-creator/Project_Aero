@@ -6,8 +6,8 @@
  *
  * v0.3.18-beta1 视觉规格（用户逐条要求）：
  * - 边带**加宽**：BW = 16px（原 5px 实心条）；
- * - **内四角 3px 圆角**：四条带用 path 绘制，只在朝向画面内部的角上做 3px 圆角（外侧为屏幕边，无需圆角），
- *   与遮罩空洞的 3px 圆角语言一致；
+ * - **连通环形（item 2）**：一条 evenodd 环形路径 = 外圈屏幕矩形 + 内圈内缩 16px 的**圆角**矩形，
+ *   作为 clipPath 裁剪四条渐变带 → 四角平滑连接、内框四角 3px 圆角，无台阶/缺口；
  * - **由外到内透明度非线性升高**：每条带用一条 linearGradient，外侧最实、向内柔和淡出
  *   （停靠点 0% .95 / 28% .5 / 62% .16 / 100% 0，模拟灯光漫反射）；
  * - **快速点亮、缓缓熄灭**：CSS 过渡（点亮 110ms ease-out / 熄灭 820ms ease-in-out，见 tutorial.css）；
@@ -42,27 +42,36 @@ export function useTutorialFx(): { fx: TutorialFxHandle; flash: (kind: FxKind) =
   return { fx, flash }
 }
 
-/** 光带四条 path：外侧贴屏幕边（直角），朝向画面内部的角做 3px 圆角 */
-function bandPaths(w: number, h: number, bw: number, k: number) {
-  const r = Math.max(0, Math.min(k, bw / 2, w / 2, h / 2))
-  const x1 = w - bw
-  const y1 = h - bw
-  return {
-    top: `M0 0 H${w} V${bw} H0 Z`,
-    bottom: `M0 ${y1} H${w} V${h} H0 Z`,
-    // 左侧带：上/下内角圆角（向右下 / 向左下转入内部）
-    left: `M0 ${bw} H${bw - r} A${r} ${r} 0 0 1 ${bw} ${bw + r} V${y1 - r} A${r} ${r} 0 0 1 ${bw - r} ${y1} H0 Z`,
-    // 右侧带：内角方向相反（sweep=0）
-    right: `M${w} ${bw} H${x1 + r} A${r} ${r} 0 0 0 ${x1} ${bw + r} V${y1 - r} A${r} ${r} 0 0 0 ${x1 + r} ${y1} H${w} Z`,
-  }
-}
-
-interface GradientsProps {
-  id: string
+/**
+ * 环形路径（v0.3.18-beta2 item 2）：**一条连通路径** = 外圈屏幕矩形（贴边直角）
+ * + 内圈内缩 bw、圆角 r 的圆角矩形，`fill-rule=evenodd` 单路径填充。
+ * 旧实现用「顶部通栏直条 + 侧带从 y=bw 起」拼四条带，角部出现硬台阶/缺口；
+ * 现在四条边由同一条环自然连接，且内框四角为圆角。
+ */
+function ringPath(w: number, h: number, bw: number, r: number): string {
+  const k = Math.max(0, Math.min(r, bw / 2, w / 2, h / 2))
+  const x0 = bw
+  const y0 = bw
+  const x1 = Math.max(x0, w - bw)
+  const y1 = Math.max(y0, h - bw)
+  // 内圈圆角矩形（顺时针，与 evenodd 无关；换向也安全）
+  const inner = [
+    `M${x0 + k} ${y0}`,
+    `H${x1 - k}`,
+    `A${k} ${k} 0 0 1 ${x1} ${y0 + k}`,
+    `V${y1 - k}`,
+    `A${k} ${k} 0 0 1 ${x1 - k} ${y1}`,
+    `H${x0 + k}`,
+    `A${k} ${k} 0 0 1 ${x0} ${y1 - k}`,
+    `V${y0 + k}`,
+    `A${k} ${k} 0 0 1 ${x0 + k} ${y0}`,
+    'Z',
+  ].join(' ')
+  return `M0 0 H${w} V${h} H0 Z ${inner}`
 }
 
 /** 四条带各自的「由外到内逐渐变淡」渐变（objectBoundingBox，随元素 bbox 自适应） */
-function FxGradients({ id }: GradientsProps) {
+function FxGradients({ id }: { id: string }) {
   const stops = (
     <>
       <stop offset="0%" stopColor="currentColor" stopOpacity="0.95" />
@@ -115,15 +124,24 @@ export function TutorialFxBand({ fx }: { fx: TutorialFxHandle }) {
 
   if (!fx.kind) return null
   const cls = ['tutorial-fx', `tutorial-fx--${fx.kind}`, on ? 'tutorial-fx--on' : ''].filter(Boolean).join(' ')
-  const p = bandPaths(size.w, size.h, FX_BAND, FX_RADIUS)
+  const ring = ringPath(size.w, size.h, FX_BAND, FX_RADIUS)
   return (
     <div className={cls} aria-hidden="true" data-fx-band={FX_BAND} data-fx-radius={FX_RADIUS}>
       <svg className="tutorial-fx__svg" viewBox={`0 0 ${size.w} ${size.h}`} preserveAspectRatio="none">
-        <FxGradients id={gid} />
-        <path d={p.top} fill={`url(#${gid}-top)`} />
-        <path d={p.bottom} fill={`url(#${gid}-bottom)`} />
-        <path d={p.left} fill={`url(#${gid}-left)`} />
-        <path d={p.right} fill={`url(#${gid}-right)`} />
+        <defs>
+          <FxGradients id={gid} />
+          <clipPath id={`${gid}-clip`} clipRule="evenodd">
+            <path d={ring} />
+          </clipPath>
+        </defs>
+        {/* 四条带**全长覆盖**（上/下通栏、左/右通高），再由环形 clip 裁掉内框：
+            角部由两条带的 alpha 叠加平滑过渡（无台阶/无缺口），内框四角因 clip 而圆角 */}
+        <g clipPath={`url(#${gid}-clip)`}>
+          <rect x="0" y="0" width={size.w} height={FX_BAND} fill={`url(#${gid}-top)`} />
+          <rect x="0" y={size.h - FX_BAND} width={size.w} height={FX_BAND} fill={`url(#${gid}-bottom)`} />
+          <rect x="0" y="0" width={FX_BAND} height={size.h} fill={`url(#${gid}-left)`} />
+          <rect x={size.w - FX_BAND} y="0" width={FX_BAND} height={size.h} fill={`url(#${gid}-right)`} />
+        </g>
       </svg>
     </div>
   )

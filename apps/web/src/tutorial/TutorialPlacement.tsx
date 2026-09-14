@@ -26,6 +26,7 @@ import { PaperModal } from '../components/ui/PaperModal'
 import { FleetPlacementBoard, fleetCheckState } from '../components/placement/FleetPlacementBoard'
 import { TutorialBubble } from './TutorialBubble'
 import { TutorialSpotlight } from './TutorialSpotlight'
+import { TutorialEscape } from './TutorialTopLayer'
 import { TutorialFxBand, useTutorialFx } from './TutorialFx'
 import { useAnyModalOpen } from './useAnyModalOpen'
 import type { TutorialGameEvent } from './events'
@@ -242,9 +243,12 @@ export function TutorialPlacement({
   return (
     <div className={`placement placement--${orientation} tutorial-placement`}>
       <header className="placement__head">
-        <PaperButton size="sm" variant="ghost" className="tutorial-escape" onClick={exit}>
-          ← 退出教程
-        </PaperButton>
+        {/* v0.3.18-beta2 item 4：豁免按钮结构化置顶（portal 到遮罩之上，规避祖先堆叠上下文） */}
+        <TutorialEscape>
+          <PaperButton size="sm" variant="ghost" className="tutorial-escape" onClick={exit}>
+            ← 退出教程
+          </PaperButton>
+        </TutorialEscape>
         <div>
           <h1 className="page__title" style={{ fontSize: 22 }}>
             新手教程 · 摆阵

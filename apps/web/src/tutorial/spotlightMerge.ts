@@ -69,7 +69,7 @@ export function disjointHoleRects(rects: BoxRect[]): BoxRect[] {
   // v0.3.18-beta1：丢弃亚像素碎片（<0.5px）。它们来自「引擎动画中的洞」与「同元素的实时豁免测量」
   // 之间的微小差值（同一元素测两次，left 差 0.1px 就会切出 0.1px 宽的条带）——
   // 矩形分解下不可见，但会让圆角并集边界的串联出现退化环（seam 无法配对）。
-  const rs = rects.filter((r) => r.width > 0.5 && r.height > 0.5)
+  const rs = rects.filter((r) => r.width > 0.5 && r.height > 0.5).map(quantRect)
   if (rs.length <= 1) return rs.map((r) => ({ ...r }))
   const xs = Array.from(new Set(rs.flatMap((r) => [r.left, r.left + r.width]))).sort((a, b) => a - b)
   const out: BoxRect[] = []
@@ -112,6 +112,21 @@ interface Edge {
 
 const EPS = 0.01
 const key = (p: Pt) => `${Math.round(p.x * 100) / 100},${Math.round(p.y * 100) / 100}`
+/**
+ * 边界量化步长（v0.3.18-beta2 item 6）：亚像素抖动（动画插值 + 双来源测量差异）会让相邻帧的
+ * 「切片数/拓扑」在 2↔1 之间反复跳变 → 视觉闪烁。把矩形边界量化到 0.25px 后，近乎重合的边界
+ * 变成**完全相同**的值，切片结构在相邻帧间保持稳定（0.25px 不可见，但拓扑不再抖动）。
+ */
+const QSTEP = 0.25
+const quant = (v: number) => Math.round(v / QSTEP) * QSTEP
+/** 量化矩形边界（left/top/right/bottom 各自量化，保证宽高非负） */
+function quantRect(r: BoxRect): BoxRect {
+  const l = quant(r.left)
+  const t = quant(r.top)
+  const rt = Math.max(l + QSTEP, quant(r.left + r.width))
+  const b = Math.max(t + QSTEP, quant(r.top + r.height))
+  return { left: l, top: t, width: rt - l, height: b - t }
+}
 
 /**
  * 生成「多矩形并集」的**圆角**边界路径（v0.3.18-beta1）。
@@ -129,7 +144,7 @@ export function unionOutlinePath(
   opts: { width: number; height: number; radius: number; onPathEdge?: number },
 ): string {
   // 与 disjointHoleRects 同口径：亚像素碎片不参与边界（否则会形成退化环）
-  const rs = rects.filter((r) => r.width > 0.5 && r.height > 0.5)
+  const rs = rects.filter((r) => r.width > 0.5 && r.height > 0.5).map(quantRect)
   if (rs.length === 0) return ''
   const { width: W, height: H, radius } = opts
   const onEdge = opts.onPathEdge ?? 0.5

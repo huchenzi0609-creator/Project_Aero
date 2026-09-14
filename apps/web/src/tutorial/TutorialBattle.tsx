@@ -32,6 +32,7 @@ import { PaperButton } from '../components/ui/PaperButton'
 import { GameScreen } from '../pages/GameScreen'
 import { TutorialBubble } from './TutorialBubble'
 import { TutorialSpotlight } from './TutorialSpotlight'
+import { TutorialTopLayerPortal } from './TutorialTopLayer'
 import { TutorialFxBand, useTutorialFx } from './TutorialFx'
 import { useAnyModalOpen } from './useAnyModalOpen'
 import { useSingleTapBridge } from './useSingleTapBridge'
@@ -590,24 +591,30 @@ export function TutorialBattle({ fleet, onExitHome }: TutorialBattleProps) {
     <>
       {/* 教程对局：hideBannerBackdrop = 横幅不渲染自带暗底（避免与遮罩双重压暗）；
           hideRematch = 结算画面不显示「再来一局」（教程上下文只回主页）；
+          hideFirstTurnBanner = 不显示「您先手/您后手」横幅（v0.3.18-beta2 item 7，仅教程模式）；
           不再传 hideSettlement —— 教程对局需要展示常规结算画面 */}
       <GameScreen
         onGameEvent={dispatchEvent}
         aiShotSelector={aiShotSelector}
         hideRematch
         hideBannerBackdrop
+        hideFirstTurnBanner
       />
 
       {/* 弹窗期间由组件内部处理（渲染基础态遮罩、不渲染阻断带），避免“界面已显示但遮罩未就位”的帧 */}
       <TutorialSpotlight active={overlayActive} target={highlight} dim={bubbleDim} />
       {showBubble && !anyModalOpen ? (
-        <TutorialBubble
-          key={`${ptrRef.current?.table ?? ''}-${node!.id}`}
-          text={segText}
-          showHint={node!.kind === 'click'}
-          anchor={bubbleAnchor}
-          onClick={onBubbleClick}
-        />
+        // v0.3.18-beta2 item 4：气泡同样结构化置顶（自带 fixed 视口坐标，portal 后坐标不变），
+        // 规避祖先堆叠上下文把它压到遮罩之下
+        <TutorialTopLayerPortal>
+          <TutorialBubble
+            key={`${ptrRef.current?.table ?? ''}-${node!.id}`}
+            text={segText}
+            showHint={node!.kind === 'click'}
+            anchor={bubbleAnchor}
+            onClick={onBubbleClick}
+          />
+        </TutorialTopLayerPortal>
       ) : null}
       <TutorialFxBand fx={fx} />
 

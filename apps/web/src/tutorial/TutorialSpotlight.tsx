@@ -19,7 +19,7 @@
  * 保证过渡期间遮罩始终存在、不闪白。
  */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { disjointHoleRects, mergeHoleRects, unionOutlinePath } from './spotlightMerge'
+import { disjointHoleRects, unionOutlinePath } from './spotlightMerge'
 import { useAnyModalOpen } from './useAnyModalOpen'
 import { clearSpotlightCarry, peekSpotlightCarry, rememberSpotlightRects } from './spotlightCarry'
 
@@ -172,10 +172,15 @@ export function TutorialSpotlight({
   const modalOpen = useAnyModalOpen()
   /** <突显对话气泡> 且无目标 = 纯 dim 节点（气泡即“被突显对象”，走同一空洞引擎） */
   const dimOnly = dim && targets.length === 0
-  /** 引擎内的实际目标：纯 dim 节点以对话气泡矩形为洞，与 dim 桥接路径统一（v0.3.17-beta2 item 3） */
+  /**
+   * 引擎内的实际目标（v0.3.18-beta2 item 5）：
+   * 气泡是**被突显对象**（要被看到/可点），因此 dim 模式下它作为引擎目标开洞；
+   * 而 .tutorial-escape（退出按钮/横幅卡片）改为**结构化置顶**（TutorialEscape/TutorialTopLayer），
+   * 不再参与开洞——可见性由层级保证，洞几何只保留真正的突显对象。
+   */
   const engineTargets = useMemo(
-    () => (dimOnly ? ['.tutorial-bubble'] : targets),
-    [dimOnly, targets],
+    () => (dim ? ['.tutorial-bubble', ...targets] : targets),
+    [dim, targets],
   )
 
   /* ---------- 渲染期即时测量（切换同帧即有几何） ---------- */
@@ -212,8 +217,13 @@ export function TutorialSpotlight({
   const rafRef = useRef(0)
   const labelRef = useRef<AnimLabel>('none')
   const loopGenRef = useRef(0)
-  /** 上一次规划是否已把「气泡矩形」落定（item 2：气泡尺寸变化直接突变跟随，不播动画） */
-  const bubbleSettledRef = useRef(false)
+  /**
+   * focus 静止期截止时刻（performance.now 基准，v0.3.18-beta2 追加修复）。
+   * 多目标「从基础态聚焦」会在首帧后经历多次重规划（dest 1→2 个目标、气泡换文案重排……）：
+   * 每次重规划都必须**沿用同一截止时间**，既不能丢失静止期（旧实现按 cur.length===1 判基础态，
+   * 洞变成 2 个整页洞后落入 transfer 分支 → 无延迟），也不能把静止期不断重置/延长。
+   */
+  const focusHoldUntilRef = useRef(0)
   /** 最近一次渲染是否纯 dim（气泡）节点：卸载时决定是否需要跨阶段暂存洞几何 */
   const dimOnlyRef = useRef(dimOnly)
   dimOnlyRef.current = dimOnly
@@ -270,7 +280,6 @@ export function TutorialSpotlight({
       commit(finalRects, done ? 'none' : labelRef.current)
       if (done) {
         rafRef.current = 0
-        if (dimOnly) bubbleSettledRef.current = true
         setIdle(true)
         return
       }
@@ -313,15 +322,9 @@ export function TutorialSpotlight({
         }
       }
     }
-    // item 2：仅当“上一次已把气泡洞落定”且目标仍是气泡且尺寸变了 → 直接突变跟随（不播动画）。
-    // 该判定必须用【旧值】并且不能由本函数提前置 true，否则会误吞正在进行的 focus 动画。
-    const bubbleJump =
-      dimOnly &&
-      bubbleSettledRef.current &&
-      cur.length === 1 &&
-      dest.length === 1 &&
-      !sameRect(cur[0]!, dest[0]!, 0.5)
-    if (!bubbleJump) bubbleSettledRef.current = false
+    // v0.3.18-beta2 item 3：删除 beta4 的「气泡洞尺寸变化直接瞬移（settleAt）」路径——
+    // 洞位移到气泡时形状突变即由此产生。现在一律走统一的连续插值（③ transfer 分支）到位，
+    // 目标矩形取渲染期**即时测量**的气泡矩形，因此到位后与气泡实测矩形一致（无补测跳变）。
 
     const mk = (from: TargetRect, to: TargetRect, label: AnimLabel): AnimHole => ({
       id: holeIdRef.current++,
@@ -333,18 +336,28 @@ export function TutorialSpotlight({
     })
 
     /**
-     * item 1 的延迟聚焦：从 seed（整页）延迟 FOCUS_DELAY_MS 后收缩到目标。
-     * 若已有一组「同 seed、同目标数量」的 focus 动画仍在飞行（通常是首帧后测量更新导致的重规划），
-     * 则**只更新目标矩形、保留原 start**——否则每次重规划都会重置 500ms 静止期（静止期被无限拉长）。
+     * item 1 的延迟聚焦：从 seed（整页）延迟到「静止期截止时刻」后收缩到目标。
+     * 截止时间保存在 focusHoldUntilRef：
+     *  - 首次从基础态聚焦 → now + FOCUS_DELAY_MS；
+     *  - 之后的任何重规划（目标数 1→2、气泡换文案/尺寸重排……）→ **沿用原截止时间**（不重置、不延长）；
+     *  - 非基础态过渡（②blur / ③transfer）会把截止时间清零，使下一次“从基础态聚焦”重新获得完整静止期。
      */
     const delayFocusFrom = (seed: TargetRect, dst: TargetRect[], nowMs: number): AnimHole[] => {
-      const pending = animsRef.current
-      const reusable =
-        pending.length === dst.length &&
-        pending.length > 0 &&
-        pending.every((a) => a.label === 'focus' && sameRect(a.from, seed, 2))
-      if (reusable) return pending.map((a, i) => ({ ...a, to: dst[i]! }))
-      return dst.map((t) => ({ ...mk(seed, t, 'focus'), start: nowMs + FOCUS_DELAY_MS }))
+      const pending = focusHoldUntilRef.current
+      let holdUntil: number
+      if (pending > nowMs) {
+        // 静止期未结束前的一切重规划（目标数 1→2、气泡换文案/尺寸、甚至切到下一个节点）都沿用同一截止时间：
+        // 既不会丢失静止期（QA 复现：洞数 1→2 后落到 transfer 分支 → 无延迟），也不会把静止期反复重置/延长
+        // （旧实现按「目标数量相同」复用，数量变化就丢；若按「新节点新计时」则会在整页静止期间多加一段）。
+        holdUntil = pending
+      } else if (pending > 0) {
+        // 本轮静止期已过、但洞仍 ≈ 整页（收缩刚开始的头几帧）→ 立即开始，不重启
+        holdUntil = nowMs
+      } else {
+        holdUntil = nowMs + FOCUS_DELAY_MS // 全新一轮（上一次已回到基础态并被 ② 分支清零）
+      }
+      focusHoldUntilRef.current = holdUntil
+      return dst.map((t) => ({ ...mk(seed, t, 'focus'), start: holdUntil }))
     }
 
     // ① 无当前洞：基础态初始化（无动画）或 rest→focus（从整页/气泡矩形收缩到目标）
@@ -367,6 +380,7 @@ export function TutorialSpotlight({
 
     // ② 取消：空洞扩大到整页（基础态）；dim 目的地即气泡矩形（已由目标给出）
     if (dest.length === 0) {
+      focusHoldUntilRef.current = 0 // 回到基础态 → 下一次“从基础态聚焦”重新计时
       const to = pageRect
       const moving = cur.filter((r) => !sameRect(r, to))
       if (moving.length === 0) {
@@ -379,8 +393,11 @@ export function TutorialSpotlight({
       return
     }
 
-    // ②b 基础态（仅一个整页洞）→ 目标：rest→focus（从整页收缩；语义同“光线聚焦”）
-    const isBase = cur.length === 1 && sameRect(cur[0]!, pageRect, 2)
+    // ②b 基础态 → 目标：rest→focus（从整页收缩；语义同“光线聚焦”）
+    // v0.3.18-beta2 追加修复：判据从「恰好 1 个整页洞」放宽为「**所有**洞都 ≈ 整页」——
+    // 多目标聚焦时引擎会先产生 2 个整页洞（raw=2，仅一个目标已测量），旧判据判否 → 落入 ③ transfer
+    // → mk() 的 start=now（无 FOCUS_DELAY_MS）→ 500ms 静止期被丢弃（QA 复现：基础态→p1 实测 134ms）。
+    const isBase = cur.length > 0 && cur.every((r) => sameRect(r, pageRect, 2))
     if (isBase) {
       label0('focus')
       // item 1：聚焦前静止 FOCUS_DELAY_MS 再开始收缩（仅此一类过渡加延迟）
@@ -389,13 +406,8 @@ export function TutorialSpotlight({
       return
     }
 
-    // ②c 气泡洞（item 2）：目标仍是气泡且气泡矩形变了（换段/换行/字号）→ 立即突变跟随，不播尺寸动画
-    if (bubbleJump) {
-      settleAt(dest) // settleAt 会保持 bubbleSettled=true
-      return
-    }
-
     // ③ 已有洞 → 新目标：最近中心贪心匹配（transfer），多余洞收拢消失（blur-out），新增目标从中心生长（add）
+    focusHoldUntilRef.current = 0 // 非基础态过渡 → 截止时间作废
     const matchedCur = new Set<number>()
     const planPairs: Array<{ ci: number; ti: number }> = []
     for (let ti = 0; ti < dest.length; ti++) {
@@ -568,32 +580,38 @@ export function TutorialSpotlight({
 
   const rects = frame.rects
   const animating = frame.anim !== 'none'
+  /** 阻断层是否生效：遮罩激活（active）且调用方允许阻断（block）。
+   *  v0.3.18-beta2 item 1：只要 active，**任何一帧**（含基础态洞=整页、focus 静止期、过渡帧、
+   *  dim/bubble-only）都必须有阻断层覆盖非豁免区；基础态/自由对局（active=false）完全不阻断。 */
+  const blockActive = active && block
   const mode: 'dim' | 'holes' | 'hybrid' = dim ? (dimOnly ? 'dim' : 'hybrid') : 'holes'
   /** 纯 dim 且动画静止：渲染整屏暗层（气泡 z 豁免）；过渡期（含切到气泡）由空洞引擎承担 */
   const renderDimLayer = dimOnly && !animating && idle
 
-  const padMerge = (list: TargetRect[]) => {
-    const outer = list
-      .map((r) => ({
-        left: Math.max(0, r.left - PAD),
-        top: Math.max(0, r.top - PAD),
-        right: Math.min(W, r.left + r.width + PAD),
-        bottom: Math.min(H, r.top + r.height + PAD),
-      }))
-      .map((r) => ({ left: r.left, top: r.top, width: r.right - r.left, height: r.bottom - r.top }))
-    return mergeHoleRects(outer)
-  }
-  // 视觉洞 = 当前动画几何 ∪ 豁免元素（气泡/横幅/退出按钮等既不被压暗也不被阻断）。
-  // 用「去重叠分解」而非包围盒合并：并集边界随动画连续变化，融合瞬间不再跳变（item 4）。
-  const paddedAll = [...rects, ...mergedEscapes].map((r) => ({
+  /** 统一加 PAD（外扩 6px 呼吸空间） */
+  const padRect = (r: TargetRect): TargetRect => ({
     left: Math.max(0, r.left - PAD),
     top: Math.max(0, r.top - PAD),
     width: Math.min(W, r.left + r.width + PAD) - Math.max(0, r.left - PAD),
     height: Math.min(H, r.top + r.height + PAD) - Math.max(0, r.top - PAD),
-  }))
+  })
+  // v0.3.18-beta2 item 5：**洞几何只含被突显对象**（引擎动画几何），不再并入 .tutorial-escape：
+  // 退出按钮/横幅卡片的可见性与可点性改由「结构化置顶」(TutorialEscape → 顶层 portal, z 240) 保证，
+  // 因此无需再为它们开洞（也让多来源的亚像素差异不再进入洞几何，见 item 6）。
+  const paddedAll = rects.map(padRect)
+  // 用「去重叠分解」而非包围盒合并：并集边界随动画连续变化，融合瞬间不再跳变（item 4）。
   const visualHoles = disjointHoleRects(paddedAll)
-  // 交互洞 = 视觉洞 ∪ 目标（动画途中目标绝不被阻断）
-  const interactiveHoles = padMerge([...rects, ...destRects, ...mergedEscapes])
+
+  /**
+   * 阻断带补集（item 1 修复）：**一律按「最终目标 ∪ 豁免元素」计算，而不是按当前动画几何**。
+   * 旧实现用 `rects`（动画几何）——focus 静止期内 rects 还是整页洞，补集被算成空 → 一个
+   * `.tutorial-block` 都不剩（37/49 帧无阻断，遮罩下元素可点）。现在：
+   *  - 目标（destRects）与豁免元素永不阻断（动画途中目标也可点）；
+   *  - 其余区域恒被阻断；`active=false`（基础态/自由对局）时才完全不阻断。
+   */
+  // 注意：这里**不做 mergeHoleRects**——合并会把多个目标吞成一个大包围盒，
+  // 把目标之间本应阻断的空隙也点亮（漏阻断）。BlockBands 内部按 y 区间并集求补集，天然支持重叠。
+  const blockHoles = [...destRects, ...mergedEscapes].map(padRect)
 
   const framePath = `M0 0 H${W} V${H} H0 Z`
   // v0.3.18-beta1：空洞改为 3px 圆角矩形。先由切片还原「并集边界」，再对边界顶点圆角 ——
@@ -627,16 +645,13 @@ export function TutorialSpotlight({
             .map((r) => `${Math.round(r.left)},${Math.round(r.top)},${Math.round(r.width)},${Math.round(r.height)}`)
             .join(';')}
           data-spotlight-sel={engineTargets.join('|')}
-          data-spotlight-block={block ? '1' : '0'}
+          data-spotlight-block={blockActive ? '1' : '0'}
           aria-hidden="true"
         />
-        {/* 阻断带 = 「气泡目标洞 + 豁免元素」的补集（用**目标几何**而非当前动画几何：
-            首帧 rects 还是整页洞时也能立即得到正确阻断，避免“首帧无阻断”）。
-            豁免元素（.tutorial-escape 退出按钮等）所在区域根本不被阻断——不依赖 z-index 比较，
-            规避父级 stacking context 把按钮压在阻断带之下 */}
-        {block ? (
-          <BlockBands holes={padMerge([...destRects, ...mergedEscapes])} W={W} H={H} />
-        ) : null}
+        {/* 阻断带 = 「目标洞 + 豁免元素」的补集（恒按目标几何，见 blockHoles 注释）。
+            豁免元素（.tutorial-escape 退出按钮等）所在区域不被阻断，且它们结构性置顶（z 240），
+            因此即便祖先带 transform 也不会被阻断带/遮罩挡住。 */}
+        {blockActive ? <BlockBands holes={blockHoles} W={W} H={H} /> : null}
       </>
     )
   }
@@ -658,14 +673,14 @@ export function TutorialSpotlight({
           .map((r) => `${Math.round(r.left)},${Math.round(r.top)},${Math.round(r.width)},${Math.round(r.height)}`)
           .join(';')}
         data-spotlight-sel={engineTargets.join('|')}
-        data-spotlight-block={block ? '1' : '0'}
+        data-spotlight-block={blockActive ? '1' : '0'}
         width={W}
         height={H}
         aria-hidden="true"
       >
         <path d={`${framePath} ${holePath}`} fillRule="evenodd" fill={DARK} />
       </svg>
-      {block ? <BlockBands holes={interactiveHoles} W={W} H={H} /> : null}
+      {blockActive ? <BlockBands holes={blockHoles} W={W} H={H} /> : null}
     </>
   )
 }
@@ -693,12 +708,19 @@ function BlockBands({ holes, W, H }: { holes: TargetRect[]; W: number; H: number
       blocks.push({ left: x0, top: 0, width: w, height: H })
       continue
     }
-    const top = Math.min(...inSlice.map((r) => r.top))
-    const bottom = Math.max(...inSlice.map((r) => r.top + r.height))
-    blocks.push({ left: x0, top: 0, width: w, height: Math.max(0, top) })
-    blocks.push({ left: x0, top: bottom, width: w, height: Math.max(0, H - bottom) })
+    // v0.3.18-beta2 item 1：本片内**把所有洞的 y 区间并起来**，再输出其补集。
+    // 旧实现只取 [min(top), max(bottom)] 一条“洞带”，当同一片里有多个高度不同的洞
+    // （单元2 待选栏 + 网格、单元3 气泡 + 空网格）时，洞与洞之间的空隙既没开洞也没阻断 → 可点漏区。
+    const spans = inSlice
+      .map((r) => [Math.max(0, r.top), Math.min(H, r.top + r.height)] as [number, number])
+      .sort((a, b) => a[0] - b[0])
+    let cursor = 0
+    for (const [top, bottom] of spans) {
+      if (top > cursor) blocks.push({ left: x0, top: cursor, width: w, height: top - cursor })
+      cursor = Math.max(cursor, bottom)
+    }
+    if (cursor < H) blocks.push({ left: x0, top: cursor, width: w, height: H - cursor })
   }
-  // 丢弃零面积带：基础态（洞=整页）不应残留 0 高度的 .tutorial-block 元素
   const visible = blocks.filter((b) => b.width > 0.5 && b.height > 0.5)
   return (
     <>

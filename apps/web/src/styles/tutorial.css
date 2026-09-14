@@ -132,7 +132,11 @@
   top: 14px;
   left: 18px;
   right: 18px;
-  z-index: 5;
+  /* v0.3.18-beta2 item 4：这里曾写 z-index:5 —— 那会形成堆叠上下文，
+     把页头里的「退出教程」按钮（z160）整体压到遮罩（z130）之下。改为 auto（不建上下文），
+     页头仍因 position:absolute 排在普通流之上，而按钮的 z160 得以与遮罩同层比较。
+     （按钮本身已由 TutorialEscape 结构化置顶，这里是双保险。） */
+  z-index: auto;
 }
 .tutorial-unit1 .tutorial-unit1__body {
   flex: 1;
@@ -186,6 +190,34 @@
 .tutorial-escape {
   position: relative;
   z-index: 160;
+}
+
+/* ============ v0.3.18-beta2 item 4：豁免对象「结构化置顶」层 ============
+   .tutorial-escape / 气泡虽 z 高于遮罩（130）与阻断带（150），但只要任一祖先带
+   transform/filter/opacity/contain 就形成堆叠上下文，会把它们压到遮罩之下。
+   顶层层挂在 document.body（沙盒之外），z-index 200：高于遮罩/阻断带，低于弹窗 backdrop（240）。 */
+.tutorial-top-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  pointer-events: none;
+}
+/* 置顶内容自身恢复可交互（气泡、退出按钮） */
+.tutorial-top-layer > * {
+  pointer-events: auto;
+}
+/* 退出按钮占位：保持原布局与 .tutorial-escape 测量基准，但不绘制、不参与命中 */
+.tutorial-escape-slot {
+  display: inline-flex;
+  visibility: hidden;
+}
+/* 置顶层里的真实按钮（按占位实测矩形定位；视口坐标） */
+.tutorial-escape-host {
+  position: fixed;
+  display: flex;
+}
+.tutorial-escape-host > * {
+  flex: 1;
 }
 
 /* ============ v0.3.18-beta1：<退出教程> 圆角矩形托盘 ============
