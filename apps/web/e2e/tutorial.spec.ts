@@ -10,14 +10,6 @@
  *   6) 阵型合法时 thanks 阶段即突显「确认布阵」；
  *   7) 放错位置的幽灵【不被回收】→ 复用同一架（旋转/拖动）即可换朝向重试成功。
  *
- * v0.3.18-beta5 适配/护栏（用户否决 beta4 → 组长 revert 到 beta3 基线后在 beta3 上重做；本文件相应回到 beta3 口径并补本轮护栏）：
- *   - 洞几何仍读 `data-spotlight-rects`（矩形切片）；**形状洞（气泡轮廓）不计入该属性** →
- *     面积/整页/洞数一律按「矩形切片 ∪ `-hole-outlines` 轮廓多边形（鞋带面积）」合并口径；
- *   - 气泡贴合改为**轮廓口径**：轮廓 bbox 四边余量 ∈[1,20]px + 尾巴窗口内越过 box 边 ≥10px（洞反映可见轮廓，不再等于 border box）；
- *   - 新增护栏1：形状洞逐帧形变连续（48 点/洞、简单多边形无自交、逐点单帧位移 ≤20% 行程）——单元1 场景2→场景3、单元2 开场 focus；
- *   - 新增护栏3：交接 ≥3s「整页洞（≥90% 页面积）」=0、「既无 svg 也无 sheet」=0、首帧非整页；
- *   - 稳健性：洞缩小的面积单调性只在「收缩开始后」判（容差 1%，吸收布局 settle）；切片数 A→B→A 只在静置态判失败。
- *
  * v0.3.18-beta3 适配/护栏：
  *   - 空洞按**目标身份配对**（-hole-keys / -dest-keys）：同 key 的洞只做自身几何插值（原地保持）；
  *     `staticMs` 由「只看首洞」改为**多洞口径**（身份配对后首个洞可能正确地原地不动）；
@@ -110,19 +102,9 @@ async function clickBubble(page: Page, timeout = 10_000): Promise<void> {
   await expect(bubble(page)).toBeVisible({ timeout })
   await bubble(page).click({ timeout: 3000 })
 }
-/**
- * 单层遮罩的视觉洞总数（v0.3.18-beta5）：`data-spotlight-holes` 只数**矩形切片**，
- * 形状洞（气泡轮廓）在 `-hole-outlines` 里单独发布 → 两者相加才是真实洞数
- * （气泡↔网格的形状形变期间该洞是“形状洞”，只读 -holes 会得到 0）。
- */
+/** 单层遮罩的挖洞数（v0.3.18-beta1：path 改 3px 圆角后含弧线，不能再数 ' M' → 读 data-spotlight-holes） */
 async function spotlightHoles(page: Page): Promise<number> {
-  return page.evaluate(() => {
-    const el = document.querySelector('.tutorial-spotlight')
-    if (!el) return 0
-    const rects = Number(el.getAttribute('data-spotlight-holes') ?? '0')
-    const shaped = (el.getAttribute('data-spotlight-hole-outlines') ?? '').split(';').filter(Boolean).length
-    return rects + shaped
-  })
+  return Number((await spotlightAttr(page, 'data-spotlight-holes')) ?? '0')
 }
 function blockCount(page: Page) {
   return page.locator('.tutorial-block').count()
@@ -280,10 +262,7 @@ interface SpotlightFrame {
   anim: string | null
   mode: string | null
   raw: number
-  /** 视觉洞总数 = 矩形切片数（-holes）+ 形状洞数（-hole-outlines） */
   holes: number
-  /** 形状洞（轮廓）个数 */
-  shaped: number
   block: string | null
   /** 采样时刻（performance.now()） */
   t: number
@@ -330,7 +309,6 @@ async function observeFrames(page: Page, ms = 700): Promise<SpotlightFrame[]> {
       mode: string | null
       raw: number
       holes: number
-      shaped: number
       block: string | null
       t: number
       sig: string
@@ -344,39 +322,20 @@ async function observeFrames(page: Page, ms = 700): Promise<SpotlightFrame[]> {
       const el = document.querySelector('.tutorial-spotlight')
       if (el) {
         const holes = parseHoles(el.getAttribute('data-spotlight-rects'))
-        // v0.3.18-beta5：形状洞（气泡轮廓）不参与 -rects 并集分解 → 面积/整页/洞数需并入轮廓多边形
-        const outlines = (el.getAttribute('data-spotlight-hole-outlines') ?? '')
-          .split(';')
-          .filter(Boolean)
-          .map((poly) =>
-            poly.split(',').filter(Boolean).map((pt) => {
-              const [x, y] = pt.trim().split(/\s+/).map(Number)
-              return { x: x!, y: y! }
-            }),
-          )
-        const polyArea = (pts: Array<{ x: number; y: number }>) => {
-          let a = 0
-          for (let i = 0; i < pts.length; i++) {
-            const p = pts[i]!
-            const q = pts[(i + 1) % pts.length]!
-            a += p.x * q.y - q.x * p.y
-          }
-          return Math.abs(a) / 2
-        }
-        const area =
-          holes.reduce((a, [l, t, r, b]) => a + Math.max(0, r - l) * Math.max(0, b - t), 0) +
-          outlines.reduce((a, poly) => a + polyArea(poly), 0)
-        const shaped = outlines.length
-        const holeCount = holes.length + shaped
+        const area = holes.reduce(
+          (a, [l, t, r, b]) => a + Math.max(0, r - l) * Math.max(0, b - t),
+          0,
+        )
         const vp = window.innerWidth * window.innerHeight
-        // 几何签名用【并集包围盒】（矩形切片 ∪ 轮廓点）：去重叠分解会因豁免元素微动而改变切片数，
+        // 几何签名用【并集包围盒】：去重叠分解会因豁免元素微动而改变切片数，
         // 但并集范围只随真正的洞形变而变（静止期恒为整页 bbox）
-        const xs = [...holes.map((r) => r[0]), ...outlines.flatMap((p) => p.map((q) => q.x))]
-        const ys = [...holes.map((r) => r[1]), ...outlines.flatMap((p) => p.map((q) => q.y))]
-        const xe = [...holes.map((r) => r[2]), ...outlines.flatMap((p) => p.map((q) => q.x))]
-        const ye = [...holes.map((r) => r[3]), ...outlines.flatMap((p) => p.map((q) => q.y))]
-        const sig = xs.length
-          ? [Math.min(...xs), Math.min(...ys), Math.max(...xe), Math.max(...ye)]
+        const sig = holes.length
+          ? [
+              Math.min(...holes.map((r) => r[0])),
+              Math.min(...holes.map((r) => r[1])),
+              Math.max(...holes.map((r) => r[2])),
+              Math.max(...holes.map((r) => r[3])),
+            ]
               .map((v) => Math.round(v))
               .join(',')
           : ''
@@ -392,8 +351,7 @@ async function observeFrames(page: Page, ms = 700): Promise<SpotlightFrame[]> {
           anim: el.getAttribute('data-spotlight-anim'),
           mode: el.getAttribute('data-spotlight-mode'),
           raw: Number(el.getAttribute('data-spotlight-holes-raw') ?? '-1'),
-          holes: holeCount,
-          shaped,
+          holes: Number(el.getAttribute('data-spotlight-holes') ?? '-1'),
           block: el.getAttribute('data-spotlight-block'),
           t: performance.now(),
           sig,
@@ -563,7 +521,7 @@ function expectHoleTracked(samples: HoleTrackSample[], label: string, ratio = 0.
  * v0.3.18-beta3 item4：某 key 的洞先原地保持（漂移 ≤6px），随后**面积单调递减并最终消失**。
  * 注意实现：未配对旧洞会原地缩小，但其身份键会被抹为 '-' → 需 follow 模式延续跟踪几何。
  */
-function expectHoleShrinksAway(samples: HoleTrackSample[], label: string, maxDriftPx = 6): void {
+function expectHoleShrinksAway(samples: HoleTrackSample[], label: string): void {
   expect(samples[0]?.keyed, `${label} 起始帧应带身份键`).toBe(true)
   const base = samples[0]!
   const tracked = samples.filter((s) => s.tracked)
@@ -574,24 +532,14 @@ function expectHoleShrinksAway(samples: HoleTrackSample[], label: string, maxDri
     if (s.area <= base.area * 0.05) continue
     maxDrift = Math.max(maxDrift, Math.hypot(s.cx - base.cx, s.cy - base.cy))
   }
-  expect(
-    maxDrift,
-    `${label} 消失前中心漂移应 ≤${maxDriftPx}px（实测 ${maxDrift.toFixed(1)}px）`,
-  ).toBeLessThanOrEqual(maxDriftPx)
-  // 面积：**收缩开始后**（≤90% 首帧）单调不增；容差 = 首帧 1%（吸收目标 1–3px 的布局 settle 与亚像素重测）
-  let prev: number | null = null
+  expect(maxDrift, `${label} 消失前中心漂移应 ≤6px（实测 ${maxDrift.toFixed(1)}px）`).toBeLessThanOrEqual(6)
+  // 面积：单调不增（容差 1px²）
+  let prev = base.area
   let shrinkRatio = 1
-  const areaTol = Math.max(1, base.area * 0.01)
   for (const s of tracked) {
+    expect(s.area, `${label} 面积不应增长（${s.area.toFixed(0)} > 前一帧 ${prev.toFixed(0)}）`).toBeLessThanOrEqual(prev + 1)
+    prev = s.area
     shrinkRatio = Math.min(shrinkRatio, s.area / base.area)
-    if (prev === null && s.area <= base.area * 0.9) prev = s.area
-    if (prev !== null) {
-      expect(
-        s.area,
-        `${label} 收缩开始后面积不应回升（${s.area.toFixed(0)} > 前一帧 ${prev.toFixed(0)} + 容差 ${areaTol.toFixed(0)}）`,
-      ).toBeLessThanOrEqual(prev + areaTol)
-      prev = s.area
-    }
   }
   // 确实观察到「缩小」（≤25%）而不是被瞬间移除
   expect(shrinkRatio, `${label} 应观察到面积递减（最小 ${(shrinkRatio * 100).toFixed(0)}% ≤25%）`).toBeLessThanOrEqual(0.25)
@@ -609,225 +557,27 @@ async function sampleHandover(page: Page, ms: number) {
     let frames = 0
     let emptyPlanFullHole = 0
     let holeNotFullNoBlock = 0
-    let noMaskFrames = 0 // 既无 svg 也无 sheet（遮罩整体缺席）
-    let fullPageHole90 = 0 // 洞面积 ≥0.9×页面积（「整页洞」帧）
     const t0 = performance.now()
     while (performance.now() - t0 < (dur as number)) {
       const el = document.querySelector('.tutorial-spotlight')
-      if (!el) noMaskFrames += 1
       if (el) {
         frames += 1
-        const rectArea = (el.getAttribute('data-spotlight-rects') ?? '')
+        const area = (el.getAttribute('data-spotlight-rects') ?? '')
           .split(';')
           .filter(Boolean)
           .map((seg) => seg.split(',').map(Number))
           .reduce((a, [, , w, h]) => a + Math.max(0, w!) * Math.max(0, h!), 0)
-        // v0.3.18-beta5：形状洞列入 -hole-outlines（不计入 -rects）→ 面积需并入轮廓多边形
-        let shapedArea = 0
-        for (const poly of (el.getAttribute('data-spotlight-hole-outlines') ?? '').split(';')) {
-          const pts = poly
-            .split(',')
-            .filter(Boolean)
-            .map((pt) => {
-              const [x, y] = pt.trim().split(/\s+/).map(Number)
-              return { x: x!, y: y! }
-            })
-          let a2 = 0
-          for (let i = 0; i < pts.length; i++) {
-            const p = pts[i]!
-            const q = pts[(i + 1) % pts.length]!
-            a2 += p.x * q.y - q.x * p.y
-          }
-          shapedArea += Math.abs(a2) / 2
-        }
-        const area = rectArea + shapedArea
         const vp = window.innerWidth * window.innerHeight
         const full = vp > 0 && area >= 0.98 * vp
-        const full90 = vp > 0 && area >= 0.9 * vp
         const sel = el.getAttribute('data-spotlight-sel') ?? ''
         const blocks = document.querySelectorAll('.tutorial-block').length
-        if (full90) fullPageHole90 += 1
         if (sel === '' && full) emptyPlanFullHole += 1
         if (!full && blocks === 0) holeNotFullNoBlock += 1
       }
       await new Promise((r) => requestAnimationFrame(() => r(null)))
     }
-    return { frames, emptyPlanFullHole, holeNotFullNoBlock, noMaskFrames, fullPageHole90 }
+    return { frames, emptyPlanFullHole, holeNotFullNoBlock }
   }, ms)
-}
-/**
- * v0.3.18-beta5 护栏2：**轮廓**终点贴合 + 尾巴覆盖。
- * 轮廓只含「形状洞」（-hole-outlines 与 -hole-shapes 中形如 bubble 的项对应；-hole-shapes 与
- * -hole-keys/-anim-rects 同序，故先按 key 定位引擎洞索引，再数它之前有几个形状洞得到轮廓索引）。
- * 断言：轮廓 bbox 对气泡 box 四边余量 ∈[1,tol]px；尾巴 x 窗口内轮廓最高/最低点越过 box 边 ≥10px。
- */
-async function expectBubbleOutlineCoversTail(page: Page, key = '.tutorial-bubble', tol = 20): Promise<void> {
-  const m = await page.evaluate((k) => {
-    const el = document.querySelector(k) as HTMLElement | null
-    const spot = document.querySelector('.tutorial-spotlight')
-    if (!el || !spot) return null
-    const keys = (spot.getAttribute('data-spotlight-hole-keys') ?? '').split('|')
-    const shapes = (spot.getAttribute('data-spotlight-hole-shapes') ?? '').split('|')
-    const polys = (spot.getAttribute('data-spotlight-hole-outlines') ?? '')
-      .split(';')
-      .filter(Boolean)
-      .map((poly) =>
-        poly.split(',').filter(Boolean).map((pt) => {
-          const [x, y] = pt.trim().split(/\s+/).map(Number)
-          return { x: x!, y: y! }
-        }),
-      )
-    let holeIdx = keys.indexOf(k)
-    if (holeIdx < 0) holeIdx = shapes.indexOf('bubble')
-    if (holeIdx < 0) return null
-    // 轮廓列表只含形状洞 → 轮廓索引 = 该引擎洞之前（含自身）的形状洞个数 - 1
-    const shapedBefore = shapes.slice(0, holeIdx + 1).filter((v) => v === 'bubble').length
-    const poly = polys[shapedBefore - 1]
-    if (!poly || poly.length === 0) return null
-    const b = el.getBoundingClientRect()
-    const xs = poly.map((q) => q.x)
-    const ys = poly.map((q) => q.y)
-    const bbox = { l: Math.min(...xs), r: Math.max(...xs), t: Math.min(...ys), b: Math.max(...ys) }
-    // 尾巴窗口（::after 在 left:24px、14×14 rotate45 → 约 box.left+14..+46）
-    const winLo = b.left + 14
-    const winHi = b.left + 46
-    const inWin = poly.filter((q) => q.x >= winLo && q.x <= winHi)
-    return {
-      tailTop: el.classList.contains('tutorial-bubble--top'),
-      left: b.left - bbox.l,
-      top: b.top - bbox.t,
-      right: bbox.r - (b.left + b.width),
-      bottom: bbox.b - (b.top + b.height),
-      winMaxY: inWin.length ? Math.max(...inWin.map((q) => q.y)) : NaN,
-      winMinY: inWin.length ? Math.min(...inWin.map((q) => q.y)) : NaN,
-      boxBottom: b.top + b.height,
-      boxTop: b.top,
-      points: poly.length,
-    }
-  }, key)
-  expect(m, '应能读到气泡 box 与气泡轮廓（-hole-outlines/-hole-shapes）').not.toBeNull()
-  const sides: Array<[string, number]> = [
-    ['左', m!.left],
-    ['上', m!.top],
-    ['右', m!.right],
-    ['下', m!.bottom],
-  ]
-  for (const [name, v] of sides) {
-    expect(v, `轮廓 ${name} 侧余量应 ≥1px（实测 ${v.toFixed(1)}）`).toBeGreaterThanOrEqual(1)
-    expect(v, `轮廓 ${name} 侧余量应 ≤${tol}px（实测 ${v.toFixed(1)}）`).toBeLessThanOrEqual(tol)
-  }
-  if (m!.tailTop) {
-    expect(
-      m!.boxTop - m!.winMinY,
-      `轮廓应覆盖上侧尾巴（尾巴窗口内轮廓最高点应 ≥box.top+10px，实测 ${(m!.boxTop - m!.winMinY).toFixed(1)}）`,
-    ).toBeGreaterThanOrEqual(10)
-  } else {
-    expect(
-      m!.winMaxY - m!.boxBottom,
-      `轮廓应覆盖下侧尾巴（尾巴窗口内轮廓最低点应 ≥box.bottom+10px，实测 ${(m!.winMaxY - m!.boxBottom).toFixed(1)}）`,
-    ).toBeGreaterThanOrEqual(10)
-  }
-}
-interface OutlineFrame {
-  t: number
-  polys: Array<Array<{ x: number; y: number }>>
-}
-/** v0.3.18-beta5 护栏1：逐帧采样形状洞轮廓（-hole-outlines；点间 ','、洞间 ';'，48 点/洞） */
-async function sampleOutlines(page: Page, ms: number): Promise<OutlineFrame[]> {
-  return page.evaluate(async (dur: number) => {
-    const out: Array<{ t: number; polys: Array<Array<{ x: number; y: number }>> }> = []
-    const t0 = performance.now()
-    while (performance.now() - t0 < (dur as number)) {
-      const el = document.querySelector('.tutorial-spotlight')
-      if (el) {
-        out.push({
-          t: performance.now() - t0,
-          polys: (el.getAttribute('data-spotlight-hole-outlines') ?? '')
-            .split(';')
-            .filter(Boolean)
-            .map((poly) =>
-              poly.split(',').filter(Boolean).map((pt) => {
-                const [x, y] = pt.trim().split(/\s+/).map(Number)
-                return { x: x!, y: y! }
-              }),
-            ),
-        })
-      }
-      await new Promise((r) => requestAnimationFrame(() => r(null)))
-    }
-    return out
-  }, ms)
-}
-/** 简单多边形（无自交）判定：仅统计「真交叉」（严格异号），共端点/共线相切不算交叉 */
-function isSimplePolygon(pts: Array<{ x: number; y: number }>): boolean {
-  const n = pts.length
-  if (n < 3) return false
-  const cross = (o: { x: number; y: number }, a: { x: number; y: number }, b: { x: number; y: number }) =>
-    (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x)
-  const strictlyCross = (
-    a: { x: number; y: number },
-    b: { x: number; y: number },
-    c: { x: number; y: number },
-    d: { x: number; y: number },
-  ) => {
-    const o1 = cross(a, b, c)
-    const o2 = cross(a, b, d)
-    const o3 = cross(c, d, a)
-    const o4 = cross(c, d, b)
-    return (o1 > 1e-6 && o2 < -1e-6 || o1 < -1e-6 && o2 > 1e-6) &&
-      (o3 > 1e-6 && o4 < -1e-6 || o3 < -1e-6 && o4 > 1e-6)
-  }
-  for (let i = 0; i < n; i++) {
-    for (let j = i + 1; j < n; j++) {
-      if (j === i || (i + 1) % n === j || (j + 1) % n === i) continue // 相邻边共享端点
-      if (strictlyCross(pts[i]!, pts[(i + 1) % n]!, pts[j]!, pts[(j + 1) % n]!)) return false
-    }
-  }
-  return true
-}
-/**
- * v0.3.18-beta5 护栏1：形状洞逐帧形变连续 ——
- * 每帧每洞点数 = 48、简单多边形（无自交）、逐点单帧位移 ≤ 20% 行程（全局口径：maxStep ≤ 20%·maxTravel）。
- */
-function expectOutlineMorphContinuity(frames: OutlineFrame[], label: string): void {
-  const seq = frames.filter((f) => f.polys.length > 0)
-  expect(seq.length, `${label} 应采到轮廓帧`).toBeGreaterThan(5)
-  for (const f of seq) {
-    for (const poly of f.polys) {
-      expect(poly.length, `${label} 每洞轮廓点数应为 48（实测 ${poly.length}）`).toBe(48)
-      expect(isSimplePolygon(poly), `${label} 轮廓应为简单多边形（无自交）`).toBe(true)
-    }
-  }
-  // 逐点行程/单帧位移（要求各帧洞数一致才做逐点配对；洞数变化时只校验多边形合法性）
-  const nHoles = seq[0]!.polys.length
-  const sameShape = seq.filter((f) => f.polys.length === nHoles)
-  expect(sameShape.length, `${label} 稳定洞数帧应足够`).toBeGreaterThan(5)
-  const first = sameShape[0]!
-  const last = sameShape[sameShape.length - 1]!
-  let maxTravel = 0
-  for (let h = 0; h < nHoles; h++) {
-    for (let i = 0; i < 48; i++) {
-      const d = Math.hypot(last.polys[h]![i]!.x - first.polys[h]![i]!.x, last.polys[h]![i]!.y - first.polys[h]![i]!.y)
-      maxTravel = Math.max(maxTravel, d)
-    }
-  }
-  expect(maxTravel, `${label} 应确有轮廓形变`).toBeGreaterThan(2)
-  let maxStep = 0
-  for (let k = 1; k < sameShape.length; k++) {
-    const a = sameShape[k - 1]!
-    const b = sameShape[k]!
-    if (b.t - a.t > 24) continue // 跳过掉帧
-    for (let h = 0; h < nHoles; h++) {
-      for (let i = 0; i < 48; i++) {
-        const d = Math.hypot(b.polys[h]![i]!.x - a.polys[h]![i]!.x, b.polys[h]![i]!.y - a.polys[h]![i]!.y)
-        maxStep = Math.max(maxStep, d)
-      }
-    }
-  }
-  expect(
-    maxStep / maxTravel,
-    `${label} 逐点单帧位移应 ≤20% 行程（实测 ${((maxStep / maxTravel) * 100).toFixed(1)}%，maxStep=${maxStep.toFixed(1)}px / travel=${maxTravel.toFixed(1)}px）`,
-  ).toBeLessThanOrEqual(0.2)
 }
 /** 等待遮罩过渡落定（data-spotlight-anim 回到 none）：让观测窗只覆盖目标过渡，不混入入场 focus */
 async function expectSpotlightSettled(page: Page): Promise<void> {
@@ -973,13 +723,9 @@ async function expectExemptNotHoled(page: Page): Promise<void> {
     const esc = document.querySelector('.tutorial-top-layer .tutorial-escape') as HTMLElement | null
     if (!esc) return null
     const e = esc.getBoundingClientRect()
-    // v0.3.18-beta5：形状洞不在 -rects 里 → 用 -anim-rects（各洞 bbox，含形状洞）做「豁免不开洞」判定
-    const holes = Array.from(document.querySelectorAll('.tutorial-spotlight[data-spotlight-anim-rects]'))
-      .flatMap((el) => (el.getAttribute('data-spotlight-anim-rects') ?? '').split(';').filter(Boolean))
-      .map((seg) => {
-        const [l, t, w, h] = seg.split(',').map(Number)
-        return [l!, t!, w!, h!]
-      })
+    const holes = Array.from(document.querySelectorAll('.tutorial-spotlight[data-spotlight-rects]'))
+      .flatMap((el) => (el.getAttribute('data-spotlight-rects') ?? '').split(';').filter(Boolean))
+      .map((seg) => seg.split(',').map(Number))
     const overlap = holes.filter(
       ([l, t, w, h]) => e.left < l! + w! && e.right > l! && e.top < t! + h! && e.bottom > t!,
     ).length
@@ -1021,24 +767,13 @@ function expectHoleCountStable(frames: SpotlightFrame[], label: string): void {
   const zero = seq.filter((f) => f.holes === 0)
   expect(zero.length, `${label} 不得出现零洞帧（遮罩恒有洞）`).toBe(0)
   const osc: string[] = []
-  const softNotes: string[] = []
   for (let i = 2; i < seq.length; i++) {
     const a = seq[i - 2]!.holes
     const b = seq[i - 1]!.holes
     const c = seq[i]!.holes
-    if (a === c && b !== a) {
-      // 切片数只是 evenodd **分解实现量**：新增洞放大/旧洞缩小时并集拓扑会合法地跨过切片边界。
-      // 只有**静置态**（三帧 anim 均为 none）出现 A→B→A 才判「可见闪烁」；过渡中的翻转记为 soft note。
-      const settled = seq[i - 2]!.anim === 'none' && seq[i - 1]!.anim === 'none' && seq[i]!.anim === 'none'
-      const note = `${a}→${b}→${c}@${Math.round(seq[i]!.t)}ms(area ${seq[i - 2]!.area.toFixed(0)}→${seq[i - 1]!.area.toFixed(0)}→${seq[i]!.area.toFixed(0)}, anim ${seq[i - 2]!.anim}/${seq[i - 1]!.anim}/${seq[i]!.anim})`
-      if (settled) osc.push(note)
-      else softNotes.push(note)
-    }
+    if (a === c && b !== a) osc.push(`${a}→${b}→${c}@${Math.round(seq[i]!.t)}ms`)
   }
-  expect(
-    osc,
-    `${label} 静置态切片数不得出现 A→B→A 跳变（可见闪烁）；另有 ${softNotes.length} 次过渡期拓扑翻转（并集连续，不计失败）：${softNotes.slice(0, 3).join(' / ')}`,
-  ).toEqual([])
+  expect(osc, `${label} 切片数不得出现 A→B→A 跳变（闪烁）`).toEqual([])
 }
 /** v0.3.18-beta2 bug3 护栏：气泡洞连续（单帧位移 ≤ 全程 15%，掉帧对跳过；v0.3.18-beta3 按键取洞） */
 function expectBubbleHoleContinuity(frames: SpotlightFrame[], label: string, key = '.tutorial-bubble'): void {
@@ -1083,6 +818,22 @@ async function expectBaseSettled(page: Page): Promise<void> {
       { timeout: 6000, message: '基础态应落定（anim=none 且洞=整页）' },
     )
     .toEqual({ anim: 'none', full: true })
+}
+/** 按身份键读某目标的洞矩形（读 -hole-keys × -anim-rects 同序配对；找不到返回 null） */
+async function holeRectByKey(
+  page: Page,
+  key: string,
+): Promise<{ left: number; top: number; width: number; height: number } | null> {
+  const [keysRaw, rectsRaw] = await Promise.all([
+    spotlightAttr(page, 'data-spotlight-hole-keys'),
+    spotlightAttr(page, 'data-spotlight-anim-rects'),
+  ])
+  const keys = (keysRaw ?? '').split('|')
+  const rects = (rectsRaw ?? '').split(';').filter(Boolean)
+  const i = keys.indexOf(key)
+  if (i < 0 || !rects[i]) return null
+  const [left, top, width, height] = rects[i]!.split(',').map(Number)
+  return { left: left!, top: top!, width: width!, height: height! }
 }
 /** 目标中心点“命中信息”：topmost 元素是否落在阻断带 / 气泡 / 退出豁免里 */
 async function hitInfo(page: Page, selector: string) {
@@ -1530,14 +1281,10 @@ async function runUnit1(page: Page): Promise<void> {
   await expect(page.locator('.tutorial-fx--success')).toHaveCount(1)
   expect((await u1Marks(page, 10))['E5'], '机头命中应为 ★').toBe('kill')
   await expect(page.locator('.u1-grid .paper-grid__plane--ghost')).toHaveCount(1)
-  // v0.3.18-beta5 护栏1：场景2→场景3（网格洞 → 气泡洞，含圆角矩形→气泡轮廓的形状形变）
-  // 逐帧断言：48 点/洞、简单多边形、逐点单帧位移 ≤20% 行程
-  const sceneOutlines = sampleOutlines(page, 2200)
   await clickBubble(page) // → 场景3 s3a（纯压暗）
   // 场景3 歧义讲解 → J7 试错 → F7 命中
   await expect(bubble(page)).toContainText('在这种情况下，我们不能完全确定机头位置呢。')
   await expectPureDim(page)
-  expectOutlineMorphContinuity(await sceneOutlines, '单元1 场景2→场景3 轮廓形变')
   await clickBubble(page)
   await expect(bubble(page)).toContainText('机头可能在F7，也可能在J7。')
   await clickBubble(page) // → s3j7（突显 J7 格）
@@ -1668,10 +1415,23 @@ async function runUnit2(page: Page): Promise<void> {
   await clickBubble(page)
   await expect(bubble(page)).toContainText('首先要做的一件事是')
   const bf = await bubbleFrames
-  // (1) v0.3.18-beta5 护栏2：洞反映**实际可见轮廓**（含尾巴/投影）→
-  //     落定后轮廓 bbox 对气泡 box 四边余量 ∈[1,20]px，且尾巴窗口内轮廓越过 box 边 ≥10px
-  await expectSpotlightSettled(page)
-  await expectBubbleOutlineCoversTail(page, '.tutorial-bubble')
+  // (1) 到位后洞（未加 PAD 的动画矩形）应贴合气泡实测矩形 ≤1.2px
+  await expect
+    .poll(
+      async () => {
+        const d = await holeRectByKey(page, '.tutorial-bubble')
+        const b = await page.locator('.tutorial-bubble').boundingBox()
+        if (!d || !b) return null
+        return Math.max(
+          Math.abs(d.left - b.x),
+          Math.abs(d.top - b.y),
+          Math.abs(d.width - b.width),
+          Math.abs(d.height - b.height),
+        )
+      },
+      { timeout: 5000, message: '换段后气泡洞应贴合气泡 rect（≤1.2px）' },
+    )
+    .toBeLessThanOrEqual(1.2)
   // (2) 过渡连续：不得单帧吃掉 >15% 行程（anim 不再要求 none）
   expectBubbleHoleContinuity(bf, '气泡换段')
   await clickBubble(page)
@@ -1687,8 +1447,7 @@ async function runUnit2(page: Page): Promise<void> {
   // v0.3.17-beta2 item 5：detect 合法态 = 我方网格洞 + 确认按钮洞（双目标）
   await expect.poll(() => rawHoles(page), { timeout: 5000 }).toBe(2)
   expect(await engineSel(page)).toContain('.placement__board-wrap')
-  // v0.3.18-beta5：交接改为「沿用上一阶段全部洞几何后交叉淡入」（首帧即上一几何）→
-  // 不再断言 transfer 标签，改判几何连续性：被移除洞原地缩到 0、气泡洞在其目标处原地放大、逐洞单帧位移受限
+  // item 6：跨阶段交接——确认布阵后单元3 首个遮罩过渡应为 transfer（洞从确认按钮续接）
   const carryFrames = observeFrames(page, 3000)
   // v0.3.18-beta3 item2 护栏：交接窗口（≥3s）内不得出现「空计划帧（sel 空且洞≈整页）」，
   // 也不得出现「洞已非整页但阻断带为 0」的帧
@@ -1697,17 +1456,14 @@ async function runUnit2(page: Page): Promise<void> {
   const bannerCheck = expectNoTutorialBanner(page)
   await page.getByRole('button', { name: '确认布阵' }).click()
   const cf = await carryFrames
-  // v0.3.18-beta5 交接回归：首帧即沿用上一阶段几何（非整页洞）。
-  // 注意：beta5 在 beta3 基线上只修「无整页洞/无遮罩缺席帧」，洞→气泡仍走 beta3 的「最近匹配 transfer」
-  // （用户否决了 beta4 的交叉淡入），故此处不再断言原地缩小/放大，也不断言标签。
-  expect(cf[0]?.full ?? true, '交接首帧不应是整页洞（应沿用上一阶段几何）').toBe(false)
+  // v0.3.17-beta4 item 7：跨阶段续接回归——首个过渡必须是 transfer，且起点非整页（续接确认按钮洞）
+  expect(animSet(cf), 'unit2→unit3 应为 transfer（spotlightCarry 跨阶段续接）').toContain('transfer')
+  const firstCarry = cf.find((f) => f.anim === 'transfer')
+  expect(firstCarry?.full, '交接首帧不应是整页洞（应从确认按钮洞续接）').toBe(false)
   const ho = await handover
   expect(ho.frames, '交接窗口应采到帧').toBeGreaterThan(20)
   expect(ho.emptyPlanFullHole, '交接窗口不得出现「空计划帧（sel 空 + 洞≈整页）」').toBe(0)
   expect(ho.holeNotFullNoBlock, '交接窗口不得出现「洞非整页但阻断带=0」的帧').toBe(0)
-  // v0.3.18-beta5 护栏3：交接 ≥3s 内「整页洞（≥90% 页面积）」=0、「既无 svg 也无 sheet」=0
-  expect(ho.fullPageHole90, '交接窗口不得出现「整页洞（≥90% 页面积）」帧').toBe(0)
-  expect(ho.noMaskFrames, '交接窗口不得出现「既无 svg 也无 sheet」的帧').toBe(0)
   await bannerCheck
 }
 
@@ -2139,11 +1895,7 @@ test.describe('新手教程', () => {
     const log: ShotLog = new Map()
 
     await openTutorial(page)
-    // v0.3.18-beta5 护栏1：单元2 开场 focus 的轮廓形变（整页圆角矩形 → 气泡轮廓）
-    const unit2Outlines = sampleOutlines(page, 2600)
     await modal(page).getByRole('button', { name: '我已了解' }).click()
-    await expect(bubble(page)).toContainText('很好！接下来我们即将进入实战！', { timeout: 10_000 })
-    expectOutlineMorphContinuity(await unit2Outlines, '单元2 开场 focus 轮廓形变')
     await runUnit2(page)
     await runUnit3Intro(page, { log })
     await clickBubble(page) // i6 读毕 → 自由对局（首杀支线若已排队则立即开播）
