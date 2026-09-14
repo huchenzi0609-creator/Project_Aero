@@ -1,6 +1,6 @@
 {
   "name": "project-aero",
-  "version": "0.3.18-beta2",
+  "version": "0.3.18-beta3",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.24.0",

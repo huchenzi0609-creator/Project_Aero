@@ -10,6 +10,14 @@
  *   6) 阵型合法时 thanks 阶段即突显「确认布阵」；
  *   7) 放错位置的幽灵【不被回收】→ 复用同一架（旋转/拖动）即可换朝向重试成功。
  *
+ * v0.3.18-beta3 适配/护栏：
+ *   - 空洞按**目标身份配对**（-hole-keys / -dest-keys）：同 key 的洞只做自身几何插值（原地保持）；
+ *     `staticMs` 由「只看首洞」改为**多洞口径**（身份配对后首个洞可能正确地原地不动）；
+ *     气泡洞一律按 key `.tutorial-bubble` 取洞，不再默认首洞；
+ *   - 护栏：① 旋转引导→太棒了 的 `.placement__board-wrap` 洞逐帧存在/漂移 ≤6px/面积 ≥75%；
+ *     ② detect 合法→非法 的 `.tutorial-confirm` 洞漂移 ≤6px、面积递减并最终消失，board-wrap 漂移 ≤6px；
+ *     ③ 确认布阵→单元3 交接窗口（≥3s）无「空计划帧（sel 空 + 洞≈整页）」、无「洞非整页但阻断带=0」。
+ *
  * v0.3.18-beta2 适配/护栏：
  *   - 气泡换段改回【连续插值】（beta4「瞬移」需求反转）：到位 ≤1.2px 贴合 + 单帧位移 ≤ 全程 15%；
  *   - 教程内无先后手横幅（hideFirstTurnBanner）→ 采样窗口内 .game-banner 恒为 0；
@@ -264,8 +272,22 @@ interface SpotlightFrame {
   area: number
   /** 洞是否仍≈整页（≥0.98·W·H，二值：整页静止期的判据，不能只看单片宽——洞是 x 切片） */
   full: boolean
-  /** data-spotlight-anim-rects 首项（动画插值中的原始洞矩形，未加 PAD）——用于气泡洞连续性/贴合度 */
-  animRect: { l: number; t: number; w: number; h: number } | null
+  /** data-spotlight-anim-rects 全部洞矩形（动画插值中的原始洞，未加 PAD；v0.3.18-beta3 多洞口径） */
+  animRects: HoleRect[]
+  /** data-spotlight-hole-keys（与 animRects 同序的身份键；'-' = 无身份） */
+  holeKeys: string[]
+}
+interface HoleRect {
+  l: number
+  t: number
+  w: number
+  h: number
+}
+/** 按身份键取洞（找不到时回退首洞）——v0.3.18-beta3 身份配对后必须按键取洞，不能再默认“第一个” */
+function pickHole(f: SpotlightFrame, key: string): HoleRect | null {
+  const i = f.holeKeys.indexOf(key)
+  if (i >= 0 && f.animRects[i]) return f.animRects[i]!
+  return f.animRects[0] ?? null
 }
 /** rAF 轮询逐帧采样遮罩属性（dest 变化前开始观测；覆盖 ~340ms smootherstep 过渡 + v0.3.17-beta4 聚焦静止期） */
 async function observeFrames(page: Page, ms = 700): Promise<SpotlightFrame[]> {
@@ -292,7 +314,8 @@ async function observeFrames(page: Page, ms = 700): Promise<SpotlightFrame[]> {
       sig: string
       area: number
       full: boolean
-      animRect: { l: number; t: number; w: number; h: number } | null
+      animRects: Array<{ l: number; t: number; w: number; h: number }>
+      holeKeys: string[]
     }> = []
     const t0 = performance.now()
     while (performance.now() - t0 < dur) {
@@ -316,13 +339,14 @@ async function observeFrames(page: Page, ms = 700): Promise<SpotlightFrame[]> {
               .map((v) => Math.round(v))
               .join(',')
           : ''
-        const anim0 = (el.getAttribute('data-spotlight-anim-rects') ?? '').split(';').filter(Boolean)[0]
-        const animRect = anim0
-          ? (() => {
-              const [l, t, w, h] = anim0.split(',').map(Number)
-              return { l: l!, t: t!, w: w!, h: h! }
-            })()
-          : null
+        const animRects = (el.getAttribute('data-spotlight-anim-rects') ?? '')
+          .split(';')
+          .filter(Boolean)
+          .map((seg) => {
+            const [l, t, w, h] = seg.split(',').map(Number)
+            return { l: l!, t: t!, w: w!, h: h! }
+          })
+        const holeKeys = (el.getAttribute('data-spotlight-hole-keys') ?? '').split('|')
         out.push({
           anim: el.getAttribute('data-spotlight-anim'),
           mode: el.getAttribute('data-spotlight-mode'),
@@ -333,7 +357,8 @@ async function observeFrames(page: Page, ms = 700): Promise<SpotlightFrame[]> {
           sig,
           area,
           full: vp > 0 && area >= 0.98 * vp,
-          animRect,
+          animRects,
+          holeKeys,
         })
       }
       await new Promise((r) => requestAnimationFrame(() => r(null)))
@@ -391,18 +416,168 @@ function expectFocusHold(frames: SpotlightFrame[], label: string): void {
 function staticMs(frames: SpotlightFrame[], label: string): number | null {
   const i0 = frames.findIndex((f) => f.anim === label)
   if (i0 < 0) return null
-  const a0 = frames[i0]!.animRect
-  if (!a0) return null
+  const a0 = frames[i0]!.animRects
+  if (a0.length === 0) return null
+  const moved = (a: HoleRect, b: HoleRect) =>
+    Math.abs(b.l - a.l) > 0.4 ||
+    Math.abs(b.t - a.t) > 0.4 ||
+    Math.abs(b.w - a.w) > 0.4 ||
+    Math.abs(b.h - a.h) > 0.4
+  // v0.3.18-beta3 item A：**多洞口径** —— 身份配对下首个洞（如持续存在的 `.game__opp`）会正确地原地不动，
+  // 真正在动的是新增/被替换的洞；只看首洞会误判“无静止期”。任一洞几何变化或洞数变化即视为已开始变化。
   const i1 = frames.findIndex(
     (f, i) =>
       i > i0 &&
-      !!f.animRect &&
-      (Math.abs(f.animRect.l - a0.l) > 0.4 ||
-        Math.abs(f.animRect.t - a0.t) > 0.4 ||
-        Math.abs(f.animRect.w - a0.w) > 0.4 ||
-        Math.abs(f.animRect.h - a0.h) > 0.4),
+      (f.animRects.length !== a0.length || f.animRects.some((r, j) => !a0[j] || moved(a0[j]!, r))),
   )
   return i1 < 0 ? null : frames[i1]!.t - frames[i0]!.t
+}
+interface HoleTrackSample {
+  t: number
+  /** 该帧能找到本次跟踪的洞（按键命中，或 follow 模式下按“原地延续”命中） */
+  tracked: boolean
+  /** 该帧的身份键仍在（false = 洞已转为未配对，key 变 '-'） */
+  keyed: boolean
+  cx: number
+  cy: number
+  area: number
+}
+/**
+ * v0.3.18-beta3 护栏：逐帧跟踪指定身份键的洞（`-hole-keys` × `-anim-rects` 同序配对）。
+ * `follow=true` 时：键消失后（未配对旧洞 key→`-`，实现上会原地缩小消失）改为按「中心最接近上一帧」延续跟踪
+ * （8px 门限，只在原地缩小时延续），用于观测「面积递减并最终消失」。
+ */
+async function trackHole(page: Page, key: string, ms: number, follow = false): Promise<HoleTrackSample[]> {
+  return page.evaluate(
+    async ([k, dur, fol]) => {
+      const out: Array<{ t: number; tracked: boolean; keyed: boolean; cx: number; cy: number; area: number }> = []
+      let lastCx = NaN
+      let lastCy = NaN
+      const t0 = performance.now()
+      while (performance.now() - t0 < (dur as number)) {
+        const el = document.querySelector('.tutorial-spotlight')
+        if (el) {
+          const keys = (el.getAttribute('data-spotlight-hole-keys') ?? '').split('|')
+          const rects = (el.getAttribute('data-spotlight-anim-rects') ?? '').split(';').filter(Boolean)
+          const parse = (seg: string) => {
+            const [l, t, w, h] = seg.split(',').map(Number)
+            return { cx: l! + w! / 2, cy: t! + h! / 2, area: Math.max(0, w!) * Math.max(0, h!) }
+          }
+          const i = keys.indexOf(k as string)
+          let hit: { cx: number; cy: number; area: number } | null = null
+          const keyed = i >= 0 && !!rects[i]
+          if (keyed) hit = parse(rects[i]!)
+          else if (fol && Number.isFinite(lastCx)) {
+            let best = -1
+            let bestD = Infinity
+            rects.forEach((seg, j) => {
+              const r = parse(seg)
+              const d = Math.hypot(r.cx - lastCx, r.cy - lastCy)
+              if (d < bestD) {
+                bestD = d
+                best = j
+              }
+            })
+            if (best >= 0 && bestD <= 8) hit = parse(rects[best]!)
+          }
+          if (hit) {
+            lastCx = hit.cx
+            lastCy = hit.cy
+          }
+          out.push({
+            t: performance.now() - t0,
+            tracked: !!hit,
+            keyed,
+            cx: hit?.cx ?? NaN,
+            cy: hit?.cy ?? NaN,
+            area: hit?.area ?? 0,
+          })
+        }
+        await new Promise((r) => requestAnimationFrame(() => r(null)))
+      }
+      return out
+    },
+    [key, ms, follow] as [string, number, boolean],
+  )
+}
+/** v0.3.18-beta3 item3：某 key 的洞全程存在（key 不丢）、中心漂移 ≤6px、面积不塌缩（≥ratio 倍首帧） */
+function expectHoleTracked(samples: HoleTrackSample[], label: string, ratio = 0.75): void {
+  const keyed = samples.filter((s) => s.keyed)
+  expect(keyed.length, `${label} 身份键应全程存在（${keyed.length}/${samples.length} 帧）`).toBe(samples.length)
+  const base = keyed[0]!
+  let maxDrift = 0
+  let minArea = Infinity
+  for (const s of keyed) {
+    maxDrift = Math.max(maxDrift, Math.hypot(s.cx - base.cx, s.cy - base.cy))
+    minArea = Math.min(minArea, s.area)
+  }
+  expect(maxDrift, `${label} 中心漂移应 ≤6px（实测 ${maxDrift.toFixed(1)}px）`).toBeLessThanOrEqual(6)
+  expect(
+    minArea / base.area,
+    `${label} 面积不应塌缩（最小 ${minArea.toFixed(0)} / 首帧 ${base.area.toFixed(0)}，应 ≥${ratio * 100}%）`,
+  ).toBeGreaterThanOrEqual(ratio)
+}
+/**
+ * v0.3.18-beta3 item4：某 key 的洞先原地保持（漂移 ≤6px），随后**面积单调递减并最终消失**。
+ * 注意实现：未配对旧洞会原地缩小，但其身份键会被抹为 '-' → 需 follow 模式延续跟踪几何。
+ */
+function expectHoleShrinksAway(samples: HoleTrackSample[], label: string): void {
+  expect(samples[0]?.keyed, `${label} 起始帧应带身份键`).toBe(true)
+  const base = samples[0]!
+  const tracked = samples.filter((s) => s.tracked)
+  expect(tracked.length, `${label} 应采到被跟踪的洞帧`).toBeGreaterThan(3)
+  // 漂移：所有「仍有面积」的帧中心都应在 6px 内（原地缩小，不得飞到别的目标上）
+  let maxDrift = 0
+  for (const s of tracked) {
+    if (s.area <= base.area * 0.05) continue
+    maxDrift = Math.max(maxDrift, Math.hypot(s.cx - base.cx, s.cy - base.cy))
+  }
+  expect(maxDrift, `${label} 消失前中心漂移应 ≤6px（实测 ${maxDrift.toFixed(1)}px）`).toBeLessThanOrEqual(6)
+  // 面积：单调不增（容差 1px²）
+  let prev = base.area
+  let shrinkRatio = 1
+  for (const s of tracked) {
+    expect(s.area, `${label} 面积不应增长（${s.area.toFixed(0)} > 前一帧 ${prev.toFixed(0)}）`).toBeLessThanOrEqual(prev + 1)
+    prev = s.area
+    shrinkRatio = Math.min(shrinkRatio, s.area / base.area)
+  }
+  // 确实观察到「缩小」（≤25%）而不是被瞬间移除
+  expect(shrinkRatio, `${label} 应观察到面积递减（最小 ${(shrinkRatio * 100).toFixed(0)}% ≤25%）`).toBeLessThanOrEqual(0.25)
+  // 最终消失：键已丢失且该处不再有洞（末尾帧未跟踪到）
+  expect(samples[samples.length - 1]!.keyed, `${label} 最终身份键应消失`).toBe(false)
+  expect(samples[samples.length - 1]!.tracked, `${label} 最终应消失（末尾无该洞）`).toBe(false)
+}
+/**
+ * v0.3.18-beta3 item2 护栏：交接窗口内不得出现「空计划帧」或「有洞无阻断帧」。
+ * - 空计划帧：`data-spotlight-sel === ''`（无引擎目标 = 整页基础态）且洞≈整页；
+ * - 有洞无阻断帧：洞非整页（已开始突显）但 `.tutorial-block` 数为 0。
+ */
+async function sampleHandover(page: Page, ms: number) {
+  return page.evaluate(async (dur: number) => {
+    let frames = 0
+    let emptyPlanFullHole = 0
+    let holeNotFullNoBlock = 0
+    const t0 = performance.now()
+    while (performance.now() - t0 < (dur as number)) {
+      const el = document.querySelector('.tutorial-spotlight')
+      if (el) {
+        frames += 1
+        const area = (el.getAttribute('data-spotlight-rects') ?? '')
+          .split(';')
+          .filter(Boolean)
+          .map((seg) => seg.split(',').map(Number))
+          .reduce((a, [, , w, h]) => a + Math.max(0, w!) * Math.max(0, h!), 0)
+        const vp = window.innerWidth * window.innerHeight
+        const full = vp > 0 && area >= 0.98 * vp
+        const sel = el.getAttribute('data-spotlight-sel') ?? ''
+        const blocks = document.querySelectorAll('.tutorial-block').length
+        if (sel === '' && full) emptyPlanFullHole += 1
+        if (!full && blocks === 0) holeNotFullNoBlock += 1
+      }
+      await new Promise((r) => requestAnimationFrame(() => r(null)))
+    }
+    return { frames, emptyPlanFullHole, holeNotFullNoBlock }
+  }, ms)
 }
 /** 等待遮罩过渡落定（data-spotlight-anim 回到 none）：让观测窗只覆盖目标过渡，不混入入场 focus */
 async function expectSpotlightSettled(page: Page): Promise<void> {
@@ -600,24 +775,24 @@ function expectHoleCountStable(frames: SpotlightFrame[], label: string): void {
   }
   expect(osc, `${label} 切片数不得出现 A→B→A 跳变（闪烁）`).toEqual([])
 }
-/** v0.3.18-beta2 bug3 护栏：气泡洞连续（单帧位移 ≤ 全程 15%，掉帧对跳过） */
-function expectBubbleHoleContinuity(frames: SpotlightFrame[], label: string): void {
-  const seq = frames.filter((f) => f.animRect)
-  expect(seq.length, `${label} 应采到动画洞帧`).toBeGreaterThan(3)
-  const dist = (
-    a: { l: number; t: number; w: number; h: number },
-    b: { l: number; t: number; w: number; h: number },
-  ) => Math.abs(b.l - a.l) + Math.abs(b.t - a.t) + Math.abs(b.w - a.w) + Math.abs(b.h - a.h)
+/** v0.3.18-beta2 bug3 护栏：气泡洞连续（单帧位移 ≤ 全程 15%，掉帧对跳过；v0.3.18-beta3 按键取洞） */
+function expectBubbleHoleContinuity(frames: SpotlightFrame[], label: string, key = '.tutorial-bubble'): void {
+  const seq = frames
+    .map((f) => ({ f, r: pickHole(f, key) }))
+    .filter((x): x is { f: SpotlightFrame; r: HoleRect } => !!x.r)
+  expect(seq.length, `${label} 应采到气泡洞帧（key=${key}）`).toBeGreaterThan(3)
+  const dist = (a: HoleRect, b: HoleRect) =>
+    Math.abs(b.l - a.l) + Math.abs(b.t - a.t) + Math.abs(b.w - a.w) + Math.abs(b.h - a.h)
   const first = seq[0]!
   const last = seq[seq.length - 1]!
-  const travel = dist(first.animRect!, last.animRect!)
+  const travel = dist(first.r, last.r)
   expect(travel, `${label} 应确有洞位移（换段/换行导致尺寸变化）`).toBeGreaterThan(1)
   let maxStep = 0
   for (let i = 1; i < seq.length; i++) {
     const a = seq[i - 1]!
     const b = seq[i]!
-    if (b.t - a.t > 24) continue // 跳过掉帧采样对（避免把系统卡顿判成跳变）
-    maxStep = Math.max(maxStep, dist(a.animRect!, b.animRect!))
+    if (b.f.t - a.f.t > 24) continue // 跳过掉帧采样对（避免把系统卡顿判成跳变）
+    maxStep = Math.max(maxStep, dist(a.r, b.r))
   }
   expect(
     maxStep / travel,
@@ -644,17 +819,21 @@ async function expectBaseSettled(page: Page): Promise<void> {
     )
     .toEqual({ anim: 'none', full: true })
 }
-/** data-spotlight-anim-rects 首项（动画插值洞矩形，未加 PAD） */
-async function animRects(page: Page): Promise<Array<{ left: number; top: number; width: number; height: number }>> {
-  const raw = await spotlightAttr(page, 'data-spotlight-anim-rects')
-  if (!raw) return []
-  return raw
-    .split(';')
-    .filter(Boolean)
-    .map((seg) => {
-      const [left, top, width, height] = seg.split(',').map(Number)
-      return { left: left!, top: top!, width: width!, height: height! }
-    })
+/** 按身份键读某目标的洞矩形（读 -hole-keys × -anim-rects 同序配对；找不到返回 null） */
+async function holeRectByKey(
+  page: Page,
+  key: string,
+): Promise<{ left: number; top: number; width: number; height: number } | null> {
+  const [keysRaw, rectsRaw] = await Promise.all([
+    spotlightAttr(page, 'data-spotlight-hole-keys'),
+    spotlightAttr(page, 'data-spotlight-anim-rects'),
+  ])
+  const keys = (keysRaw ?? '').split('|')
+  const rects = (rectsRaw ?? '').split(';').filter(Boolean)
+  const i = keys.indexOf(key)
+  if (i < 0 || !rects[i]) return null
+  const [left, top, width, height] = rects[i]!.split(',').map(Number)
+  return { left: left!, top: top!, width: width!, height: height! }
 }
 /** 目标中心点“命中信息”：topmost 元素是否落在阻断带 / 气泡 / 退出豁免里 */
 async function hitInfo(page: Page, selector: string) {
@@ -1184,6 +1363,9 @@ async function advanceUnit2ToThanks(page: Page): Promise<void> {
   expect(await engineSel(page)).toContain('.placement__board-wrap')
   await expectHit(page, '.placement__board', 'blocked', false)
   await expectHit(page, '.placement__tray', 'blocked', false)
+  // v0.3.18-beta3 item3 护栏：旋转引导 →「太棒了」期间，`.placement__board-wrap` 的洞必须
+  // **原地保持**（身份配对：同 key 只做自身几何插值）——逐帧 ≥1.5s 跟踪：key 全程存在、漂移 ≤6px、面积 ≥75%
+  const boardTrack = trackHole(page, '.placement__board-wrap', 1600)
   // 旋转 → thanks（bubble-soft：压暗但不阻断，玩家仍需操作飞机）
   await clickPlaneCenter(page)
   await expect(bubble(page)).toContainText('太棒了！确保你的飞机不重叠不越界之后，就可以开始游戏了！', {
@@ -1206,6 +1388,7 @@ async function advanceUnit2ToThanks(page: Page): Promise<void> {
     expect(await engineSel(page), 'thanks 非法不应突显确认布阵').not.toContain('.tutorial-confirm')
   }
   await expectHit(page, '.placement__board', 'blocked', false)
+  expectHoleTracked(await boardTrack, '旋转引导→太棒了 的 .placement__board-wrap 洞')
 }
 
 /** 单元2：开场 4 段逐段读毕 → 停在「待选栏」气泡（v0.3.17-beta3 item 5 跳过路径构造用） */
@@ -1236,7 +1419,7 @@ async function runUnit2(page: Page): Promise<void> {
   await expect
     .poll(
       async () => {
-        const d = (await animRects(page))[0]
+        const d = await holeRectByKey(page, '.tutorial-bubble')
         const b = await page.locator('.tutorial-bubble').boundingBox()
         if (!d || !b) return null
         return Math.max(
@@ -1265,7 +1448,10 @@ async function runUnit2(page: Page): Promise<void> {
   await expect.poll(() => rawHoles(page), { timeout: 5000 }).toBe(2)
   expect(await engineSel(page)).toContain('.placement__board-wrap')
   // item 6：跨阶段交接——确认布阵后单元3 首个遮罩过渡应为 transfer（洞从确认按钮续接）
-  const carryFrames = observeFrames(page, 1500)
+  const carryFrames = observeFrames(page, 3000)
+  // v0.3.18-beta3 item2 护栏：交接窗口（≥3s）内不得出现「空计划帧（sel 空且洞≈整页）」，
+  // 也不得出现「洞已非整页但阻断带为 0」的帧
+  const handover = sampleHandover(page, 3000)
   // item 7（beta2）：教程内不再渲染先后手横幅 → 与交接观测并行启动（点击前开始采样）
   const bannerCheck = expectNoTutorialBanner(page)
   await page.getByRole('button', { name: '确认布阵' }).click()
@@ -1274,6 +1460,10 @@ async function runUnit2(page: Page): Promise<void> {
   expect(animSet(cf), 'unit2→unit3 应为 transfer（spotlightCarry 跨阶段续接）').toContain('transfer')
   const firstCarry = cf.find((f) => f.anim === 'transfer')
   expect(firstCarry?.full, '交接首帧不应是整页洞（应从确认按钮洞续接）').toBe(false)
+  const ho = await handover
+  expect(ho.frames, '交接窗口应采到帧').toBeGreaterThan(20)
+  expect(ho.emptyPlanFullHole, '交接窗口不得出现「空计划帧（sel 空 + 洞≈整页）」').toBe(0)
+  expect(ho.holeNotFullNoBlock, '交接窗口不得出现「洞非整页但阻断带=0」的帧').toBe(0)
   await bannerCheck
 }
 
@@ -1674,7 +1864,8 @@ test.describe('新手教程', () => {
         // v0.3.17-beta2 item 1：弹窗期遮罩仍渲染基础态（恒渲染）且无阻断带
         await expect(spotlight(page), '弹窗期遮罩应仍存在（基础态）').toHaveCount(1)
         expect(await spotlightAttr(page, 'data-spotlight-block'), '弹窗期阻断属性应为 0').toBe('0')
-        await expect(page.locator('.tutorial-spotlight path'), '基础态应含整页洞路径').not.toHaveCount(0)
+        // v0.3.18-beta3 根因 B：弹窗期沿用**冻结几何**（不再发布「无目标 + 整页洞」的中间帧）
+        await expect(page.locator('.tutorial-spotlight path'), '弹窗期遮罩应含 path（冻结几何）').not.toHaveCount(0)
         await expectSingleLayer(page)
         await modal(page).getByRole('button', { name: '继续对局' }).click()
         await expect(modal(page)).toHaveCount(0)
@@ -1915,14 +2106,26 @@ test.describe('新手教程', () => {
     expect(await engineSel(page)).toContain('.placement__board-wrap')
     await expectHit(page, '.tutorial-confirm', 'blocked', false)
 
-    // 重叠 → 非法阵型（detect 混合模式）：单层遮罩、不阻断、网格洞仍在
+    // 再动一次 → detect（合法）：目标 = 我方网格 + 确认布阵（v0.3.18-beta3：dim=false 故不含气泡洞）
+    await clickPlaneCenter(page)
+    await expect(bubble(page)).toContainText('点击“确认布阵”开始游戏', { timeout: 8000 })
+    await expectSpotlightSettled(page)
+    await expect.poll(() => engineSel(page), { timeout: 5000 }).toContain('.placement__board-wrap')
+    expect(await engineSel(page), 'detect 合法应同时突显确认布阵').toContain('.tutorial-confirm')
+
+    // v0.3.18-beta3 item4 护栏：detect 合法（board-wrap + confirm 双洞）拖成非法 ——
+    // confirm 洞先原地保持（漂移 ≤6px）再面积递减并最终消失；board-wrap 洞全程漂移 ≤6px
     const b1 = await page.locator('.placement__plane').nth(0).boundingBox()
     const b2 = await page.locator('.placement__plane').nth(1).boundingBox()
     if (!b1 || !b2) throw new Error('已摆飞机不可见')
     const c1 = { x: b1.x + b1.width / 2, y: b1.y + b1.height / 2 }
     const c2 = { x: b2.x + b2.width / 2, y: b2.y + b2.height / 2 }
+    const confirmTrack = trackHole(page, '.tutorial-confirm', 1800, true)
+    const boardTrackIllegal = trackHole(page, '.placement__board-wrap', 1800)
     await drag(page, c1, c2) // 把 1 号飞机拖到 2 号上 → 重叠
     await expect(bubble(page)).toContainText('飞机不能重叠、不能越界哦！', { timeout: 8000 })
+    expectHoleShrinksAway(await confirmTrack, 'detect 合法→非法 的 .tutorial-confirm 洞')
+    expectHoleTracked(await boardTrackIllegal, 'detect 合法→非法 的 .placement__board-wrap 洞')
     await expectSingleLayer(page)
     await expect(page.locator('.tutorial-spotlight--dim')).toHaveCount(1)
     expect(await blockCount(page), '非法阵型压暗不阻断').toBe(0)

@@ -383,6 +383,9 @@ export function TutorialBattle({ fleet, onExitHome }: TutorialBattleProps) {
         return
       }
       startedRef.current = true
+      // v0.3.18-beta3 根因 B：会话就绪的同一次提交内就把开场链节点设好，
+      // 避免“新阶段已挂载、节点还是 null”的那一帧（active=false → 整页洞 + 0 阻断带）。
+      ptrRef.current = { table: 'intro', nodeId: 'i1', seg: 0 }
     } catch (err) {
       toast(err instanceof Error ? err.message : '教程对局生成失败', 'error')
       setStartFailed(true)

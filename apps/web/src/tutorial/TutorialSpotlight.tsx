@@ -116,14 +116,21 @@ function targetRectOf(selector: string): TargetRect | null {
   return { left: b.left, top: b.top, width: b.width, height: b.height }
 }
 
-function measureRects(list: string[]): TargetRect[] {
-  const out: TargetRect[] = []
+/** 目标洞 + 其**身份键**（= 目标选择器，v0.3.18-beta3 根因 A）：配对按身份而不是按最近几何。 */
+interface PairRect {
+  key: string
+  rect: TargetRect
+}
+function measurePairs(list: string[]): PairRect[] {
+  const out: PairRect[] = []
   for (const sel of list) {
     const r = targetRectOf(sel)
-    if (r) out.push(r)
+    if (r) out.push({ key: sel, rect: r })
   }
   return out
 }
+const samePairList = (a: PairRect[], b: PairRect[]) =>
+  a.length === b.length && a.every((p, i) => p.key === b[i]!.key && sameRect(p.rect, b[i]!.rect, 0.5))
 
 /**
  * 豁免元素（.tutorial-escape）矩形：任何模式下都不参与阻断。
@@ -187,9 +194,9 @@ export function TutorialSpotlight({
   const W = typeof window !== 'undefined' ? window.innerWidth : 0
   const H = typeof window !== 'undefined' ? window.innerHeight : 0
   const pageRect = useMemo<TargetRect>(() => ({ left: 0, top: 0, width: W, height: H }), [W, H])
-  const [measured, setMeasured] = useState<TargetRect[]>([])
+  const [measuredPairs, setMeasuredPairs] = useState<PairRect[]>([])
   const [escapes, setEscapes] = useState<TargetRect[]>([])
-  const liveTargets = active ? measureRects(engineTargets) : []
+  const livePairs = active ? measurePairs(engineTargets) : []
   /**
    * 目标几何：一律用**渲染期即时测量**。
    * - 选择器列表为空（基础态 / dim 目的地已并入 engineTargets）→ 真取消；
@@ -199,7 +206,9 @@ export function TutorialSpotlight({
   const wantTargets = active && engineTargets.length > 0
   // 渲染期测不到时回退到 effect 测量结果（含延迟重试）；两者都空则“暂不规划”，
   // 等 effect 测量落地后 sig 变化再规划（避免把“尚未渲染”误判为“取消突显”）
-  const destRects = wantTargets ? (liveTargets.length > 0 ? liveTargets : measured) : []
+  const destPairs: PairRect[] = wantTargets ? (livePairs.length > 0 ? livePairs : measuredPairs) : []
+  const destRects = destPairs.map((p) => p.rect)
+  const destKeys = destPairs.map((p) => p.key)
   const liveEscapes = active ? measureEscapeRects() : escapes
   const mergedEscapes = liveEscapes.length > 0 ? liveEscapes : escapes
 
@@ -214,6 +223,14 @@ export function TutorialSpotlight({
   const holeIdRef = useRef(0)
   const animsRef = useRef<AnimHole[]>([])
   const curRef = useRef<TargetRect[]>(initialRects)
+  /**
+   * 与 curRef 平行的**洞身份键**（= 该洞对应的目标选择器；null = 无身份，如跨阶段续接/carry 洞）。
+   * v0.3.18-beta3 根因 A：目标增删时按身份配对，持续存在的目标洞原地不动，新增原地长出、移除原地缩小。
+   */
+  const curKeysRef = useRef<(string | null)[]>(initialRects.map(() => null))
+  /** 本次动画要写入的身份键（与 animsRef 平行）；由 runLoop 在写入 rects 的同一帧同步到 curKeysRef，
+   *  避免“同一帧内二次规划”时 curKeysRef 已更新而 curRef 还是旧几何 → 索引错位。 */
+  const pendingKeysRef = useRef<(string | null)[]>([])
   const rafRef = useRef(0)
   const labelRef = useRef<AnimLabel>('none')
   const loopGenRef = useRef(0)
@@ -270,12 +287,16 @@ export function TutorialSpotlight({
       let finalRects = rects
       if (done) {
         // 收尾去重：并入同一目标后的重合洞只保留一个（几何 <1px 视为重合）
-        finalRects = rects.filter(
-          (r, i) => rects.findIndex((o) => sameRect(o, r, 1)) === i,
-        )
+        const keep = rects.map((r, i) => rects.findIndex((o) => sameRect(o, r, 1)) === i)
+        const keysNow = pendingKeysRef.current
+        // v0.3.18-beta3：被移除的洞「原地缩小至消失」→ 落定时裁掉零尺寸洞（及其身份键）
+        const alive = rects.map((r, i) => keep[i] && r.width > 0.5 && r.height > 0.5)
+        finalRects = rects.filter((_, i) => alive[i])
         curRef.current = finalRects
+        curKeysRef.current = keysNow.filter((_, i) => alive[i])
       } else {
         curRef.current = rects
+        curKeysRef.current = pendingKeysRef.current
       }
       commit(finalRects, done ? 'none' : labelRef.current)
       if (done) {
@@ -290,9 +311,11 @@ export function TutorialSpotlight({
   }
 
   /** 立即落位（无动画，用于初始化基础态 / 时长 0） */
-  const settleAt = (rects: TargetRect[]) => {
+  const settleAt = (rects: TargetRect[], keys?: (string | null)[]) => {
     animsRef.current = []
     curRef.current = rects
+    curKeysRef.current = keys ?? rects.map(() => null)
+    pendingKeysRef.current = [...curKeysRef.current]
     commit(rects, 'none')
     setIdle(true)
   }
@@ -301,9 +324,16 @@ export function TutorialSpotlight({
    * 过渡规划器：区分 rest→focus / append / transfer / blur-all / 部分移除。
    * @param dest 目标几何（空 = 基础态或 dim 态）
    */
-  const plan = (dest: TargetRect[]) => {
+  const plan = (destPairsIn: PairRect[]) => {
     setIdle(false)
+    const dest = destPairsIn.map((p) => p.rect)
+    const destKeysIn = destPairsIn.map((p) => p.key)
     let cur = curRef.current
+    // 防御（v0.3.18-beta3）：身份键与当前洞必须一一对应；长度不一致时按“无身份”处理，
+    // 避免 cur[ci] 越界（curKeys 短暂领先 rects 只可能出现在同一帧二次规划时）。
+    if (curKeysRef.current.length !== cur.length) {
+      curKeysRef.current = cur.map(() => null)
+    }
     const now = performance.now()
     /* ---------- 跨阶段续接补齐（v0.3.17-beta4） ----------
      * 新旧阶段在同一次 commit 内替换：新实例 render 时旧实例尚未卸载，peek 必然为空。
@@ -366,13 +396,14 @@ export function TutorialSpotlight({
     }
     if (cur.length === 0) {
       if (dest.length === 0) {
-        settleAt([pageRect])
+        settleAt([pageRect], [null])
         return
       }
       // rest → 目标：从整页收缩（dim 节点的目标即气泡矩形，天然是“暗→暗”连续）
       const seed = pageRect
       label0('focus')
       // item 1：从整页洞收缩前先静止 FOCUS_DELAY_MS
+      pendingKeysRef.current = [...destKeysIn]
       animsRef.current = delayFocusFrom(seed, dest, now)
       runLoop()
       return
@@ -384,10 +415,11 @@ export function TutorialSpotlight({
       const to = pageRect
       const moving = cur.filter((r) => !sameRect(r, to))
       if (moving.length === 0) {
-        settleAt(cur)
+        settleAt(cur, curKeysRef.current)
         return
       }
       label0('blur')
+      pendingKeysRef.current = cur.map(() => null)
       animsRef.current = cur.map((r) => mk(r, to, 'blur'))
       runLoop()
       return
@@ -401,63 +433,81 @@ export function TutorialSpotlight({
     if (isBase) {
       label0('focus')
       // item 1：聚焦前静止 FOCUS_DELAY_MS 再开始收缩（仅此一类过渡加延迟）
+      pendingKeysRef.current = [...destKeysIn]
       animsRef.current = delayFocusFrom(cur[0]!, dest, now)
       runLoop()
       return
     }
 
-    // ③ 已有洞 → 新目标：最近中心贪心匹配（transfer），多余洞收拢消失（blur-out），新增目标从中心生长（add）
+    // ③ 已有洞 → 新目标（v0.3.18-beta3 根因 A：**按目标身份配对**，而非按最近几何）
     focusHoldUntilRef.current = 0 // 非基础态过渡 → 截止时间作废
-    const matchedCur = new Set<number>()
+    const curKeys = curKeysRef.current
+    const usedCur = new Set<number>()
+    const matchedDest = new Set<number>()
     const planPairs: Array<{ ci: number; ti: number }> = []
+    // (1) 身份配对：同一个目标选择器 → 同一个洞（持续存在的目标洞原地保持/仅做自身几何插值）
     for (let ti = 0; ti < dest.length; ti++) {
-      let best = -1
-      let bestD = Infinity
-      for (let ci = 0; ci < cur.length; ci++) {
-        if (matchedCur.has(ci)) continue
-        const d = dist(cur[ci]!, dest[ti]!)
-        if (d < bestD) {
-          bestD = d
-          best = ci
-        }
+      const k = destKeysIn[ti]
+      if (k == null) continue
+      const ci = curKeys.findIndex((ck, i) => ck != null && ck === k && !usedCur.has(i))
+      if (ci >= 0) {
+        usedCur.add(ci)
+        matchedDest.add(ti)
+        planPairs.push({ ci, ti })
       }
-      if (best >= 0) {
-        matchedCur.add(best)
-        planPairs.push({ ci: best, ti })
-      } else {
-        planPairs.push({ ci: -1, ti })
+    }
+    /**
+     * (2) 无任何身份交集（整组替换：单元3 i2→i3 我方网格→参考网格、spotlightCarry 跨阶段续接、
+     * carry 洞 key=null 等）→ 回退到既有「最近中心匹配 + transfer」语义（e2e 的 transfer/首帧非整页断言依赖）。
+     */
+    const useNearest = planPairs.length === 0 && cur.length > 0 && dest.length > 0
+    if (useNearest) {
+      for (let ti = 0; ti < dest.length; ti++) {
+        let best = -1
+        let bestD = Infinity
+        for (let ci = 0; ci < cur.length; ci++) {
+          if (usedCur.has(ci)) continue
+          const d = dist(cur[ci]!, dest[ti]!)
+          if (d < bestD) {
+            bestD = d
+            best = ci
+          }
+        }
+        if (best >= 0) {
+          usedCur.add(best)
+          matchedDest.add(ti)
+          planPairs.push({ ci: best, ti })
+        }
       }
     }
     const newAnims: AnimHole[] = []
+    const newKeys: (string | null)[] = []
     let hasAdd = false
     let hasBlur = false
     let hasTransfer = false
     for (const { ci, ti } of planPairs) {
-      if (ci >= 0) {
-        const from = cur[ci]!
-        const to = dest[ti]!
-        // 注意：即使几何已一致也必须保留为洞（from==to 的静态动画），
-        // 否则该洞会从 anims 列表里消失 → 表现为“只有最后一个目标被突显”。
-        newAnims.push(mk(from, to, 'transfer'))
-        if (!sameRect(from, to)) hasTransfer = true
-      } else {
-        // 新目标：从中心向外生长
-        newAnims.push(mk(centerRect(dest[ti]!), dest[ti]!, 'add'))
-        hasAdd = true
-      }
+      // 注意：即使几何已一致也必须保留为洞（from==to 的静态动画），
+      // 否则该洞会从 anims 列表里消失 → 表现为“只有最后一个目标被突显”。
+      newAnims.push(mk(cur[ci]!, dest[ti]!, 'transfer'))
+      newKeys.push(destKeysIn[ti] ?? null)
+      if (!sameRect(cur[ci]!, dest[ti]!)) hasTransfer = true
     }
-    const removed = []
+    // (3) 新增目标：在**自身位置**从中心向外生长（不得从其它目标处飞来）
+    for (let ti = 0; ti < dest.length; ti++) {
+      if (matchedDest.has(ti)) continue
+      newAnims.push(mk(centerRect(dest[ti]!), dest[ti]!, 'add'))
+      newKeys.push(destKeysIn[ti] ?? null)
+      hasAdd = true
+    }
+    // (4) 未配对的旧洞：
+    //   · 身份模式 → **原地**缩小至消失（不得移动去补新增目标）；
+    //   · 完全替换（无身份交集）→ 保留既有「并入最近保留目标」的 transfer 语义。
     for (let ci = 0; ci < cur.length; ci++) {
-      if (!matchedCur.has(ci)) removed.push(ci)
-    }
-    for (const ci of removed) {
-      if (planPairs.some((p) => p.ci >= 0)) {
-        // 部分移除（仍有保留目标）：被移除的洞**并入最近的保留目标**（视觉上“高光汇聚过去”），
-        // 避免原地缩小/扩大造成“洞落在旧位置”的错觉（item 8）；动画结束后去重裁剪。
+      if (usedCur.has(ci)) continue
+      if (useNearest && planPairs.some((p) => p.ci >= 0)) {
         let best = -1
         let bestD = Infinity
         for (const p of planPairs) {
-          if (p.ci < 0) continue
           const d = dist(cur[ci]!, dest[p.ti]!)
           if (d < bestD) {
             bestD = d
@@ -465,25 +515,27 @@ export function TutorialSpotlight({
           }
         }
         newAnims.push(mk(cur[ci]!, dest[best]!, 'blur'))
+        newKeys.push(destKeysIn[best] ?? null)
       } else {
-        // 全部取消 → 扩大到整页（blur-all）
-        newAnims.push(mk(cur[ci]!, pageRect, 'blur'))
+        newAnims.push(mk(cur[ci]!, centerRect(cur[ci]!), 'blur'))
+        newKeys.push(null)
       }
       hasBlur = true
     }
     if (newAnims.length === 0) {
-      settleAt(dest)
+      settleAt(dest, destKeysIn)
       return
     }
     const label: AnimLabel = hasAdd ? 'add' : hasBlur ? 'blur' : hasTransfer ? 'transfer' : 'none'
     label0(label)
+    pendingKeysRef.current = newKeys
     animsRef.current = newAnims.map((a) => ({ ...a, label }))
     runLoop()
   }
 
   /* ---------- 目标变化 → 规划动画 ---------- */
-  const sig = `${active ? 1 : 0}|${dimOnly ? 1 : 0}|${destRects
-    .map((r) => `${Math.round(r.left)},${Math.round(r.top)},${Math.round(r.width)},${Math.round(r.height)}`)
+  const sig = `${active ? 1 : 0}|${dimOnly ? 1 : 0}|${modalOpen ? 1 : 0}|${destPairs
+    .map((p) => `${p.key}@${Math.round(p.rect.left)},${Math.round(p.rect.top)},${Math.round(p.rect.width)},${Math.round(p.rect.height)}`)
     .join(';')}`
   const prevSigRef = useRef('')
   // 布局期规划：场景/目标切换在浏览器绘制前完成规划（首帧即用新几何，避免“旧洞闪一下”）
@@ -491,8 +543,14 @@ export function TutorialSpotlight({
     if (sig === prevSigRef.current) return
     // 目标选择器非空但尚未测到 → 不规划（等测量到位后 sig 变化再规划），避免误判为取消
     if (wantTargets && destRects.length === 0) return
+    // v0.3.18-beta3 根因 B：弹窗期**冻结**上一份几何（不发布“无目标+整页洞”的中间帧），
+    // 关闭弹窗时 sig 因 modalOpen 变化而重新触发规划。
+    if (modalOpen) {
+      prevSigRef.current = sig
+      return
+    }
     prevSigRef.current = sig
-    plan(destRects)
+    plan(destPairs)
     // eslint 无 react-hooks 插件：依赖 sig / wantTargets 即可
   }, [sig, wantTargets])
 
@@ -514,15 +572,15 @@ export function TutorialSpotlight({
    */
   useLayoutEffect(() => {
     if (!active) return
-    const nextT = measureRects(effTargetsRef.current)
-    setMeasured((prev) => (sameRectList(prev, nextT) ? prev : nextT))
+    const nextT = measurePairs(effTargetsRef.current)
+    setMeasuredPairs((prev) => (samePairList(prev, nextT) ? prev : nextT))
     const nextE = measureEscapeRects()
     setEscapes((prev) => (sameRectList(prev, nextE) ? prev : nextE))
   })
 
   useLayoutEffect(() => {
     const measure = () => {
-      setMeasured(measureRects(effTargetsRef.current))
+      setMeasuredPairs(measurePairs(effTargetsRef.current))
       setEscapes(measureEscapeRects())
     }
     measure()
@@ -560,30 +618,12 @@ export function TutorialSpotlight({
   )
 
   /* ---------- 渲染 ---------- */
-  if (modalOpen) {
-    return (
-      <svg
-        className="tutorial-spotlight"
-        data-spotlight-mode="holes"
-        data-spotlight-anim="none"
-        data-spotlight-holes={1}
-        data-spotlight-holes-raw={1}
-        data-spotlight-block="0"
-        width={W}
-        height={H}
-        aria-hidden="true"
-      >
-        <path d={`M0 0 H${W} V${H} H0 Z M0 0 H${W} V${H} H0 Z`} fillRule="evenodd" fill={DARK} />
-      </svg>
-    )
-  }
-
   const rects = frame.rects
   const animating = frame.anim !== 'none'
   /** 阻断层是否生效：遮罩激活（active）且调用方允许阻断（block）。
    *  v0.3.18-beta2 item 1：只要 active，**任何一帧**（含基础态洞=整页、focus 静止期、过渡帧、
    *  dim/bubble-only）都必须有阻断层覆盖非豁免区；基础态/自由对局（active=false）完全不阻断。 */
-  const blockActive = active && block
+  const blockActive = active && block && !modalOpen
   const mode: 'dim' | 'holes' | 'hybrid' = dim ? (dimOnly ? 'dim' : 'hybrid') : 'holes'
   /** 纯 dim 且动画静止：渲染整屏暗层（气泡 z 豁免）；过渡期（含切到气泡）由空洞引擎承担 */
   const renderDimLayer = dimOnly && !animating && idle
@@ -627,8 +667,41 @@ export function TutorialSpotlight({
   /** 供 e2e/QA 读取的「视觉洞矩形（去重叠切片，未圆角）」列表 —— 面积口径与旧 path 解析一致，
    *  v0.3.18-beta1 空洞改为圆角路径后，path 不再由 `M…H…V…H…Z` 构成，度量请改读本属性。 */
   const rectsAttr = rectsToAttr(visualHoles)
+  /** v0.3.18-beta3：洞 ↔ 目标的身份键（与 -rects 的洞、与 -dest 的目标同序），供 e2e 验证“原地保持” */
+  const holeKeysAttr = curKeysRef.current.map((k) => k ?? '-').join('|')
+  const destKeysAttr = destKeys.join('|')
   /** 供 e2e 校验缓动曲线：**动画插值中的原始洞矩形**（未加 PAD、未并入豁免、未圆角） */
   const animRectsAttr = rectsToAttr(rects)
+
+  // v0.3.18-beta3：弹窗期仍渲染遮罩（QA：弹窗期遮罩需在位且含 path），但：
+  //  · **沿用当前（冻结的）几何** —— 不再发布「无目标 + 整页洞」的中间帧（根因 B）；
+  //  · `-block=0` 且不渲染阻断带（QA：弹窗期阻断带为 0）。
+  // 规划在弹窗期被跳过（见 plan 的 layout effect），因此这里的几何就是弹窗打开前的那一份。
+  if (modalOpen) {
+    return (
+      <svg
+        className={['tutorial-spotlight', dim ? 'tutorial-spotlight--dim' : ''].filter(Boolean).join(' ')}
+        data-spotlight-mode={mode}
+        data-spotlight-anim={frame.anim}
+        data-spotlight-holes={visualHoles.length}
+        data-spotlight-holes-raw={rects.length}
+        data-spotlight-rects={rectsAttr}
+        data-spotlight-anim-rects={animRectsAttr}
+        data-spotlight-hole-keys={holeKeysAttr}
+        data-spotlight-dest-keys={destKeysAttr}
+        data-spotlight-dest={destRects
+          .map((r) => `${Math.round(r.left)},${Math.round(r.top)},${Math.round(r.width)},${Math.round(r.height)}`)
+          .join(';')}
+        data-spotlight-sel={engineTargets.join('|')}
+        data-spotlight-block="0"
+        width={W}
+        height={H}
+        aria-hidden="true"
+      >
+        <path d={`${framePath} ${holePath}`} fillRule="evenodd" fill={DARK} />
+      </svg>
+    )
+  }
 
   if (renderDimLayer) {
     return (
@@ -641,6 +714,8 @@ export function TutorialSpotlight({
           data-spotlight-holes-raw={0}
           data-spotlight-rects={rectsAttr}
           data-spotlight-anim-rects={animRectsAttr}
+        data-spotlight-hole-keys={holeKeysAttr}
+        data-spotlight-dest-keys={destKeysAttr}
           data-spotlight-dest={destRects
             .map((r) => `${Math.round(r.left)},${Math.round(r.top)},${Math.round(r.width)},${Math.round(r.height)}`)
             .join(';')}
@@ -669,6 +744,8 @@ export function TutorialSpotlight({
         data-spotlight-holes-raw={rects.length}
         data-spotlight-rects={rectsAttr}
         data-spotlight-anim-rects={animRectsAttr}
+        data-spotlight-hole-keys={holeKeysAttr}
+        data-spotlight-dest-keys={destKeysAttr}
         data-spotlight-dest={destRects
           .map((r) => `${Math.round(r.left)},${Math.round(r.top)},${Math.round(r.width)},${Math.round(r.height)}`)
           .join(';')}
