@@ -1,42 +1,41 @@
 /**
- * settings.spec —— 设置页：音量推杆、反转 X/O、AI 难度选单；
+ * settings.spec —— 设置页：音效音量推杆、反转 X/O、AI 难度选单；
  * 改动后刷新页面验证 localStorage 持久化。
+ * v0.3.18-beta1：BGM 音量条已从设置页移除（仅保留「音效音量」一根滑条）。
  */
 import { expect, test } from '@playwright/test'
 import { watchErrors } from './helpers'
 
 test.describe('设置', () => {
-  test('音量推杆与反转 X/O 持久化（刷新后保留）、难度选单', async ({ page }) => {
+  test('音效音量推杆与反转 X/O 持久化（刷新后保留）、难度选单；BGM 音量条已下线', async ({
+    page,
+  }) => {
     const errs = watchErrors(page)
 
     await page.goto('/')
     await page.getByRole('button', { name: '设置' }).click()
 
-    const bgm = page
-      .locator('label.paper-slider')
-      .filter({ hasText: 'BGM 音量' })
-      .locator('input[type="range"]')
-    const sfx = page
-      .locator('label.paper-slider')
-      .filter({ hasText: '音效音量' })
-      .locator('input[type="range"]')
+    const sliders = page.locator('label.paper-slider')
+    const sfx = sliders.filter({ hasText: '音效音量' }).locator('input[type="range"]')
     const toggle = page
       .locator('.paper-toggle')
       .filter({ hasText: '反转 X 和 O' })
       .locator('input[type="checkbox"]')
     const difficulty = page.getByLabel('AI 难度')
 
+    // v0.3.18-beta1：设置页只剩「音效音量」一根滑条（BGM 音量条与文案均已移除）
+    await expect(sliders, '设置页应只剩 1 根滑条').toHaveCount(1)
+    await expect(page.getByText('BGM 音量')).toHaveCount(0)
+
     // 默认值
-    await expect(bgm).toHaveValue('0.5')
     await expect(sfx).toHaveValue('0.7')
     await expect(toggle).not.toBeChecked()
     await expect(difficulty).toHaveValue('normal')
 
-    // 音量推杆（含试听按钮可用）
+    // 音量推杆（含试听按钮可用）；首个（也是唯一）滑条数值即音效音量
     await expect(page.getByRole('button', { name: '试听' }).first()).toBeEnabled()
-    await bgm.fill('0')
     await sfx.fill('0.2')
-    await expect(page.locator('.paper-slider__value').first()).toHaveText('0%')
+    await expect(page.locator('.paper-slider__value').first()).toHaveText('20%')
 
     // 反转 X 和 O
     await toggle.check()
@@ -52,7 +51,7 @@ test.describe('设置', () => {
     // 刷新后保留（刷新回主页，需再进设置页）
     await page.reload()
     await page.getByRole('button', { name: '设置' }).click()
-    await expect(bgm).toHaveValue('0')
+    await expect(sliders).toHaveCount(1)
     await expect(sfx).toHaveValue('0.2')
     await expect(toggle).toBeChecked()
     await expect(difficulty).toHaveValue('hell')

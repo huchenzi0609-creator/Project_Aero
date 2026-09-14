@@ -11,13 +11,13 @@ import { StampMark } from '../components/grid/StampMark'
 export function Settings() {
   const setView = useAppStore((s) => s.setView)
 
-  const bgmVolume = useSettingsStore((s) => s.bgmVolume)
+  // v0.3.18-beta1：BGM 音量条已从设置页移除（bgm 播放早已下线）；
+  // settingsStore.bgmVolume 字段保留（存档兼容 + GameScreen 仍在读取），仅不再暴露 UI
   const sfxVolume = useSettingsStore((s) => s.sfxVolume)
   const invertMarks = useSettingsStore((s) => s.invertMarks)
   const difficulty = useSettingsStore((s) => s.difficulty)
   const quickColor = useSettingsStore((s) => s.quickColor)
   const singleTapShot = useSettingsStore((s) => s.singleTapShot)
-  const setBgmVolume = useSettingsStore((s) => s.setBgmVolume)
   const setSfxVolume = useSettingsStore((s) => s.setSfxVolume)
   const toggleInvertMarks = useSettingsStore((s) => s.toggleInvertMarks)
   const setDifficulty = useSettingsStore((s) => s.setDifficulty)
@@ -52,14 +52,6 @@ export function Settings() {
         <section className="settings__section">
           <h2 className="settings__section-title">声音</h2>
           <PaperCard>
-            <div className="settings__row settings__vol">
-              <div style={{ flex: 1 }}>
-                <PaperSlider label="BGM 音量" value={bgmVolume} onChange={setBgmVolume} />
-              </div>
-              <PaperButton size="sm" variant="ghost" onClick={preview}>
-                试听
-              </PaperButton>
-            </div>
             <div className="settings__row settings__vol">
               <div style={{ flex: 1 }}>
                 <PaperSlider

@@ -275,6 +275,78 @@ test.describe('竖版 9:16 舞台布局', () => {
     await ctx.close()
   })
 
+  test('规则说明竖版无溢出（v0.3.18-beta1 修复护栏）：360/390/430 + 横版 1280/844', async ({
+    browser,
+  }) => {
+    test.setTimeout(180_000)
+    // 修复根因：`.rules__fig` 未重置 <figure> 的 UA 默认 margin（1em 40px），竖版双栏下插图右移溢出、
+    // 图注被卡片裁切。本用例对三档竖版（+ 两档横版回归）逐项断言栏内无横向溢出。
+    for (const viewport of [
+      { width: 360, height: 780 },
+      { width: 390, height: 844 },
+      { width: 430, height: 932 },
+      { width: 1280, height: 800 },
+      { width: 844, height: 390 },
+    ]) {
+      const ctx = await browser.newContext({ viewport })
+      const page = await ctx.newPage()
+      const errs = watchErrors(page)
+
+      await page.goto('/')
+      await page.getByRole('button', { name: '规则说明' }).click()
+      await expect(page.getByRole('heading', { name: '规则说明' })).toBeVisible({ timeout: 10_000 })
+      await expect(page.locator('.rules__diagram-row').first()).toBeVisible({ timeout: 10_000 })
+      await page.waitForTimeout(200)
+
+      const m = await page.evaluate(() => {
+        const doc = document.documentElement
+        const rows = Array.from(document.querySelectorAll('.rules__diagram-row')) as HTMLElement[]
+        const figs = Array.from(document.querySelectorAll('.rules__fig')) as HTMLElement[]
+        const caps = Array.from(document.querySelectorAll('.rules__fig-caption')) as HTMLElement[]
+        const right = (el: Element) => el.getBoundingClientRect().right
+        let figOverflow = 0
+        let capOverflow = 0
+        let capClipped = 0
+        for (const fig of figs) {
+          const sec = fig.closest('.rules__section') as HTMLElement | null
+          // 插图右边界必须在所属栏（.rules__section）内
+          if (!sec || right(fig) > right(sec) + 1) figOverflow += 1
+        }
+        for (const cap of caps) {
+          const sec = cap.closest('.rules__section') as HTMLElement | null
+          const r = cap.getBoundingClientRect()
+          if (!sec || right(cap) > right(sec) + 1) capOverflow += 1
+          // 图注未被裁切：宽度>0、可见高度>0、无内部横向裁切
+          if (r.width <= 0 || r.height <= 0 || cap.scrollWidth > cap.clientWidth + 1) capClipped += 1
+        }
+        return {
+          docOverflow: doc.scrollWidth - doc.clientWidth,
+          rowOverflow: rows.map((el) => el.scrollWidth - el.clientWidth),
+          figOverflow,
+          capOverflow,
+          capClipped,
+          figs: figs.length,
+          caps: caps.length,
+        }
+      })
+
+      const tag = `${viewport.width}×${viewport.height}`
+      expect(m.docOverflow, `${tag} documentElement 不应横向溢出`).toBeLessThanOrEqual(1)
+      expect(m.rowOverflow.length, `${tag} 应有 2 个插图行`).toBe(2)
+      for (const [i, over] of m.rowOverflow.entries()) {
+        expect(over, `${tag} .rules__diagram-row[${i}] scrollWidth 不应超 clientWidth`).toBeLessThanOrEqual(1)
+      }
+      expect(m.figOverflow, `${tag} 每个 .rules__fig 右边界应在所属栏内`).toBe(0)
+      expect(m.capOverflow, `${tag} 每条图注右边界应在所属栏内`).toBe(0)
+      expect(m.capClipped, `${tag} 图注不应被裁切（宽度/高度>0 且无内部裁切）`).toBe(0)
+      expect(m.figs, `${tag} 应有四幅插图`).toBe(4)
+      expect(m.caps, `${tag} 应有四条图注`).toBe(4)
+
+      expect(errs()).toEqual([])
+      await ctx.close()
+    }
+  })
+
   test('联机摆阵 20×20：网格不被上方组件遮挡、完整可见、无滚动、尺寸冻结；小屏首行完整显示', async ({ browser }) => {
     test.setTimeout(150_000)
     for (const viewport of [

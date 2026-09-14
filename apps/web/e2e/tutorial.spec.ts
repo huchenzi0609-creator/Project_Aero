@@ -10,6 +10,9 @@
  *   6) 阵型合法时 thanks 阶段即突显「确认布阵」；
  *   7) 放错位置的幽灵【不被回收】→ 复用同一架（旋转/拖动）即可换朝向重试成功。
  *
+ * v0.3.18-beta1 适配：洞几何断言全部改读 `data-spotlight-rects`（path 已改 3px 圆角、无法再按
+ *   M…H…V…H…Z 解析）；动画时长 340→560ms（解析弹簧），提示带 --on 改 1250ms，故采样窗口相应放宽。
+ *
  * v0.3.17-beta5 增补：
  *   1) k2 幽灵判定改为「每步重复检测」：松手才判定（按住 ≥0.9s 既不成也不败）、失败不回收
  *      （data-plane-id 不变）、复用同一架旋转/拖动到完全正确即成功（不新建副本）；
@@ -83,11 +86,9 @@ async function clickBubble(page: Page, timeout = 10_000): Promise<void> {
   await expect(bubble(page)).toBeVisible({ timeout })
   await bubble(page).click({ timeout: 3000 })
 }
-/** 单层 svg 的挖洞数（path d 中 ' M' 子路径计数） */
+/** 单层遮罩的挖洞数（v0.3.18-beta1：path 改 3px 圆角后含弧线，不能再数 ' M' → 读 data-spotlight-holes） */
 async function spotlightHoles(page: Page): Promise<number> {
-  const d = await page.locator('.tutorial-spotlight path').getAttribute('d').catch(() => null)
-  if (!d) return 0
-  return (d.match(/ M/g) ?? []).length
+  return Number((await spotlightAttr(page, 'data-spotlight-holes')) ?? '0')
 }
 function blockCount(page: Page) {
   return page.locator('.tutorial-block').count()
@@ -174,23 +175,27 @@ interface HoleAreaFrame {
 }
 async function observeHoleAreas(page: Page, ms = 1200): Promise<HoleAreaFrame[]> {
   return page.evaluate(async (dur: number) => {
-    const parse = (d: string) => {
-      const re = /M(-?[\d.]+) (-?[\d.]+) H(-?[\d.]+) V(-?[\d.]+) H(-?[\d.]+) Z/g
-      const out: Array<{ l: number; t: number; r: number; b: number }> = []
-      let m: RegExpExecArray | null
-      while ((m = re.exec(d))) out.push({ l: +m[1]!, t: +m[2]!, r: +m[3]!, b: +m[4]! })
-      return out
+    // v0.3.18-beta1：改读 data-spotlight-rects（圆角 path 无法用矩形正则解析）
+    const parse = (raw: string | null) => {
+      if (!raw) return [] as Array<{ l: number; t: number; r: number; b: number }>
+      return raw
+        .split(';')
+        .filter(Boolean)
+        .map((seg) => {
+          const [l, t, w, h] = seg.split(',').map(Number)
+          return { l: l!, t: t!, r: l! + w!, b: t! + h! }
+        })
     }
     const frames: Array<{ dt: number; union: number; maxHole: number; holes: number; bubble: string }> = []
     let prev = 0
     const t0 = performance.now()
     while (performance.now() - t0 < dur) {
       const now = performance.now()
-      const path = document.querySelector('.tutorial-spotlight path')
-      if (path) {
+      const el = document.querySelector('.tutorial-spotlight')
+      if (el) {
         const W = window.innerWidth
         const H = window.innerHeight
-        const rects = parse(path.getAttribute('d') ?? '').filter(
+        const rects = parse(el.getAttribute('data-spotlight-rects')).filter(
           (r) => (r.r - r.l) * (r.b - r.t) < W * H * 0.999,
         )
         const areas = rects.map((r) => Math.max(0, r.r - r.l) * Math.max(0, r.b - r.t))
@@ -254,12 +259,17 @@ interface SpotlightFrame {
 /** rAF 轮询逐帧采样遮罩属性（dest 变化前开始观测；覆盖 ~340ms smootherstep 过渡 + v0.3.17-beta4 聚焦静止期） */
 async function observeFrames(page: Page, ms = 700): Promise<SpotlightFrame[]> {
   return page.evaluate(async (dur: number) => {
-    const parseHoles = (d: string) => {
-      const re = /M(-?[\d.]+) (-?[\d.]+) H(-?[\d.]+) V(-?[\d.]+) H(-?[\d.]+) Z/g
-      const rects: Array<[number, number, number, number]> = []
-      let m: RegExpExecArray | null
-      while ((m = re.exec(d))) rects.push([+m[1]!, +m[2]!, +m[3]!, +m[4]!])
-      return rects.slice(1) // 首个子路径恒为整屏外框，其余为洞
+    // v0.3.18-beta1：洞几何改读 data-spotlight-rects（分号分隔 l,t,w,h 的去重叠切片列表）——
+    // 圆角后 path 由弧线构成，M…H…V…H…Z 解析会得到 0 个洞。切片互不重叠 → 面积和 = 并集面积。
+    const parseHoles = (raw: string | null) => {
+      if (!raw) return [] as Array<[number, number, number, number]>
+      return raw
+        .split(';')
+        .filter(Boolean)
+        .map((seg) => {
+          const [l, t, w, h] = seg.split(',').map(Number)
+          return [l!, t!, l! + w!, t! + h!] as [number, number, number, number]
+        })
     }
     const out: Array<{
       anim: string | null
@@ -276,8 +286,7 @@ async function observeFrames(page: Page, ms = 700): Promise<SpotlightFrame[]> {
     while (performance.now() - t0 < dur) {
       const el = document.querySelector('.tutorial-spotlight')
       if (el) {
-        const path = el.querySelector('path')
-        const holes = path ? parseHoles(path.getAttribute('d') ?? '') : []
+        const holes = parseHoles(el.getAttribute('data-spotlight-rects'))
         const area = holes.reduce(
           (a, [l, t, r, b]) => a + Math.max(0, r - l) * Math.max(0, b - t),
           0,
@@ -764,14 +773,18 @@ async function countFxFlashes(page: Page, kind: 'success' | 'failure', ms: numbe
   return page.evaluate(
     async ([k, dur]) => {
       const sel = `.tutorial-fx--${k}`
-      let wasOn = false
+      // wasOn 用首帧真实状态初始化：窗口起点若仍在闪，不应被计成一次新提示
+      let wasOn: boolean | null = null
       let count = 0
       const t0 = performance.now()
       while (performance.now() - t0 < (dur as number)) {
         const el = document.querySelector(sel as string)
         const on = !!el && (el.getAttribute('class') ?? '').includes('--on')
-        if (on && !wasOn) count += 1
-        wasOn = on
+        if (wasOn === null) wasOn = on
+        else {
+          if (on && !wasOn) count += 1
+          wasOn = on
+        }
         await new Promise((r) => requestAnimationFrame(() => r(null)))
       }
       return count
@@ -1289,7 +1302,11 @@ async function runUnit3KillBranch(
   }
 
   // (b) 幂等：静置 ≥1.4s 不重复提示（同一架 + 同一结果只提示一次）
-  await page.waitForTimeout(800) // 等本次失败闪烁的 --on 结束，避免把残留计成新提示
+  // v0.3.18-beta1：提示带 --on 改为 1250ms（点亮 110ms/熄灭 820ms，总可见 ≈2s），
+  // 固定 800ms 等待已不够 → 显式等本次闪烁熄灭后再开始采样，避免把残留计成新提示
+  await expect(page.locator('.tutorial-fx--on'), '本次提示闪烁应已熄灭').toHaveCount(0, {
+    timeout: 4000,
+  })
   const idleText = await bubbleTextSafe(page)
   const idleFlashes = countFxFlashes(page, 'failure', 1600)
   await page.waitForTimeout(1400)
@@ -1299,7 +1316,7 @@ async function runUnit3KillBranch(
 
   // ③ 完全正确（exact）：**复用同一架幽灵**（点击原地旋转到真朝向 + 拖动该元素到正确位置）→ k3
   //    beta5 起旧幽灵占位会挡掉参考网格新建副本（overlapAt 拒绝），故不再新建
-  const successFlashes = countFxFlashes(page, 'success', 3200)
+  const successFlashes = countFxFlashes(page, 'success', 3600) // 覆盖弹道动画（560ms）+ 提示带点亮
   let exact = false
   let rotNow = wrongRot // ② 落子时的参考朝向 = 该幽灵朝向
   for (const rot of [...candidates, 0, 1, 2, 3].filter((v, i, a) => a.indexOf(v) === i)) {
@@ -1314,8 +1331,8 @@ async function runUnit3KillBranch(
       rotNow = (rotNow + 1) % 4
     }
     if (rotNow !== rot) continue
-    const blurFrames = observeFrames(page, 1300) // 覆盖落定判定到 k3 过渡
-    const areaFrames = observeHoleAreas(page, 1200) // v0.3.17-beta3 item 4：融合面积连续性
+    const blurFrames = observeFrames(page, 1600) // 覆盖落定判定到 k3 过渡（动画 560ms）
+    const areaFrames = observeHoleAreas(page, 1500) // v0.3.17-beta3 item 4：融合面积连续性
     await dragGhostTo(page, headMatchVis(head, rot), rot)
     const frames = await areaFrames
     const blf = await blurFrames

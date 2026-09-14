@@ -188,49 +188,64 @@
   z-index: 160;
 }
 
-/* 成功（深绿）/失败（深红）四周 5px 边带：淡入淡出 */
+/* ============ v0.3.18-beta1：<退出教程> 圆角矩形托盘 ============
+   原先是裸文字，压在遮罩上既不显眼也不好点。改为纸感圆角托盘（与 3px 圆角语言一致，取纸感半径 --radius-card=4px）。
+   **豁免测量关键**：托盘样式直接加在 `.tutorial-escape` 元素**自身**（padding + 背景 + 边框 + 阴影），
+   元素就是按钮本身 → TutorialSpotlight 的豁免测量（getBoundingClientRect）自动把托盘算进豁免洞，
+   不存在“按钮被豁免、托盘被压暗/裁切”的错位；首帧即可命中（z-index 160 高于阻断带 150）。
+   作用域限定 `button.tutorial-escape`：GameScreen 的 `.game-banner` / `.game-banner__card` 上的同类名不受影响（它们另有 m4.css 规则）。 */
+button.tutorial-escape {
+  padding: 7px 13px;
+  border-radius: var(--radius-card, 4px);
+  color: var(--ink);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.62), rgba(255, 255, 255, 0) 72%) no-repeat,
+    var(--paper-sheet);
+  border: 1.5px solid rgba(96, 78, 50, 0.5);
+  box-shadow:
+    0 1px 0 rgba(96, 78, 50, 0.28),
+    0 3px 0 rgba(96, 78, 50, 0.14),
+    0 7px 14px -6px rgba(60, 40, 10, 0.4);
+}
+button.tutorial-escape:hover:not(:disabled) {
+  background: #fdf9ec;
+  transform: translateY(-1px);
+}
+button.tutorial-escape:active:not(:disabled) {
+  transform: translateY(1px);
+  box-shadow:
+    inset 0 1px 2px rgba(84, 66, 38, 0.2),
+    0 1px 2px rgba(84, 66, 38, 0.25);
+}
+
+/* ============ v0.3.18-beta1：成功（深绿）/失败（深红）四周光带重新设计 ============
+   - 边带加宽到 16px（原 5px），由 TutorialFx.bandPaths() 用 path 绘制；
+   - 朝向画面内部的四个角做 3px 圆角（与遮罩空洞同一圆角语言）；外侧贴屏幕边为直角；
+   - 由外到内透明度非线性升高（每条带一条 linearGradient，见 FxGradients）；
+   - **快速点亮 / 缓缓熄灭**：--on 进入用 110ms ease-out，退出用 820ms ease-in-out（非线性）；
+   - --on 保持 1250ms（原 700ms），整体可见时长 ≈ 2.0s。 */
 .tutorial-fx {
   position: fixed;
   inset: 0;
   z-index: 230;
   pointer-events: none;
   opacity: 0;
-  transition: opacity 160ms ease;
+  /* 熄灭：缓缓（离开 --on 时使用基础态过渡） */
+  transition: opacity 820ms cubic-bezier(0.33, 0, 0.67, 1);
 }
 .tutorial-fx--on {
   opacity: 1;
+  /* 点亮：快速 */
+  transition: opacity 110ms cubic-bezier(0.16, 1, 0.3, 1);
 }
-.tutorial-fx__edge {
-  position: absolute;
-  background: currentColor;
+.tutorial-fx__svg {
+  display: block;
+  width: 100%;
+  height: 100%;
 }
 .tutorial-fx--success {
   color: var(--hit-green);
 }
 .tutorial-fx--failure {
   color: var(--kill-red);
-}
-.tutorial-fx__edge--top,
-.tutorial-fx__edge--bottom {
-  left: 0;
-  right: 0;
-  height: 5px;
-}
-.tutorial-fx__edge--top {
-  top: 0;
-}
-.tutorial-fx__edge--bottom {
-  bottom: 0;
-}
-.tutorial-fx__edge--left,
-.tutorial-fx__edge--right {
-  top: 0;
-  bottom: 0;
-  width: 5px;
-}
-.tutorial-fx__edge--left {
-  left: 0;
-}
-.tutorial-fx__edge--right {
-  right: 0;
 }

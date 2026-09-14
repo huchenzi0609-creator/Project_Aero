@@ -19,8 +19,8 @@ test.describe('主页', () => {
     await expect(page.getByRole('button', { name: '对战模式' })).toBeVisible()
     await expect(page.getByRole('button', { name: '设置' })).toBeVisible()
     await expect(page.getByRole('button', { name: '规则说明' })).toBeVisible()
-    // 版本角标 v0.3.17（main 提升为 0.3.17-alpha；线上 /beta 仍为 v0.3.17-beta5 产物）
-    await expect(page.locator('.home__version')).toHaveText('v0.3.17')
+    // 版本角标 v0.3.18-beta1（release/v0.3.18）
+    await expect(page.locator('.home__version')).toHaveText('v0.3.18-beta1')
     // 备案合规：工信部备案号链接（横版默认视口）
     const icp = page.locator('a.home__icp', { hasText: '浙ICP备2026073891号' })
     await expect(icp).toBeVisible()
@@ -42,9 +42,11 @@ test.describe('主页', () => {
     const practiceY = await page.getByRole('button', { name: '练习模式' }).boundingBox()
     expect(tutorialY && practiceY ? tutorialY.y < practiceY.y : false).toBe(true)
 
-    // 用户名显示（本地占位「游客……」或服务端身份「游客XXXXX」）
-    await expect(page.locator('.home__guest-label')).toHaveText('你好，')
-    await expect(page.locator('.home__guest-name')).toHaveText(/游客/)
+    // v0.3.18-beta1：主页右上角「你好，游客×××××」已移除（仅 UI；guestStore/身份逻辑未动）
+    // → 反向断言其不存在，防止回归
+    await expect(page.locator('.home__guest-label'), '游客问候标签应已移除').toHaveCount(0)
+    await expect(page.locator('.home__guest-name'), '游客名应已移除').toHaveCount(0)
+    await expect(page.getByText('你好，'), '不应再出现「你好，」问候').toHaveCount(0)
 
     // 新手教程：进入教程宿主页（入口弹窗 P1；G 教程全流程在 tutorial.spec 覆盖）
     await page.getByRole('button', { name: '新手教程' }).click()

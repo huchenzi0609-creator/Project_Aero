@@ -1,6 +1,5 @@
 import { useState } from 'react'
 import { useAppStore } from '../store/appStore'
-import { useGuestStore } from '../store/guestStore'
 import { useEffectiveOrientation } from '../hooks/useOrientation'
 import { PaperButton } from '../components/ui/PaperButton'
 import { OrientationToggle } from '../components/OrientationToggle'
@@ -45,7 +44,6 @@ function PencilUnderline() {
 export function Home() {
   const orientation = useEffectiveOrientation()
   const setView = useAppStore((s) => s.setView)
-  const guestName = useGuestStore((s) => s.name)
   // 练习模式 / 新手教程面板（挂在本视图内；将来 view 层加 'practice'/'tutorial' 路由后可由 setView 接管）
   const [panel, setPanel] = useState<'root' | 'practice' | 'tutorial'>('root')
 
@@ -60,10 +58,6 @@ export function Home() {
     <div className={`page home home--${orientation}`}>
       <header className="home__top">
         <OrientationToggle />
-        <div className="home__guest">
-          <span className="home__guest-label">你好，</span>
-          <span className="home__guest-name">{guestName}</span>
-        </div>
       </header>
 
       <main className="home__main">
@@ -101,7 +95,7 @@ export function Home() {
         >
           浙ICP备2026073891号
         </a>
-        <span className="home__version">v0.3.17</span>
+        <span className="home__version">v0.3.18-beta1</span>
       </footer>
 
     </div>

@@ -8,7 +8,8 @@
  * - 切换（transfer）：旧洞**位置+尺寸连续变形**到新目标（取最近洞做 morph），无中间“无洞/清零”帧；
  * - 取消（blur-all）：各空洞扩大到页面；多洞独立并行；
  * - 动画：rAF 逐帧插值 `holes: Rect[]`（不依赖 CSS 尺寸过渡、不重挂载），每帧同步更新
- *   ①SVG evenodd 挖洞路径 ②交互阻断带（洞外阻断），缓动 cubic-bezier(0.22,0.61,0.36,1)，时长常量可调。
+ *   ①SVG evenodd 挖洞路径（3px 圆角矩形空洞）②交互阻断带（洞外阻断）；
+ * 空洞过渡采用 **iOS SpringBoard 风格解析弹簧**（response 0.52s / dampingFraction 0.85，见下方 HOLE_EASE）。
  *
  * 豁免：气泡（z 210）与弹窗（.paper-modal，弹窗打开时本组件整体不渲染）始终高于遮罩；
  * `.tutorial-escape`（左上角退出按钮）的矩形始终并入“交互洞” → 任何模式下都可点。
@@ -18,7 +19,7 @@
  * 保证过渡期间遮罩始终存在、不闪白。
  */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { disjointHoleRects, mergeHoleRects } from './spotlightMerge'
+import { disjointHoleRects, mergeHoleRects, unionOutlinePath } from './spotlightMerge'
 import { useAnyModalOpen } from './useAnyModalOpen'
 import { clearSpotlightCarry, peekSpotlightCarry, rememberSpotlightRects } from './spotlightCarry'
 
@@ -31,15 +32,41 @@ export interface TargetRect {
 
 const PAD = 6 // 开洞外扩（目标呼吸空间）
 const DARK = 'rgba(58, 46, 28, 0.52)'
-/** 空洞几何动画时长（ms，300–400 可调） */
-const HOLE_ANIM_MS = 340
+/**
+ * 空洞几何动画时长（ms）：v0.3.18-beta1 由 340 提到 560 —— 解析弹簧存在“长尾缓缓收尾”，
+ * 窗口太短会在尾部被硬切成 1（收尾速度不为 0，出现轻微“顿一下”）。560ms ≈ 弹簧 4τ 后收敛到 <1%。
+ */
+const HOLE_ANIM_MS = 560
+/** 空洞四角圆角半径（px，用户指定 3px） */
+const HOLE_RADIUS = 3
 /** 聚焦前静止期（ms）：基础态/整页洞 → 突显目标 时，先等待再开始收缩（v0.3.17-beta4 item 1） */
 const FOCUS_DELAY_MS = 500
 /**
- * 空洞几何缓动：smootherstep 6t⁵−15t⁴+10t³ —— 起点速度与终点速度**都为 0**，
- * 中段最快，避免“起手一顿/收尾一顿”的机械感（逐帧速度采样见验证脚本）。
+ * 空洞几何缓动（v0.3.18-beta1）：**iOS SpringBoard 缩放转场风格**的解析弹簧阶跃响应。
+ *
+ * 用户反馈 smootherstep（6t⁵−15t⁴+10t³）"过于线性且对称"——它两端速度都为 0 且完全对称，
+ * 观感就是「匀速感 + 两端各顿一下」。改为 Apple 弹簧动画语义（SwiftUI 默认
+ * `spring(response:dampingFraction:)`）：
+ *
+ *   x(τ) = 1 − e^(−ζω₀τ)·[cos(ω_d τ) + (ζω₀/ω_d)·sin(ω_d τ)]
+ *   ω₀ = 2π / response, ω_d = ω₀·√(1−ζ²)
+ *
+ * 取 response = 0.52s、ζ = 0.85：起步极快（前 10% 时间已走 ~35%），随后**长尾缓缓收尾**，
+ * 理论过冲 exp(−πζ/√(1−ζ²)) ≈ 0.63%（几何回弹 ≤1%，远小于 2px 量级的可见阈值）。
+ * 末尾按 x(HOLE_ANIM_MS) 归一化，保证 ease(1) === 1：否则末帧会残留过冲偏移（洞不落在目标上）。
+ * 逐 40ms 采样曲线见本轮验证脚本输出。
  */
-const HOLE_EASE = (t: number) => t * t * t * (t * (t * 6 - 15) + 10)
+const SPRING_RESPONSE_S = 0.52
+const SPRING_ZETA = 0.85
+const SPRING_W0 = (2 * Math.PI) / SPRING_RESPONSE_S
+const SPRING_WD = SPRING_W0 * Math.sqrt(1 - SPRING_ZETA * SPRING_ZETA)
+const springStep = (tau: number) =>
+  1 -
+  Math.exp(-SPRING_ZETA * SPRING_W0 * tau) *
+    (Math.cos(SPRING_WD * tau) + ((SPRING_ZETA * SPRING_W0) / SPRING_WD) * Math.sin(SPRING_WD * tau))
+const SPRING_NORM = springStep(HOLE_ANIM_MS / 1000)
+/** t∈[0,1] 归一化弹簧进度（ease(0)=0、ease(1)=1，中段带 ≤1% 回弹） */
+const HOLE_EASE = (t: number) => springStep((t * HOLE_ANIM_MS) / 1000) / SPRING_NORM
 
 type AnimLabel = 'focus' | 'add' | 'transfer' | 'blur' | 'none'
 
@@ -569,9 +596,21 @@ export function TutorialSpotlight({
   const interactiveHoles = padMerge([...rects, ...destRects, ...mergedEscapes])
 
   const framePath = `M0 0 H${W} V${H} H0 Z`
-  const holePath = visualHoles
-    .map((r) => `M${r.left} ${r.top} H${r.left + r.width} V${r.top + r.height} H${r.left} Z`)
-    .join(' ')
+  // v0.3.18-beta1：空洞改为 3px 圆角矩形。先由切片还原「并集边界」，再对边界顶点圆角 ——
+  // 切片之间的内部接缝没有顶点，因此不会出现“糖葫芦”式缺口/缝隙（详见 spotlightMerge.unionOutlinePath）。
+  const holePath = unionOutlinePath(visualHoles, { width: W, height: H, radius: HOLE_RADIUS })
+  const rectsToAttr = (list: TargetRect[]) =>
+    list
+      .map(
+        (r) =>
+          `${Math.round(r.left * 10) / 10},${Math.round(r.top * 10) / 10},${Math.round(r.width * 10) / 10},${Math.round(r.height * 10) / 10}`,
+      )
+      .join(';')
+  /** 供 e2e/QA 读取的「视觉洞矩形（去重叠切片，未圆角）」列表 —— 面积口径与旧 path 解析一致，
+   *  v0.3.18-beta1 空洞改为圆角路径后，path 不再由 `M…H…V…H…Z` 构成，度量请改读本属性。 */
+  const rectsAttr = rectsToAttr(visualHoles)
+  /** 供 e2e 校验缓动曲线：**动画插值中的原始洞矩形**（未加 PAD、未并入豁免、未圆角） */
+  const animRectsAttr = rectsToAttr(rects)
 
   if (renderDimLayer) {
     return (
@@ -582,6 +621,8 @@ export function TutorialSpotlight({
           data-spotlight-anim="none"
           data-spotlight-holes={1}
           data-spotlight-holes-raw={0}
+          data-spotlight-rects={rectsAttr}
+          data-spotlight-anim-rects={animRectsAttr}
           data-spotlight-dest={destRects
             .map((r) => `${Math.round(r.left)},${Math.round(r.top)},${Math.round(r.width)},${Math.round(r.height)}`)
             .join(';')}
@@ -611,6 +652,8 @@ export function TutorialSpotlight({
         data-spotlight-anim={frame.anim}
         data-spotlight-holes={visualHoles.length}
         data-spotlight-holes-raw={rects.length}
+        data-spotlight-rects={rectsAttr}
+        data-spotlight-anim-rects={animRectsAttr}
         data-spotlight-dest={destRects
           .map((r) => `${Math.round(r.left)},${Math.round(r.top)},${Math.round(r.width)},${Math.round(r.height)}`)
           .join(';')}

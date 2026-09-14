@@ -59,7 +59,7 @@
 }
 .home__top {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-start;
   align-items: flex-start;
   gap: 12px;
 }
@@ -68,18 +68,6 @@
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
-}
-.home__guest {
-  text-align: right;
-}
-.home__guest-label {
-  display: block;
-  font-size: 12px;
-  letter-spacing: 0.12em;
-  color: var(--ink-faint);
-}
-.home__guest-name {
-  font-size: 16px;
 }
 .home__main {
   flex: 1;
@@ -504,7 +492,7 @@
 }
 .rules__diagram-row {
   display: flex;
-  gap: 22px;
+  gap: 32px;
   flex-wrap: wrap;
   align-items: flex-start;
   margin-top: 12px;
@@ -514,6 +502,12 @@
   flex-direction: column;
   align-items: center;
   gap: 8px;
+  /* v0.3.18-beta1：重置 <figure> 的 UA 默认外边距（margin: 1em 40px）——
+     竖版双栏 grid 下左右各 40px 会让 figure 右移溢出、图注被卡片裁切；
+     横版失去的原 40px 留白改由 .rules__diagram-row 的 gap 补齐 */
+  margin: 0;
+  max-width: 100%;
+  min-width: 0;
 }
 .rules__fig-caption {
   font-size: 13px;
