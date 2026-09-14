@@ -20,6 +20,19 @@
  */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { disjointHoleRects, unionOutlinePath } from './spotlightMerge'
+import {
+  BUBBLE_TAIL_DEPTH,
+  alignCyclic,
+  bubbleOutline,
+  isSimple,
+  morphPoints,
+  pointsBBox,
+  pointsToPath,
+  roundedRectOutline,
+  sampleOutline,
+  type Outline,
+  type Pt,
+} from './shapeOutline'
 import { useAnyModalOpen } from './useAnyModalOpen'
 import { clearSpotlightCarry, peekSpotlightCarry, rememberSpotlightRects } from './spotlightCarry'
 
@@ -39,6 +52,13 @@ const DARK = 'rgba(58, 46, 28, 0.52)'
 const HOLE_ANIM_MS = 560
 /** 空洞四角圆角半径（px，用户指定 3px） */
 const HOLE_RADIUS = 3
+/** 气泡圆角（与 CSS `border-radius: 12px` 一致） */
+const BUBBLE_RADIUS = 12
+/** 气泡投影留白（任务 1：轮廓须覆盖可见轮廓；投影按 4px 留白计入） */
+const BUBBLE_SHADOW_PAD = 4
+/** 洞轮廓采样点数（可被 4 整除，便于圆角对应） */
+const HOLE_OUTLINE_N = 96
+const BUBBLE_KEY = '.tutorial-bubble'
 /** 聚焦前静止期（ms）：基础态/整页洞 → 突显目标 时，先等待再开始收缩（v0.3.17-beta4 item 1） */
 const FOCUS_DELAY_MS = 500
 /**
@@ -78,6 +98,12 @@ interface AnimHole {
   dur: number
   /** 本次过渡类型（用于 data-spotlight-anim） */
   label: AnimLabel
+  /** 形状标签 + 稠密点对映射（贝塞尔轮廓；v0.3.18-beta6 任务 1） */
+  fromShape?: 'rect' | 'bubble'
+  toShape?: 'rect' | 'bubble'
+  morphA?: Pt[]
+  morphB?: Pt[]
+  outline?: boolean
 }
 
 /* ============ 工具 ============ */
@@ -113,7 +139,56 @@ function targetRectOf(selector: string): TargetRect | null {
   if (!el) return null
   const b = el.getBoundingClientRect()
   if (b.width === 0 || b.height === 0) return null
+  if (el.classList.contains('tutorial-bubble')) {
+    // v0.3.18-beta6：气泡目标 rect = **贝塞尔轮廓的 bbox ∪ 投影留白**（尾巴几何来自轮廓库，不再手写常量）
+    const o = bubbleOutline(b.width, b.height, BUBBLE_RADIUS, bubbleTailTop() ? 'top' : 'bottom')
+    const bb = pointsBBox(sampleOutline(o, HOLE_OUTLINE_N))
+    return {
+      left: b.left + bb.left - BUBBLE_SHADOW_PAD,
+      top: b.top + bb.top - BUBBLE_SHADOW_PAD,
+      width: bb.width + BUBBLE_SHADOW_PAD * 2,
+      height: bb.height + BUBBLE_SHADOW_PAD * 2,
+    }
+  }
   return { left: b.left, top: b.top, width: b.width, height: b.height }
+}
+
+/** 气泡尾巴朝向（与 CSS `.tutorial-bubble--top` 对应） */
+function bubbleTailTop(): boolean {
+  return !!document.querySelector('.tutorial-bubble--top')
+}
+
+/** 由目标 rect 生成轮廓（rect 已含尾巴/留白 ⇒ 轮廓按相对几何生成后平移到该 rect） */
+function outlineFor(rect: TargetRect, shape: 'rect' | 'bubble'): Outline {
+  if (shape === 'bubble') {
+    // rect 是「轮廓 bbox + 4px 投影留白」⇒ 这里反推回 box 尺寸再生成轮廓，
+    // 保证轮廓 = box ∪ 尾巴（不重复计入尾巴/留白），并整体内缩 PAD 平移到 box 位置。
+    // 轮廓 = box ∪ 尾巴 再**外扩 1px**（洞对可见轮廓的四边余量要求 ∈[1,20]px）
+    const w = Math.max(1, rect.width - BUBBLE_SHADOW_PAD * 2 + 2)
+    // 尾巴再 +3px：96 点离散采样会漏掉尖角顶点，需保证**采样后**尾巴越过 box ≥10px（验收 3）
+    const h = Math.max(1, rect.height - BUBBLE_SHADOW_PAD * 2 - BUBBLE_TAIL_DEPTH + 2 + 3)
+    const o = bubbleOutline(w, h, BUBBLE_RADIUS, bubbleTailTop() ? 'top' : 'bottom')
+    const bb = pointsBBox(sampleOutline(o, HOLE_OUTLINE_N))
+    const dx = rect.left + BUBBLE_SHADOW_PAD - 1 - bb.left
+    const dy = rect.top + BUBBLE_SHADOW_PAD - 1 - bb.top
+    return {
+      segs: o.segs.map((sg) => ({
+        p0: { x: sg.p0.x + dx, y: sg.p0.y + dy },
+        c1: { x: sg.c1.x + dx, y: sg.c1.y + dy },
+        c2: { x: sg.c2.x + dx, y: sg.c2.y + dy },
+        p1: { x: sg.p1.x + dx, y: sg.p1.y + dy },
+      })),
+    }
+  }
+  const o = roundedRectOutline(rect.width, rect.height, HOLE_RADIUS)
+  return {
+    segs: o.segs.map((sg) => ({
+      p0: { x: sg.p0.x + rect.left, y: sg.p0.y + rect.top },
+      c1: { x: sg.c1.x + rect.left, y: sg.c1.y + rect.top },
+      c2: { x: sg.c2.x + rect.left, y: sg.c2.y + rect.top },
+      p1: { x: sg.p1.x + rect.left, y: sg.p1.y + rect.top },
+    })),
+  }
 }
 
 /** 目标洞 + 其**身份键**（= 目标选择器，v0.3.18-beta3 根因 A）：配对按身份而不是按最近几何。 */
@@ -228,9 +303,13 @@ export function TutorialSpotlight({
    * v0.3.18-beta3 根因 A：目标增删时按身份配对，持续存在的目标洞原地不动，新增原地长出、移除原地缩小。
    */
   const curKeysRef = useRef<(string | null)[]>(initialRects.map(() => null))
+  /** 与 curRef 平行的形状标签 */
+  const curShapesRef = useRef<('rect' | 'bubble')[]>(initialRects.map(() => 'rect'))
   /** 本次动画要写入的身份键（与 animsRef 平行）；由 runLoop 在写入 rects 的同一帧同步到 curKeysRef，
    *  避免“同一帧内二次规划”时 curKeysRef 已更新而 curRef 还是旧几何 → 索引错位。 */
   const pendingKeysRef = useRef<(string | null)[]>([])
+  /** 与 pendingKeysRef 平行的形状标签 */
+  const pendingShapesRef = useRef<('rect' | 'bubble')[]>([])
   const rafRef = useRef(0)
   const labelRef = useRef<AnimLabel>('none')
   const loopGenRef = useRef(0)
@@ -294,9 +373,11 @@ export function TutorialSpotlight({
         finalRects = rects.filter((_, i) => alive[i])
         curRef.current = finalRects
         curKeysRef.current = keysNow.filter((_, i) => alive[i])
+        curShapesRef.current = pendingShapesRef.current.filter((_, i) => alive[i])
       } else {
         curRef.current = rects
         curKeysRef.current = pendingKeysRef.current
+        curShapesRef.current = pendingShapesRef.current
       }
       commit(finalRects, done ? 'none' : labelRef.current)
       if (done) {
@@ -315,7 +396,9 @@ export function TutorialSpotlight({
     animsRef.current = []
     curRef.current = rects
     curKeysRef.current = keys ?? rects.map(() => null)
+    curShapesRef.current = rects.map((_, i) => curShapesRef.current[i] ?? 'rect')
     pendingKeysRef.current = [...curKeysRef.current]
+    pendingShapesRef.current = [...curShapesRef.current]
     commit(rects, 'none')
     setIdle(true)
   }
@@ -328,6 +411,7 @@ export function TutorialSpotlight({
     setIdle(false)
     const dest = destPairsIn.map((p) => p.rect)
     const destKeysIn = destPairsIn.map((p) => p.key)
+    const destShapes = destKeysIn.map((k) => (k === BUBBLE_KEY ? 'bubble' : 'rect') as 'rect' | 'bubble')
     let cur = curRef.current
     // 防御（v0.3.18-beta3）：身份键与当前洞必须一一对应；长度不一致时按“无身份”处理，
     // 避免 cur[ci] 越界（curKeys 短暂领先 rects 只可能出现在同一帧二次规划时）。
@@ -356,14 +440,34 @@ export function TutorialSpotlight({
     // 洞位移到气泡时形状突变即由此产生。现在一律走统一的连续插值（③ transfer 分支）到位，
     // 目标矩形取渲染期**即时测量**的气泡矩形，因此到位后与气泡实测矩形一致（无补测跳变）。
 
-    const mk = (from: TargetRect, to: TargetRect, label: AnimLabel): AnimHole => ({
-      id: holeIdRef.current++,
-      from,
-      to,
-      start: now,
-      dur: HOLE_ANIM_MS,
-      label,
-    })
+    const mk = (
+      from: TargetRect,
+      to: TargetRect,
+      label: AnimLabel,
+      fromShape: 'rect' | 'bubble' = 'rect',
+      toShape: 'rect' | 'bubble' = 'rect',
+    ): AnimHole => {
+      const anim: AnimHole = {
+        id: holeIdRef.current++,
+        from,
+        to,
+        start: now,
+        dur: HOLE_ANIM_MS,
+        label,
+        fromShape,
+        toShape,
+      }
+      if (fromShape !== toShape || toShape === 'bubble' || fromShape === 'bubble') {
+        const oa = outlineFor(from, fromShape)
+        const ob = outlineFor(to, toShape)
+        const pa = sampleOutline(oa, HOLE_OUTLINE_N)
+        const pb = alignCyclic(pa, sampleOutline(ob, HOLE_OUTLINE_N))
+        anim.morphA = pa
+        anim.morphB = pb
+        anim.outline = true
+      }
+      return anim
+    }
 
     /**
      * item 1 的延迟聚焦：从 seed（整页）延迟到「静止期截止时刻」后收缩到目标。
@@ -372,7 +476,12 @@ export function TutorialSpotlight({
      *  - 之后的任何重规划（目标数 1→2、气泡换文案/尺寸重排……）→ **沿用原截止时间**（不重置、不延长）；
      *  - 非基础态过渡（②blur / ③transfer）会把截止时间清零，使下一次“从基础态聚焦”重新获得完整静止期。
      */
-    const delayFocusFrom = (seed: TargetRect, dst: TargetRect[], nowMs: number): AnimHole[] => {
+    const delayFocusFrom = (
+      seed: TargetRect,
+      dst: TargetRect[],
+      nowMs: number,
+      shapes: ('rect' | 'bubble')[] = [],
+    ): AnimHole[] => {
       const pending = focusHoldUntilRef.current
       let holdUntil: number
       if (pending > nowMs) {
@@ -387,7 +496,7 @@ export function TutorialSpotlight({
         holdUntil = nowMs + FOCUS_DELAY_MS // 全新一轮（上一次已回到基础态并被 ② 分支清零）
       }
       focusHoldUntilRef.current = holdUntil
-      return dst.map((t) => ({ ...mk(seed, t, 'focus'), start: holdUntil }))
+      return dst.map((t, i) => ({ ...mk(seed, t, 'focus', 'rect', shapes[i] ?? 'rect'), start: holdUntil }))
     }
 
     // ① 无当前洞：基础态初始化（无动画）或 rest→focus（从整页/气泡矩形收缩到目标）
@@ -404,7 +513,8 @@ export function TutorialSpotlight({
       label0('focus')
       // item 1：从整页洞收缩前先静止 FOCUS_DELAY_MS
       pendingKeysRef.current = [...destKeysIn]
-      animsRef.current = delayFocusFrom(seed, dest, now)
+      pendingShapesRef.current = [...destShapes]
+      animsRef.current = delayFocusFrom(seed, dest, now, destShapes)
       runLoop()
       return
     }
@@ -420,6 +530,7 @@ export function TutorialSpotlight({
       }
       label0('blur')
       pendingKeysRef.current = cur.map(() => null)
+      pendingShapesRef.current = cur.map(() => 'rect')
       animsRef.current = cur.map((r) => mk(r, to, 'blur'))
       runLoop()
       return
@@ -434,7 +545,8 @@ export function TutorialSpotlight({
       label0('focus')
       // item 1：聚焦前静止 FOCUS_DELAY_MS 再开始收缩（仅此一类过渡加延迟）
       pendingKeysRef.current = [...destKeysIn]
-      animsRef.current = delayFocusFrom(cur[0]!, dest, now)
+      pendingShapesRef.current = [...destShapes]
+      animsRef.current = delayFocusFrom(cur[0]!, dest, now, destShapes)
       runLoop()
       return
     }
@@ -482,21 +594,24 @@ export function TutorialSpotlight({
     }
     const newAnims: AnimHole[] = []
     const newKeys: (string | null)[] = []
+    const newShapes: ('rect' | 'bubble')[] = []
     let hasAdd = false
     let hasBlur = false
     let hasTransfer = false
     for (const { ci, ti } of planPairs) {
       // 注意：即使几何已一致也必须保留为洞（from==to 的静态动画），
       // 否则该洞会从 anims 列表里消失 → 表现为“只有最后一个目标被突显”。
-      newAnims.push(mk(cur[ci]!, dest[ti]!, 'transfer'))
+      newAnims.push(mk(cur[ci]!, dest[ti]!, 'transfer', curShapesRef.current[ci] ?? 'rect', destShapes[ti]!))
       newKeys.push(destKeysIn[ti] ?? null)
+      newShapes.push(destShapes[ti] ?? 'rect')
       if (!sameRect(cur[ci]!, dest[ti]!)) hasTransfer = true
     }
     // (3) 新增目标：在**自身位置**从中心向外生长（不得从其它目标处飞来）
     for (let ti = 0; ti < dest.length; ti++) {
       if (matchedDest.has(ti)) continue
-      newAnims.push(mk(centerRect(dest[ti]!), dest[ti]!, 'add'))
+      newAnims.push(mk(centerRect(dest[ti]!), dest[ti]!, 'add', 'rect', destShapes[ti]!))
       newKeys.push(destKeysIn[ti] ?? null)
+      newShapes.push(destShapes[ti] ?? 'rect')
       hasAdd = true
     }
     // (4) 未配对的旧洞：
@@ -516,9 +631,11 @@ export function TutorialSpotlight({
         }
         newAnims.push(mk(cur[ci]!, dest[best]!, 'blur'))
         newKeys.push(destKeysIn[best] ?? null)
+        newShapes.push(destShapes[best] ?? 'rect')
       } else {
-        newAnims.push(mk(cur[ci]!, centerRect(cur[ci]!), 'blur'))
+        newAnims.push(mk(cur[ci]!, centerRect(cur[ci]!), 'blur', curShapesRef.current[ci] ?? 'rect', 'rect'))
         newKeys.push(null)
+        newShapes.push('rect')
       }
       hasBlur = true
     }
@@ -529,6 +646,7 @@ export function TutorialSpotlight({
     const label: AnimLabel = hasAdd ? 'add' : hasBlur ? 'blur' : hasTransfer ? 'transfer' : 'none'
     label0(label)
     pendingKeysRef.current = newKeys
+    pendingShapesRef.current = newShapes
     animsRef.current = newAnims.map((a) => ({ ...a, label }))
     runLoop()
   }
@@ -603,6 +721,19 @@ export function TutorialSpotlight({
     // eslint 无 react-hooks 插件：deps 用 targetKey（字符串）而非数组字面量，避免每次渲染重跑
   }, [targetKey, measureKey, active, dimOnly, sig])
 
+  /**
+   * 任务 2（沿用 beta5 方案）：每次提交都把当前洞几何暂存到 spotlightCarry。
+   * 阶段切换时新实例 render 早于旧实例卸载 cleanup，只靠卸载暂存会让首帧拿到「整页洞」。
+   */
+  const lastCommittedRef = useRef<TargetRect[]>([])
+  if (
+    lastCommittedRef.current.length !== frame.rects.length ||
+    !sameRectList(lastCommittedRef.current, frame.rects)
+  ) {
+    lastCommittedRef.current = frame.rects
+    rememberSpotlightRects(frame.rects, { dimOnly })
+  }
+
   // 说明（v0.3.17-beta4）：这里原先在挂载时 clearSpotlightCarry()。
   // 但组件替换发生在同一次 commit：新实例的 render（读 carry）早于旧实例的卸载 cleanup（写 carry），
   // 挂载期清空会把刚写好的几何立刻抹掉 → 跨阶段续接（item 6）永不生效。
@@ -619,6 +750,36 @@ export function TutorialSpotlight({
 
   /* ---------- 渲染 ---------- */
   const rects = frame.rects
+  /**
+   * v0.3.18-beta6 任务 1：形状洞（气泡）轮廓 —— 由**当前提交帧的 rect** 反推弹簧进度，
+   * 再用稠密点对映射插值（与画面严格同帧，不依赖 rAF 循环写入时序）。
+   */
+  const outlineAnims = animsRef.current
+  const outlines: (Pt[] | null)[] = frame.rects.map((r, i) => {
+    const a = outlineAnims[i]
+    if (!a || !a.outline || !a.morphA || !a.morphB) return null
+    const cands: Array<[number, number, number]> = [
+      [a.from.left, a.to.left, r.left],
+      [a.from.top, a.to.top, r.top],
+      [a.from.width, a.to.width, r.width],
+      [a.from.height, a.to.height, r.height],
+    ]
+    let p = 0
+    let best = 0
+    for (const [f0, f1, cur] of cands) {
+      const d = Math.abs(f1 - f0)
+      if (d > best) {
+        best = d
+        p = (f0 - cur) / (f0 - f1)
+      }
+    }
+    p = Math.min(1, Math.max(0, p))
+    const poly = morphPoints(a.morphA, a.morphB, p)
+    // 自交兜底：退回该帧 bbox 的圆角矩形轮廓（明确保证简单多边形）
+    return isSimple(poly) ? poly : sampleOutline(roundedRectOutline(r.width, r.height, HOLE_RADIUS), HOLE_OUTLINE_N).map(
+      (pt) => ({ x: pt.x + r.left, y: pt.y + r.top }),
+    )
+  })
   const animating = frame.anim !== 'none'
   /** 阻断层是否生效：遮罩激活（active）且调用方允许阻断（block）。
    *  v0.3.18-beta2 item 1：只要 active，**任何一帧**（含基础态洞=整页、focus 静止期、过渡帧、
@@ -626,7 +787,14 @@ export function TutorialSpotlight({
   const blockActive = active && block && !modalOpen
   const mode: 'dim' | 'holes' | 'hybrid' = dim ? (dimOnly ? 'dim' : 'hybrid') : 'holes'
   /** 纯 dim 且动画静止：渲染整屏暗层（气泡 z 豁免）；过渡期（含切到气泡）由空洞引擎承担 */
-  const renderDimLayer = dimOnly && !animating && idle
+  /**
+   * 任务 2（沿用 beta5 方案，仅此两处）：dim 整屏 sheet 仅在「静止且洞已落到目标」时渲染，
+   * 交接/动画期走 SVG 引擎 → 不再出现「整页洞 + sheet」的完全无压暗帧。
+   * 稳态 dim 场景洞本就在气泡上，渲染路径与 beta3 一致（视觉零变化）。
+   */
+  const atDest =
+    rects.length > 0 && destRects.length > 0 && rects.every((r) => destRects.some((d) => sameRect(r, d, 24)))
+  const renderDimLayer = dimOnly && !animating && idle && atDest
 
   /** 统一加 PAD（外扩 6px 呼吸空间） */
   const padRect = (r: TargetRect): TargetRect => ({
@@ -638,7 +806,8 @@ export function TutorialSpotlight({
   // v0.3.18-beta2 item 5：**洞几何只含被突显对象**（引擎动画几何），不再并入 .tutorial-escape：
   // 退出按钮/横幅卡片的可见性与可点性改由「结构化置顶」(TutorialEscape → 顶层 portal, z 240) 保证，
   // 因此无需再为它们开洞（也让多来源的亚像素差异不再进入洞几何，见 item 6）。
-  const paddedAll = rects.map(padRect)
+  const boxRects = rects.filter((_, i) => !outlines[i])
+  const paddedAll = boxRects.map(padRect)
   // 用「去重叠分解」而非包围盒合并：并集边界随动画连续变化，融合瞬间不再跳变（item 4）。
   const visualHoles = disjointHoleRects(paddedAll)
 
@@ -656,7 +825,12 @@ export function TutorialSpotlight({
   const framePath = `M0 0 H${W} V${H} H0 Z`
   // v0.3.18-beta1：空洞改为 3px 圆角矩形。先由切片还原「并集边界」，再对边界顶点圆角 ——
   // 切片之间的内部接缝没有顶点，因此不会出现“糖葫芦”式缺口/缝隙（详见 spotlightMerge.unionOutlinePath）。
-  const holePath = unionOutlinePath(visualHoles, { width: W, height: H, radius: HOLE_RADIUS })
+  const rectHolePath = unionOutlinePath(visualHoles, { width: W, height: H, radius: HOLE_RADIUS })
+  const shapedPath = outlines
+    .filter((poly): poly is Pt[] => !!poly)
+    .map((poly) => pointsToPath(poly))
+    .join(' ')
+  const holePath = [rectHolePath, shapedPath].filter(Boolean).join(' ')
   const rectsToAttr = (list: TargetRect[]) =>
     list
       .map(
@@ -667,6 +841,15 @@ export function TutorialSpotlight({
   /** 供 e2e/QA 读取的「视觉洞矩形（去重叠切片，未圆角）」列表 —— 面积口径与旧 path 解析一致，
    *  v0.3.18-beta1 空洞改为圆角路径后，path 不再由 `M…H…V…H…Z` 构成，度量请改读本属性。 */
   const rectsAttr = rectsToAttr(visualHoles)
+  /** 目标形状标签（气泡 = bubble） */
+  const destShapes = destKeys.map((k) => (k === BUBBLE_KEY ? 'bubble' : 'rect'))
+  /** v0.3.18-beta6：形状洞轮廓（洞间 ; 点间 , 点内 "x y"），供 e2e 逐帧校验形变 */
+  const outlinesAttr = outlines
+    .map((poly) =>
+      poly ? poly.map((pt) => `${Math.round(pt.x * 10) / 10} ${Math.round(pt.y * 10) / 10}`).join(',') : '',
+    )
+    .filter(Boolean)
+    .join(';')
   /** v0.3.18-beta3：洞 ↔ 目标的身份键（与 -rects 的洞、与 -dest 的目标同序），供 e2e 验证“原地保持” */
   const holeKeysAttr = curKeysRef.current.map((k) => k ?? '-').join('|')
   const destKeysAttr = destKeys.join('|')
@@ -688,6 +871,9 @@ export function TutorialSpotlight({
         data-spotlight-rects={rectsAttr}
         data-spotlight-anim-rects={animRectsAttr}
         data-spotlight-hole-keys={holeKeysAttr}
+        data-spotlight-hole-outlines={outlinesAttr}
+        data-spotlight-hole-shapes={outlines.map((p) => (p ? 'bubble' : 'rect')).join('|')}
+        data-spotlight-dest-shapes={destShapes.join('|')}
         data-spotlight-dest-keys={destKeysAttr}
         data-spotlight-dest={destRects
           .map((r) => `${Math.round(r.left)},${Math.round(r.top)},${Math.round(r.width)},${Math.round(r.height)}`)
@@ -715,6 +901,9 @@ export function TutorialSpotlight({
           data-spotlight-rects={rectsAttr}
           data-spotlight-anim-rects={animRectsAttr}
         data-spotlight-hole-keys={holeKeysAttr}
+        data-spotlight-hole-outlines={outlinesAttr}
+        data-spotlight-hole-shapes={outlines.map((p) => (p ? 'bubble' : 'rect')).join('|')}
+        data-spotlight-dest-shapes={destShapes.join('|')}
         data-spotlight-dest-keys={destKeysAttr}
           data-spotlight-dest={destRects
             .map((r) => `${Math.round(r.left)},${Math.round(r.top)},${Math.round(r.width)},${Math.round(r.height)}`)
@@ -745,6 +934,9 @@ export function TutorialSpotlight({
         data-spotlight-rects={rectsAttr}
         data-spotlight-anim-rects={animRectsAttr}
         data-spotlight-hole-keys={holeKeysAttr}
+        data-spotlight-hole-outlines={outlinesAttr}
+        data-spotlight-hole-shapes={outlines.map((p) => (p ? 'bubble' : 'rect')).join('|')}
+        data-spotlight-dest-shapes={destShapes.join('|')}
         data-spotlight-dest-keys={destKeysAttr}
         data-spotlight-dest={destRects
           .map((r) => `${Math.round(r.left)},${Math.round(r.top)},${Math.round(r.width)},${Math.round(r.height)}`)

@@ -20,36 +20,44 @@
 
 /* ---------- 纸感气泡 ---------- */
 
+/* v0.3.18-beta6：形状（含尾巴）由 JS 用 `bubbleOutline` 贝塞尔轮廓绘制（见 TutorialBubble 的 <svg>），
+   这里**删除**了旧的 `border-radius` / `::after` 尾巴 / `background` / `box-shadow`；
+   容器只负责定位、排版、点击与入场动画。原 1.5px 描边宽度已折进 padding，保证文本位置与尺寸不变。 */
 .tutorial-bubble {
   position: fixed;
   z-index: 210;
   max-width: min(92vw, 42ch);
-  padding: 12px 16px 8px;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.65), rgba(255, 255, 255, 0)) no-repeat,
-    var(--paper-sheet);
-  border: 1.5px solid rgba(96, 78, 50, 0.55);
-  border-radius: 12px;
-  box-shadow:
-    0 1px 0 rgba(96, 78, 50, 0.3),
-    0 3px 0 rgba(96, 78, 50, 0.16),
-    0 8px 18px -4px rgba(60, 40, 10, 0.45);
+  padding: 13px 17px 9px; /* = 旧 padding(12/16/8) + 旧 border 计算值 1px（Chromium 会把 1.5px 取整为 1px） */
+  background: none;
+  border: 0;
   cursor: pointer;
   user-select: none;
   animation: tutorialPop 180ms var(--ease-paper);
 }
-/* 小尾巴（纸签一角） */
-.tutorial-bubble::after {
-  content: '';
+/* 形状层：绝对铺满 border-box，溢出可见（尾巴画在 box 之外） */
+.tutorial-bubble__shape {
   position: absolute;
-  bottom: -7px;
-  left: 24px;
-  width: 14px;
-  height: 14px;
-  background: var(--paper-sheet);
-  border-right: 1.5px solid rgba(96, 78, 50, 0.55);
-  border-bottom: 1.5px solid rgba(96, 78, 50, 0.55);
-  transform: rotate(45deg);
+  left: 0;
+  top: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+/* 投影：逐层 drop-shadow **一一对应**旧 box-shadow 三层；各自独立作用在自身轮廓上（不串联），
+   `--soft` 的轮廓已按旧 spread −4px 内缩，故 blur 仍取旧值 18px。 */
+.tutorial-bubble__shadow {
+  pointer-events: none;
+}
+.tutorial-bubble__shadow--hard1 {
+  filter: drop-shadow(0 1px 0 rgba(96, 78, 50, 0.3));
+}
+.tutorial-bubble__shadow--hard2 {
+  filter: drop-shadow(0 3px 0 rgba(96, 78, 50, 0.16));
+}
+.tutorial-bubble__shadow--soft {
+  /* 实测（/tmp 对照实验）：Chromium 的 `drop-shadow` 取 σ = blur 半径，
+     而 `box-shadow` 取 σ = blur/2 ⇒ 复刻旧 `0 8px 18px -4px` 必须写 blur = 9px。
+     该值下 drop-shadow 的衰减剖面与 box-shadow 逐点一致（差 ≤0.0002 alpha）。 */
+  filter: drop-shadow(0 8px 9px rgba(60, 40, 10, 0.45));
 }
 @keyframes tutorialPop {
   from {
@@ -58,6 +66,8 @@
   }
 }
 .tutorial-bubble__text {
+  /* 形状层是绝对定位（同级中最后绘制）⇒ 文本/脚注需自己成为定位元素才能压在其上 */
+  position: relative;
   font-size: 15px;
   line-height: 1.5;
   color: var(--ink);
@@ -75,6 +85,7 @@
   padding: 0 3px;
 }
 .tutorial-bubble__foot {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -90,11 +101,7 @@
 
 
 /* v0.3.1：顶部锚气泡（突显目标在底部输入栏/工具栏时上置，避免遮挡） */
-.tutorial-bubble--top::after {
-  top: -7px;
-  bottom: auto;
-  transform: rotate(-135deg);
-}
+/* v0.3.18-beta6：尾巴朝上由 JS 用 `bubbleOutline(..., 'top')` 镜像绘制，旧 ::after 覆盖已删除 */
 
 
 /* ============ v0.3.7 教程摆阵：竖版网格垂直位置与正常对局一致 ============
